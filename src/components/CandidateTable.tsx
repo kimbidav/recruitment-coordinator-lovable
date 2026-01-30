@@ -15,7 +15,7 @@ import { Candidate } from "@/data/candidates";
 import { cn } from "@/lib/utils";
 import { format, parseISO } from "date-fns";
 
-type SortField = "candidate_name" | "company_name" | "job_title" | "pipeline_stage" | "days_in_stage" | "last_activity_at" | "feedback_count";
+type SortField = "candidate_name" | "company_name" | "job_title" | "pipeline_stage" | "days_in_stage" | "last_activity_at" | "feedback_count" | "credited_to";
 type SortDirection = "asc" | "desc";
 
 interface CandidateTableProps {
@@ -104,6 +104,15 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
             </TableHead>
             <TableHead
               className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("credited_to")}
+            >
+              <div className="flex items-center gap-1.5">
+                Submitted By
+                <SortIcon field="credited_to" />
+              </div>
+            </TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
               onClick={() => handleSort("company_name")}
             >
               <div className="flex items-center gap-1.5">
@@ -184,9 +193,9 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                     <div className="font-medium text-foreground">
                       {candidate.candidate_name}
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      via {candidate.credited_to}
-                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm">{candidate.credited_to}</span>
                   </TableCell>
                   <TableCell>
                     <span className="font-medium">{candidate.company_name}</span>
