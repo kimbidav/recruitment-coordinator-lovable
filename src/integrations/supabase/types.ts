@@ -14,7 +14,80 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      candidates: {
+        Row: {
+          candidate_name: string
+          company_name: string
+          created_at: string
+          credited_to: string
+          current_stage_index: number
+          current_stage_interviews: string | null
+          decision_status: string
+          id: string
+          interview_history_summary: string | null
+          job_title: string
+          pipeline_stage: string
+          session_id: string
+          total_stages: number
+        }
+        Insert: {
+          candidate_name: string
+          company_name: string
+          created_at?: string
+          credited_to: string
+          current_stage_index?: number
+          current_stage_interviews?: string | null
+          decision_status: string
+          id?: string
+          interview_history_summary?: string | null
+          job_title: string
+          pipeline_stage: string
+          session_id: string
+          total_stages?: number
+        }
+        Update: {
+          candidate_name?: string
+          company_name?: string
+          created_at?: string
+          credited_to?: string
+          current_stage_index?: number
+          current_stage_interviews?: string | null
+          decision_status?: string
+          id?: string
+          interview_history_summary?: string | null
+          job_title?: string
+          pipeline_stage?: string
+          session_id?: string
+          total_stages?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidates_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "pipeline_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pipeline_sessions: {
+        Row: {
+          created_at: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

@@ -1,14 +1,17 @@
 import { useState, useMemo } from "react";
-import { candidatesData, Candidate } from "@/data/candidates";
+import { Candidate } from "@/data/candidates";
 import { CandidateTable } from "@/components/CandidateTable";
 import { DashboardStats } from "@/components/DashboardStats";
 import { SearchInput } from "@/components/SearchInput";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { CsvUpload } from "@/components/CsvUpload";
-import { Users } from "lucide-react";
+import { usePipelineSession } from "@/hooks/usePipelineSession";
+import { Users, Share2, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 const Index = () => {
-  const [candidates, setCandidates] = useState<Candidate[]>(candidatesData);
+  const { candidates, sessionId, isLoading, saveSession, clearSession } = usePipelineSession();
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
@@ -16,13 +19,18 @@ const Index = () => {
   const [submitterFilter, setSubmitterFilter] = useState<string[]>([]);
 
   const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
-    setCandidates(uploadedCandidates);
+    saveSession(uploadedCandidates);
     // Reset filters when new data is loaded
     setCompanyFilter([]);
     setStageFilter([]);
     setStatusFilter([]);
     setSubmitterFilter([]);
     setSearch("");
+  };
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(window.location.href);
+    toast.success("Link copied to clipboard!");
   };
 
   const companies = useMemo(() => 
@@ -62,6 +70,17 @@ const Index = () => {
     });
   }, [candidates, search, companyFilter, stageFilter, statusFilter, submitterFilter]);
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>Loading pipeline...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -77,67 +96,96 @@ const Index = () => {
                 <p className="text-sm text-muted-foreground">Track and manage your hiring pipeline</p>
               </div>
             </div>
-            <CsvUpload onUpload={handleCsvUpload} />
+            <div className="flex items-center gap-2">
+              {sessionId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyLink}
+                  className="gap-2"
+                >
+                  <Share2 className="h-4 w-4" />
+                  Copy Share Link
+                </Button>
+              )}
+              <CsvUpload onUpload={handleCsvUpload} />
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="container py-6 space-y-6">
-        {/* Stats */}
-        <DashboardStats candidates={candidates} />
-
-        {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <SearchInput
-            value={search}
-            onChange={setSearch}
-            placeholder="Search candidates, companies, roles..."
-            className="flex-1 max-w-md"
-          />
-          <div className="flex gap-3 flex-wrap">
-            <MultiSelectDropdown
-              values={companyFilter}
-              onChange={setCompanyFilter}
-              options={companies}
-              placeholder="Company"
-              allLabel="All Companies"
-              className="w-[160px]"
-            />
-            <MultiSelectDropdown
-              values={submitterFilter}
-              onChange={setSubmitterFilter}
-              options={submitters}
-              placeholder="Submitted By"
-              allLabel="All Submitters"
-              className="w-[160px]"
-            />
-            <MultiSelectDropdown
-              values={stageFilter}
-              onChange={setStageFilter}
-              options={stages}
-              placeholder="Stage"
-              allLabel="All Stages"
-              className="w-[200px]"
-            />
-            <MultiSelectDropdown
-              values={statusFilter}
-              onChange={setStatusFilter}
-              options={statuses}
-              placeholder="Status"
-              allLabel="All Statuses"
-              className="w-[180px]"
-            />
+        {candidates.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="p-4 bg-muted rounded-full mb-4">
+              <Users className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <h2 className="text-xl font-semibold text-foreground mb-2">No candidates yet</h2>
+            <p className="text-muted-foreground mb-6 max-w-md">
+              Upload a CSV file from your Ashby pipeline export to get started. 
+              Once uploaded, you'll get a shareable link.
+            </p>
+            <CsvUpload onUpload={handleCsvUpload} />
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Stats */}
+            <DashboardStats candidates={candidates} />
 
-        {/* Results count */}
-        <p className="text-sm text-muted-foreground">
-          Showing {filteredCandidates.length} of {candidates.length} candidates
-        </p>
+            {/* Filters */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <SearchInput
+                value={search}
+                onChange={setSearch}
+                placeholder="Search candidates, companies, roles..."
+                className="flex-1 max-w-md"
+              />
+              <div className="flex gap-3 flex-wrap">
+                <MultiSelectDropdown
+                  values={companyFilter}
+                  onChange={setCompanyFilter}
+                  options={companies}
+                  placeholder="Company"
+                  allLabel="All Companies"
+                  className="w-[160px]"
+                />
+                <MultiSelectDropdown
+                  values={submitterFilter}
+                  onChange={setSubmitterFilter}
+                  options={submitters}
+                  placeholder="Submitted By"
+                  allLabel="All Submitters"
+                  className="w-[160px]"
+                />
+                <MultiSelectDropdown
+                  values={stageFilter}
+                  onChange={setStageFilter}
+                  options={stages}
+                  placeholder="Stage"
+                  allLabel="All Stages"
+                  className="w-[200px]"
+                />
+                <MultiSelectDropdown
+                  values={statusFilter}
+                  onChange={setStatusFilter}
+                  options={statuses}
+                  placeholder="Status"
+                  allLabel="All Statuses"
+                  className="w-[180px]"
+                />
+              </div>
+            </div>
 
-        {/* Table */}
-        <CandidateTable candidates={filteredCandidates} />
+            {/* Results count */}
+            <p className="text-sm text-muted-foreground">
+              Showing {filteredCandidates.length} of {candidates.length} candidates
+            </p>
+
+            {/* Table */}
+            <CandidateTable candidates={filteredCandidates} />
+          </>
+        )}
       </main>
     </div>
   );
