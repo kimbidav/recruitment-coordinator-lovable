@@ -1,40 +1,52 @@
 import { useState, useMemo } from "react";
-import { candidatesData } from "@/data/candidates";
+import { candidatesData, Candidate } from "@/data/candidates";
 import { CandidateTable } from "@/components/CandidateTable";
 import { DashboardStats } from "@/components/DashboardStats";
 import { SearchInput } from "@/components/SearchInput";
 import { FilterDropdown } from "@/components/FilterDropdown";
+import { CsvUpload } from "@/components/CsvUpload";
 import { Users } from "lucide-react";
 
 const Index = () => {
+  const [candidates, setCandidates] = useState<Candidate[]>(candidatesData);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [submitterFilter, setSubmitterFilter] = useState("all");
 
+  const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
+    setCandidates(uploadedCandidates);
+    // Reset filters when new data is loaded
+    setCompanyFilter("all");
+    setStageFilter("all");
+    setStatusFilter("all");
+    setSubmitterFilter("all");
+    setSearch("");
+  };
+
   const companies = useMemo(() => 
-    [...new Set(candidatesData.map(c => c.company_name))].sort(),
-    []
+    [...new Set(candidates.map(c => c.company_name))].sort(),
+    [candidates]
   );
   
   const stages = useMemo(() => 
-    [...new Set(candidatesData.map(c => c.pipeline_stage))].sort(),
-    []
+    [...new Set(candidates.map(c => c.pipeline_stage))].sort(),
+    [candidates]
   );
   
   const statuses = useMemo(() => 
-    [...new Set(candidatesData.map(c => c.decision_status))].sort(),
-    []
+    [...new Set(candidates.map(c => c.decision_status))].sort(),
+    [candidates]
   );
 
   const submitters = useMemo(() => 
-    [...new Set(candidatesData.map(c => c.credited_to))].sort(),
-    []
+    [...new Set(candidates.map(c => c.credited_to))].sort(),
+    [candidates]
   );
 
   const filteredCandidates = useMemo(() => {
-    return candidatesData.filter((candidate) => {
+    return candidates.filter((candidate) => {
       const matchesSearch = search === "" || 
         candidate.candidate_name.toLowerCase().includes(search.toLowerCase()) ||
         candidate.company_name.toLowerCase().includes(search.toLowerCase()) ||
@@ -48,21 +60,24 @@ const Index = () => {
 
       return matchesSearch && matchesCompany && matchesStage && matchesStatus && matchesSubmitter;
     });
-  }, [search, companyFilter, stageFilter, statusFilter, submitterFilter]);
+  }, [candidates, search, companyFilter, stageFilter, statusFilter, submitterFilter]);
 
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container py-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary rounded-lg">
-              <Users className="h-5 w-5 text-primary-foreground" />
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-primary rounded-lg">
+                <Users className="h-5 w-5 text-primary-foreground" />
+              </div>
+              <div>
+                <h1 className="text-xl font-semibold text-foreground">Candidate Pipeline</h1>
+                <p className="text-sm text-muted-foreground">Track and manage your hiring pipeline</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-xl font-semibold text-foreground">Candidate Pipeline</h1>
-              <p className="text-sm text-muted-foreground">Track and manage your hiring pipeline</p>
-            </div>
+            <CsvUpload onUpload={handleCsvUpload} />
           </div>
         </div>
       </header>
@@ -70,7 +85,7 @@ const Index = () => {
       {/* Main Content */}
       <main className="container py-6 space-y-6">
         {/* Stats */}
-        <DashboardStats candidates={candidatesData} />
+        <DashboardStats candidates={candidates} />
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3">
@@ -118,7 +133,7 @@ const Index = () => {
 
         {/* Results count */}
         <p className="text-sm text-muted-foreground">
-          Showing {filteredCandidates.length} of {candidatesData.length} candidates
+          Showing {filteredCandidates.length} of {candidates.length} candidates
         </p>
 
         {/* Table */}
