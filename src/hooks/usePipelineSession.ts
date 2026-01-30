@@ -1,0 +1,155 @@
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { Candidate } from "@/data/candidates";
+import { toast } from "sonner";
+import { useNavigate, useSearchParams } from "react-router-dom";
+
+export function usePipelineSession() {
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  // Load session from URL param on mount
+  useEffect(() => {
+    const sessionParam = searchParams.get("session");
+    if (sessionParam) {
+      loadSession(sessionParam);
+    } else {
+      setIsLoading(false);
+    }
+  }, [searchParams]);
+
+  const loadSession = async (id: string) => {
+    setIsLoading(true);
+    try {
+      // Verify session exists
+      const { data: session, error: sessionError } = await supabase
+        .from("pipeline_sessions")
+        .select("id")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (sessionError || !session) {
+        console.error("Session not found:", sessionError);
+        toast.error("Session not found");
+        setIsLoading(false);
+        return;
+      }
+
+      // Load candidates for this session
+      const { data: candidatesData, error: candidatesError } = await supabase
+        .from("candidates")
+        .select("*")
+        .eq("session_id", id);
+
+      if (candidatesError) {
+        console.error("Error loading candidates:", candidatesError);
+        toast.error("Failed to load candidates");
+        setIsLoading(false);
+        return;
+      }
+
+      const loadedCandidates: Candidate[] = (candidatesData || []).map((c) => ({
+        company_name: c.company_name,
+        job_title: c.job_title,
+        job_id: c.id, // Use DB id as job_id
+        candidate_name: c.candidate_name,
+        candidate_id: c.id,
+        pipeline_stage: c.pipeline_stage,
+        decision_status: c.decision_status,
+        stage_type: "",
+        current_stage_index: c.current_stage_index,
+        total_stages: c.total_stages,
+        stage_progress: `${c.current_stage_index}/${c.total_stages}`,
+        last_activity_at: c.created_at,
+        days_in_stage: 0,
+        needs_scheduling: false,
+        credited_to: c.credited_to,
+        source: "",
+        feedback_count: 0,
+        interview_history_summary: c.interview_history_summary || undefined,
+        current_stage_interviews: c.current_stage_interviews || undefined,
+      }));
+
+      setCandidates(loadedCandidates);
+      setSessionId(id);
+      toast.success(`Loaded ${loadedCandidates.length} candidates`);
+    } catch (error) {
+      console.error("Error loading session:", error);
+      toast.error("Failed to load session");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const saveSession = useCallback(async (newCandidates: Candidate[]) => {
+    try {
+      // Create a new session
+      const { data: session, error: sessionError } = await supabase
+        .from("pipeline_sessions")
+        .insert({})
+        .select("id")
+        .single();
+
+      if (sessionError || !session) {
+        console.error("Error creating session:", sessionError);
+        toast.error("Failed to save pipeline");
+        return;
+      }
+
+      const newSessionId = session.id;
+
+      // Insert all candidates
+      const candidatesToInsert = newCandidates.map((c) => ({
+        session_id: newSessionId,
+        candidate_name: c.candidate_name,
+        company_name: c.company_name,
+        job_title: c.job_title,
+        pipeline_stage: c.pipeline_stage,
+        decision_status: c.decision_status,
+        credited_to: c.credited_to,
+        current_stage_index: c.current_stage_index,
+        total_stages: c.total_stages,
+        interview_history_summary: c.interview_history_summary || null,
+        current_stage_interviews: c.current_stage_interviews || null,
+      }));
+
+      const { error: insertError } = await supabase
+        .from("candidates")
+        .insert(candidatesToInsert);
+
+      if (insertError) {
+        console.error("Error inserting candidates:", insertError);
+        toast.error("Failed to save candidates");
+        return;
+      }
+
+      setCandidates(newCandidates);
+      setSessionId(newSessionId);
+      
+      // Update URL with session ID
+      navigate(`/?session=${newSessionId}`, { replace: true });
+      
+      toast.success(`Saved ${newCandidates.length} candidates. Share this URL to share your pipeline!`);
+    } catch (error) {
+      console.error("Error saving session:", error);
+      toast.error("Failed to save pipeline");
+    }
+  }, [navigate]);
+
+  const clearSession = useCallback(() => {
+    setCandidates([]);
+    setSessionId(null);
+    navigate("/", { replace: true });
+  }, [navigate]);
+
+  return {
+    candidates,
+    sessionId,
+    isLoading,
+    saveSession,
+    clearSession,
+  };
+}
