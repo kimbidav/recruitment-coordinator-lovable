@@ -15,7 +15,7 @@ import { Candidate } from "@/data/candidates";
 import { cn } from "@/lib/utils";
 import { format, parseISO } from "date-fns";
 
-type SortField = "candidate_name" | "company_name" | "job_title" | "pipeline_stage" | "days_in_stage" | "last_activity_at" | "feedback_count" | "credited_to";
+type SortField = "candidate_name" | "company_name" | "job_title" | "pipeline_stage" | "days_in_stage" | "last_activity_at" | "feedback_count" | "credited_to" | "progress";
 type SortDirection = "asc" | "desc";
 
 interface CandidateTableProps {
@@ -48,12 +48,19 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
 
   const sortedCandidates = useMemo(() => {
     return [...candidates].sort((a, b) => {
-      let aVal: string | number = a[sortField] as string | number;
-      let bVal: string | number = b[sortField] as string | number;
+      let aVal: string | number;
+      let bVal: string | number;
 
-      if (sortField === "last_activity_at") {
+      if (sortField === "progress") {
+        // Sort by percentage of completion (current/total)
+        aVal = a.current_stage_index / a.total_stages;
+        bVal = b.current_stage_index / b.total_stages;
+      } else if (sortField === "last_activity_at") {
         aVal = new Date(a.last_activity_at).getTime();
         bVal = new Date(b.last_activity_at).getTime();
+      } else {
+        aVal = a[sortField] as string | number;
+        bVal = b[sortField] as string | number;
       }
 
       if (typeof aVal === "string" && typeof bVal === "string") {
@@ -138,7 +145,15 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                 <SortIcon field="pipeline_stage" />
               </div>
             </TableHead>
-            <TableHead>Progress</TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("progress")}
+            >
+              <div className="flex items-center gap-1.5">
+                Progress
+                <SortIcon field="progress" />
+              </div>
+            </TableHead>
             <TableHead>Status</TableHead>
             <TableHead
               className="cursor-pointer hover:bg-muted/50 transition-colors"
