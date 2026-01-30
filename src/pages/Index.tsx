@@ -11,6 +11,7 @@ const Index = () => {
   const [companyFilter, setCompanyFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [submitterFilter, setSubmitterFilter] = useState("all");
 
   const companies = useMemo(() => 
     [...new Set(candidatesData.map(c => c.company_name))].sort(),
@@ -27,6 +28,11 @@ const Index = () => {
     []
   );
 
+  const submitters = useMemo(() => 
+    [...new Set(candidatesData.map(c => c.credited_to))].sort(),
+    []
+  );
+
   const filteredCandidates = useMemo(() => {
     return candidatesData.filter((candidate) => {
       const matchesSearch = search === "" || 
@@ -38,10 +44,11 @@ const Index = () => {
       const matchesCompany = companyFilter === "all" || candidate.company_name === companyFilter;
       const matchesStage = stageFilter === "all" || candidate.pipeline_stage === stageFilter;
       const matchesStatus = statusFilter === "all" || candidate.decision_status === statusFilter;
+      const matchesSubmitter = submitterFilter === "all" || candidate.credited_to === submitterFilter;
 
-      return matchesSearch && matchesCompany && matchesStage && matchesStatus;
+      return matchesSearch && matchesCompany && matchesStage && matchesStatus && matchesSubmitter;
     });
-  }, [search, companyFilter, stageFilter, statusFilter]);
+  }, [search, companyFilter, stageFilter, statusFilter, submitterFilter]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -80,6 +87,14 @@ const Index = () => {
               options={companies}
               placeholder="Company"
               allLabel="All Companies"
+              className="w-[160px]"
+            />
+            <FilterDropdown
+              value={submitterFilter}
+              onChange={setSubmitterFilter}
+              options={submitters}
+              placeholder="Submitted By"
+              allLabel="All Submitters"
               className="w-[160px]"
             />
             <FilterDropdown
