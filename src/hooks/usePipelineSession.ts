@@ -2,24 +2,22 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Candidate } from "@/data/candidates";
 import { toast } from "sonner";
-import { useNavigate, useSearchParams } from "react-router-dom";
 
 export function usePipelineSession() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
 
   // Load session from URL param on mount
   useEffect(() => {
-    const sessionParam = searchParams.get("session");
+    const params = new URLSearchParams(window.location.search);
+    const sessionParam = params.get("session");
     if (sessionParam) {
       loadSession(sessionParam);
     } else {
       setIsLoading(false);
     }
-  }, [searchParams]);
+  }, []);
 
   const loadSession = async (id: string) => {
     setIsLoading(true);
@@ -54,7 +52,7 @@ export function usePipelineSession() {
       const loadedCandidates: Candidate[] = (candidatesData || []).map((c) => ({
         company_name: c.company_name,
         job_title: c.job_title,
-        job_id: c.id, // Use DB id as job_id
+        job_id: c.id,
         candidate_name: c.candidate_name,
         candidate_id: c.id,
         pipeline_stage: c.pipeline_stage,
@@ -129,21 +127,22 @@ export function usePipelineSession() {
       setCandidates(newCandidates);
       setSessionId(newSessionId);
       
-      // Update URL with session ID
-      navigate(`/?session=${newSessionId}`, { replace: true });
+      // Update URL with session ID using native browser API
+      const newUrl = `${window.location.pathname}?session=${newSessionId}`;
+      window.history.replaceState({}, "", newUrl);
       
       toast.success(`Saved ${newCandidates.length} candidates. Share this URL to share your pipeline!`);
     } catch (error) {
       console.error("Error saving session:", error);
       toast.error("Failed to save pipeline");
     }
-  }, [navigate]);
+  }, []);
 
   const clearSession = useCallback(() => {
     setCandidates([]);
     setSessionId(null);
-    navigate("/", { replace: true });
-  }, [navigate]);
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
 
   return {
     candidates,
