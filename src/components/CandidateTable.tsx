@@ -1,0 +1,297 @@
+import { useState, useMemo } from "react";
+import { ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { StatusBadge } from "./StatusBadge";
+import { StageBadge } from "./StageBadge";
+import { ProgressBar } from "./ProgressBar";
+import { Candidate } from "@/data/candidates";
+import { cn } from "@/lib/utils";
+import { format, parseISO } from "date-fns";
+
+type SortField = "candidate_name" | "company_name" | "job_title" | "pipeline_stage" | "days_in_stage" | "last_activity_at" | "feedback_count";
+type SortDirection = "asc" | "desc";
+
+interface CandidateTableProps {
+  candidates: Candidate[];
+}
+
+export function CandidateTable({ candidates }: CandidateTableProps) {
+  const [sortField, setSortField] = useState<SortField>("last_activity_at");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+  };
+
+  const toggleRow = (candidateId: string) => {
+    const newExpanded = new Set(expandedRows);
+    if (newExpanded.has(candidateId)) {
+      newExpanded.delete(candidateId);
+    } else {
+      newExpanded.add(candidateId);
+    }
+    setExpandedRows(newExpanded);
+  };
+
+  const sortedCandidates = useMemo(() => {
+    return [...candidates].sort((a, b) => {
+      let aVal: string | number = a[sortField] as string | number;
+      let bVal: string | number = b[sortField] as string | number;
+
+      if (sortField === "last_activity_at") {
+        aVal = new Date(a.last_activity_at).getTime();
+        bVal = new Date(b.last_activity_at).getTime();
+      }
+
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortDirection === "asc"
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+
+      return sortDirection === "asc"
+        ? (aVal as number) - (bVal as number)
+        : (bVal as number) - (aVal as number);
+    });
+  }, [candidates, sortField, sortDirection]);
+
+  const SortIcon = ({ field }: { field: SortField }) => {
+    if (sortField !== field) {
+      return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground/50" />;
+    }
+    return sortDirection === "asc" ? (
+      <ArrowUp className="h-3.5 w-3.5 text-foreground" />
+    ) : (
+      <ArrowDown className="h-3.5 w-3.5 text-foreground" />
+    );
+  };
+
+  const formatDate = (dateString: string) => {
+    try {
+      return format(parseISO(dateString), "MMM d, yyyy");
+    } catch {
+      return dateString;
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-lg border border-border shadow-card overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent border-border">
+            <TableHead className="w-8"></TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("candidate_name")}
+            >
+              <div className="flex items-center gap-1.5">
+                Candidate
+                <SortIcon field="candidate_name" />
+              </div>
+            </TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("company_name")}
+            >
+              <div className="flex items-center gap-1.5">
+                Company
+                <SortIcon field="company_name" />
+              </div>
+            </TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("job_title")}
+            >
+              <div className="flex items-center gap-1.5">
+                Role
+                <SortIcon field="job_title" />
+              </div>
+            </TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("pipeline_stage")}
+            >
+              <div className="flex items-center gap-1.5">
+                Stage
+                <SortIcon field="pipeline_stage" />
+              </div>
+            </TableHead>
+            <TableHead>Progress</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("days_in_stage")}
+            >
+              <div className="flex items-center gap-1.5">
+                Days in Stage
+                <SortIcon field="days_in_stage" />
+              </div>
+            </TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("last_activity_at")}
+            >
+              <div className="flex items-center gap-1.5">
+                Last Activity
+                <SortIcon field="last_activity_at" />
+              </div>
+            </TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("feedback_count")}
+            >
+              <div className="flex items-center gap-1.5">
+                Feedback
+                <SortIcon field="feedback_count" />
+              </div>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sortedCandidates.map((candidate) => {
+            const isExpanded = expandedRows.has(candidate.candidate_id);
+            return (
+              <>
+                <TableRow
+                  key={candidate.candidate_id}
+                  className={cn(
+                    "cursor-pointer transition-colors hover:bg-muted/50",
+                    isExpanded && "bg-muted/30"
+                  )}
+                  onClick={() => toggleRow(candidate.candidate_id)}
+                >
+                  <TableCell className="w-8">
+                    {isExpanded ? (
+                      <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="font-medium text-foreground">
+                      {candidate.candidate_name}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      via {candidate.credited_to}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <span className="font-medium">{candidate.company_name}</span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm">{candidate.job_title}</span>
+                  </TableCell>
+                  <TableCell>
+                    <StageBadge stage={candidate.pipeline_stage} />
+                  </TableCell>
+                  <TableCell>
+                    <ProgressBar
+                      current={candidate.current_stage_index}
+                      total={candidate.total_stages}
+                      className="w-24"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge status={candidate.decision_status} />
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={cn(
+                        "font-medium",
+                        candidate.days_in_stage > 30
+                          ? "text-status-warning"
+                          : "text-foreground"
+                      )}
+                    >
+                      {candidate.days_in_stage}d
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {formatDate(candidate.last_activity_at)}
+                  </TableCell>
+                  <TableCell>
+                    {candidate.feedback_count > 0 ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{candidate.feedback_count}</span>
+                        {candidate.latest_recommendation && (
+                          <span className="text-xs text-muted-foreground">
+                            (avg: {candidate.latest_recommendation})
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+                {isExpanded && (
+                  <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
+                    <TableCell colSpan={10} className="p-4">
+                      <div className="grid grid-cols-2 gap-6">
+                        <div className="space-y-3">
+                          <h4 className="text-sm font-semibold text-foreground">Current Stage Interviews</h4>
+                          {candidate.current_stage_interviews ? (
+                            <div className="text-sm text-muted-foreground whitespace-pre-line bg-card p-3 rounded-md border border-border">
+                              {candidate.current_stage_interviews}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No interviews scheduled</p>
+                          )}
+                          {candidate.current_stage_avg_score && (
+                            <p className="text-sm">
+                              <span className="text-muted-foreground">Avg Score: </span>
+                              <span className="font-medium">{candidate.current_stage_avg_score}</span>
+                            </p>
+                          )}
+                        </div>
+                        <div className="space-y-3">
+                          <h4 className="text-sm font-semibold text-foreground">Interview History</h4>
+                          {candidate.interview_history_summary ? (
+                            <div className="text-sm text-muted-foreground bg-card p-3 rounded-md border border-border">
+                              {candidate.interview_history_summary.split(" | ").map((item, i) => (
+                                <div key={i} className="py-0.5">{item}</div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No history available</p>
+                          )}
+                          {candidate.latest_feedback_author && (
+                            <p className="text-sm">
+                              <span className="text-muted-foreground">Latest feedback by: </span>
+                              <span className="font-medium">{candidate.latest_feedback_author}</span>
+                              {candidate.latest_feedback_date && (
+                                <span className="text-muted-foreground"> on {formatDate(candidate.latest_feedback_date)}</span>
+                              )}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </>
+            );
+          })}
+        </TableBody>
+      </Table>
+      {sortedCandidates.length === 0 && (
+        <div className="p-8 text-center text-muted-foreground">
+          No candidates found matching your criteria
+        </div>
+      )}
+    </div>
+  );
+}
