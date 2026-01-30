@@ -3,25 +3,25 @@ import { candidatesData, Candidate } from "@/data/candidates";
 import { CandidateTable } from "@/components/CandidateTable";
 import { DashboardStats } from "@/components/DashboardStats";
 import { SearchInput } from "@/components/SearchInput";
-import { FilterDropdown } from "@/components/FilterDropdown";
+import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { CsvUpload } from "@/components/CsvUpload";
 import { Users } from "lucide-react";
 
 const Index = () => {
   const [candidates, setCandidates] = useState<Candidate[]>(candidatesData);
   const [search, setSearch] = useState("");
-  const [companyFilter, setCompanyFilter] = useState("all");
-  const [stageFilter, setStageFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [submitterFilter, setSubmitterFilter] = useState("all");
+  const [companyFilter, setCompanyFilter] = useState<string[]>([]);
+  const [stageFilter, setStageFilter] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [submitterFilter, setSubmitterFilter] = useState<string[]>([]);
 
   const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
     setCandidates(uploadedCandidates);
     // Reset filters when new data is loaded
-    setCompanyFilter("all");
-    setStageFilter("all");
-    setStatusFilter("all");
-    setSubmitterFilter("all");
+    setCompanyFilter([]);
+    setStageFilter([]);
+    setStatusFilter([]);
+    setSubmitterFilter([]);
     setSearch("");
   };
 
@@ -53,10 +53,10 @@ const Index = () => {
         candidate.job_title.toLowerCase().includes(search.toLowerCase()) ||
         candidate.credited_to.toLowerCase().includes(search.toLowerCase());
 
-      const matchesCompany = companyFilter === "all" || candidate.company_name === companyFilter;
-      const matchesStage = stageFilter === "all" || candidate.pipeline_stage === stageFilter;
-      const matchesStatus = statusFilter === "all" || candidate.decision_status === statusFilter;
-      const matchesSubmitter = submitterFilter === "all" || candidate.credited_to === submitterFilter;
+      const matchesCompany = companyFilter.length === 0 || companyFilter.includes(candidate.company_name);
+      const matchesStage = stageFilter.length === 0 || stageFilter.includes(candidate.pipeline_stage);
+      const matchesStatus = statusFilter.length === 0 || statusFilter.includes(candidate.decision_status);
+      const matchesSubmitter = submitterFilter.length === 0 || submitterFilter.includes(candidate.credited_to);
 
       return matchesSearch && matchesCompany && matchesStage && matchesStatus && matchesSubmitter;
     });
@@ -96,32 +96,32 @@ const Index = () => {
             className="flex-1 max-w-md"
           />
           <div className="flex gap-3 flex-wrap">
-            <FilterDropdown
-              value={companyFilter}
+            <MultiSelectDropdown
+              values={companyFilter}
               onChange={setCompanyFilter}
               options={companies}
               placeholder="Company"
               allLabel="All Companies"
               className="w-[160px]"
             />
-            <FilterDropdown
-              value={submitterFilter}
+            <MultiSelectDropdown
+              values={submitterFilter}
               onChange={setSubmitterFilter}
               options={submitters}
               placeholder="Submitted By"
               allLabel="All Submitters"
               className="w-[160px]"
             />
-            <FilterDropdown
-              value={stageFilter}
+            <MultiSelectDropdown
+              values={stageFilter}
               onChange={setStageFilter}
               options={stages}
               placeholder="Stage"
               allLabel="All Stages"
               className="w-[200px]"
             />
-            <FilterDropdown
-              value={statusFilter}
+            <MultiSelectDropdown
+              values={statusFilter}
               onChange={setStatusFilter}
               options={statuses}
               placeholder="Status"
