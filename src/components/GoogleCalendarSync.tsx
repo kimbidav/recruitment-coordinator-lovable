@@ -55,12 +55,29 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   };
 
   const handleSync = async () => {
-    const now = new Date().toISOString();
+    const now = new Date();
     const events = candidates
-      .flatMap((c) => (c.interview_events || []).map((e) => ({ ...e, candidate_name: c.candidate_name })))
-      .filter((e) => e.start_time > now);
+      .filter((c) => c.current_stage_interviews && c.current_stage_date)
+      .map((c) => {
+        const stageDate = new Date(c.current_stage_date!);
+        return {
+          id: c.candidate_id,
+          interview_title: `${c.candidate_name} – ${c.current_stage_interviews!.replace(/^•\s*/, "")}`,
+          start_time: stageDate.toISOString(),
+          end_time: new Date(stageDate.getTime() + 60 * 60 * 1000).toISOString(),
+          candidate_name: c.candidate_name,
+        };
+      })
+      .filter((e) => new Date(e.start_time) >= now);
 
-    if (events.length === 0) {
+    // Also include any structured interview_events
+    const structuredEvents = candidates
+      .flatMap((c) => (c.interview_events || []).map((e) => ({ ...e, candidate_name: c.candidate_name })))
+      .filter((e) => new Date(e.start_time) >= now);
+
+    const allEvents = [...events, ...structuredEvents];
+
+    if (allEvents.length === 0) {
       toast.info("No upcoming interviews to sync");
       return;
     }
