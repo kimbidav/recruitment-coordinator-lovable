@@ -6,6 +6,7 @@ import { toast } from "sonner";
 export function usePipelineSession() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Load session from URL param on mount
