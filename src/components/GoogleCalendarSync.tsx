@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -18,18 +18,23 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   });
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleMessage = useCallback((event: MessageEvent) => {
-    if (event.data?.type === "google_tokens" && event.data.tokens) {
-      localStorage.setItem(TOKENS_KEY, JSON.stringify(event.data.tokens));
-      setTokens(event.data.tokens);
-      toast.success("Google Calendar connected!");
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenParam = params.get("google_tokens");
+    if (tokenParam) {
+      try {
+        const parsed = JSON.parse(decodeURIComponent(tokenParam));
+        localStorage.setItem(TOKENS_KEY, JSON.stringify(parsed));
+        setTokens(parsed);
+        toast.success("Google Calendar connected!");
+      } catch {
+        toast.error("Failed to parse Google tokens");
+      }
+      params.delete("google_tokens");
+      const cleanUrl = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
+      window.history.replaceState({}, "", cleanUrl);
     }
   }, []);
-
-  useEffect(() => {
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, [handleMessage]);
 
   const handleConnect = async () => {
     setIsLoading(true);
@@ -40,12 +45,8 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
         toast.error(data.error || `Failed to get auth URL (${res.status})`);
         return;
       }
-      const { url } = await res.json();
-      const w = 500;
-      const h = 600;
-      const left = window.screenX + (window.innerWidth - w) / 2;
-      const top = window.screenY + (window.innerHeight - h) / 2;
-      window.open(url, "google_auth", `width=${w},height=${h},left=${left},top=${top}`);
+      const data = await res.json();
+      window.location.href = data.url;
     } catch {
       toast.error("Failed to start Google auth");
     } finally {
