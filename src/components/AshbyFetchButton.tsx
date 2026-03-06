@@ -42,7 +42,9 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       );
 
       if (!res.ok) {
-        throw new Error(`API returned ${res.status}`);
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || `API returned ${res.status}`);
+        return;
       }
 
       const data = await res.json();
