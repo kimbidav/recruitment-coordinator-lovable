@@ -94,7 +94,15 @@ const Index = () => {
               </div>
               <div>
                 <h1 className="text-xl font-semibold text-foreground">Candidate Pipeline</h1>
-                <p className="text-sm text-muted-foreground">Track and manage your hiring pipeline</p>
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <span>Track and manage your hiring pipeline</span>
+                  {lastUpdated && (
+                    <span className="flex items-center gap-1 text-xs">
+                      <Clock className="h-3 w-3" />
+                      Last imported: {new Date(lastUpdated).toLocaleDateString()} {new Date(lastUpdated).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
