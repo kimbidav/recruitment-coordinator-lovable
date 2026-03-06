@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 const Index = () => {
-  const { candidates, sessionId, isLoading, saveSession, clearSession } = usePipelineSession();
+  const { candidates, sessionId, lastUpdated, isLoading, saveSession, clearSession } = usePipelineSession();
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
