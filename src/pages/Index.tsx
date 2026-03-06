@@ -109,6 +109,7 @@ const Index = () => {
                   Copy Share Link
                 </Button>
               )}
+              <AshbyFetchButton onUpload={handleCsvUpload} />
               <CsvUpload onUpload={handleCsvUpload} />
             </div>
           </div>
