@@ -6,6 +6,7 @@ import { SearchInput } from "@/components/SearchInput";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { CsvUpload } from "@/components/CsvUpload";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
+import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
 import { Users, Share2, Loader2, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -117,6 +118,7 @@ const Index = () => {
                   Copy Share Link
                 </Button>
               )}
+              <GoogleCalendarSync candidates={filteredCandidates} />
               <AshbyFetchButton onUpload={handleCsvUpload} />
               <CsvUpload onUpload={handleCsvUpload} />
             </div>
