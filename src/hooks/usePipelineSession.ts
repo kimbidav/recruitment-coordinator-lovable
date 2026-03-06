@@ -74,6 +74,7 @@ export function usePipelineSession() {
 
       setCandidates(loadedCandidates);
       setSessionId(id);
+      setLastUpdated(session.updated_at);
       toast.success(`Loaded ${loadedCandidates.length} candidates`);
     } catch (error) {
       console.error("Error loading session:", error);
