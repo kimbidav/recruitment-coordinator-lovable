@@ -76,6 +76,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           current_stage_avg_score: row.current_stage_avg_score != null ? Number(row.current_stage_avg_score) : undefined,
           current_stage_date: row.current_stage_date ? String(row.current_stage_date) : undefined,
           interview_history_summary: row.interview_history_summary ? String(row.interview_history_summary) : undefined,
+          interview_events: Array.isArray(row.interview_events) ? row.interview_events as Array<{ id: string; interview_title: string; start_time: string; end_time: string }> : [],
         })
       );
 
