@@ -87,7 +87,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
       const res = await fetch(`${API_BASE}/api/calendar/add`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events, google_tokens: tokens }),
+        body: JSON.stringify({ events: allEvents, google_tokens: tokens }),
       });
 
       if (res.status === 401) {
