@@ -104,18 +104,26 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           Fetch from Ashby
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Fetch from Ashby</DialogTitle>
-          <DialogDescription>
-            Paste your Ashby session cookie to extract pipeline candidates directly.
+          <DialogDescription asChild>
+            <div className="space-y-3">
+              <p>Follow these steps to get your session token:</p>
+              <ol className="list-decimal list-inside space-y-1.5 text-xs text-muted-foreground">
+                <li>Open <span className="font-medium text-foreground">app.ashbyhq.com</span> in Chrome and sign in</li>
+                <li>Open DevTools (<kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">⌘⌥I</kbd>) → <span className="font-medium text-foreground">Application</span> → <span className="font-medium text-foreground">Cookies</span> → <span className="font-medium text-foreground">app.ashbyhq.com</span></li>
+                <li>Copy the value of the <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">ashby_session_token</code> cookie</li>
+                <li>Paste it below and click <span className="font-medium text-foreground">Fetch Candidates</span></li>
+              </ol>
+            </div>
           </DialogDescription>
         </DialogHeader>
         <Textarea
-          placeholder="Paste your Ashby session cookie here..."
+          placeholder="Paste your ashby_session_token value here..."
           value={cookie}
           onChange={(e) => setCookie(e.target.value)}
-          rows={4}
+          rows={3}
           className="font-mono text-xs"
         />
         <DialogFooter>
