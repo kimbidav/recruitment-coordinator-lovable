@@ -55,12 +55,29 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   };
 
   const handleSync = async () => {
-    const now = new Date().toISOString();
+    const now = new Date();
     const events = candidates
-      .flatMap((c) => (c.interview_events || []).map((e) => ({ ...e, candidate_name: c.candidate_name })))
-      .filter((e) => e.start_time > now);
+      .filter((c) => c.current_stage_interviews && c.current_stage_date)
+      .map((c) => {
+        const stageDate = new Date(c.current_stage_date!);
+        return {
+          id: c.candidate_id,
+          interview_title: `${c.candidate_name} – ${c.current_stage_interviews!.replace(/^•\s*/, "")}`,
+          start_time: stageDate.toISOString(),
+          end_time: new Date(stageDate.getTime() + 60 * 60 * 1000).toISOString(),
+          candidate_name: c.candidate_name,
+        };
+      })
+      .filter((e) => new Date(e.start_time) >= now);
 
-    if (events.length === 0) {
+    // Also include any structured interview_events
+    const structuredEvents = candidates
+      .flatMap((c) => (c.interview_events || []).map((e) => ({ ...e, candidate_name: c.candidate_name })))
+      .filter((e) => new Date(e.start_time) >= now);
+
+    const allEvents = [...events, ...structuredEvents];
+
+    if (allEvents.length === 0) {
       toast.info("No upcoming interviews to sync");
       return;
     }
@@ -70,7 +87,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
       const res = await fetch(`${API_BASE}/api/calendar/add`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events, google_tokens: tokens }),
+        body: JSON.stringify({ events: allEvents, google_tokens: tokens }),
       });
 
       if (res.status === 401) {
@@ -87,7 +104,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
       }
 
       const result = await res.json();
-      toast.success(result.message || `Synced ${events.length} events to Google Calendar`);
+      toast.success(result.message || `Synced ${allEvents.length} events to Google Calendar`);
     } catch {
       toast.error("Failed to sync to Google Calendar");
     } finally {
