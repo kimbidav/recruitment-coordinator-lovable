@@ -7,12 +7,12 @@ import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { CsvUpload } from "@/components/CsvUpload";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
-import { Users, Share2, Loader2 } from "lucide-react";
+import { Users, Share2, Loader2, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 const Index = () => {
-  const { candidates, sessionId, isLoading, saveSession, clearSession } = usePipelineSession();
+  const { candidates, sessionId, lastUpdated, isLoading, saveSession, clearSession } = usePipelineSession();
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
@@ -94,7 +94,15 @@ const Index = () => {
               </div>
               <div>
                 <h1 className="text-xl font-semibold text-foreground">Candidate Pipeline</h1>
-                <p className="text-sm text-muted-foreground">Track and manage your hiring pipeline</p>
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <span>Track and manage your hiring pipeline</span>
+                  {lastUpdated && (
+                    <span className="flex items-center gap-1 text-xs">
+                      <Clock className="h-3 w-3" />
+                      Last imported: {new Date(lastUpdated).toLocaleDateString()} {new Date(lastUpdated).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 export function usePipelineSession() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Load session from URL param on mount
@@ -25,7 +26,7 @@ export function usePipelineSession() {
       // Verify session exists
       const { data: session, error: sessionError } = await supabase
         .from("pipeline_sessions")
-        .select("id")
+        .select("id, updated_at")
         .eq("id", id)
         .maybeSingle();
 
@@ -73,6 +74,7 @@ export function usePipelineSession() {
 
       setCandidates(loadedCandidates);
       setSessionId(id);
+      setLastUpdated(session.updated_at);
       toast.success(`Loaded ${loadedCandidates.length} candidates`);
     } catch (error) {
       console.error("Error loading session:", error);
@@ -126,6 +128,7 @@ export function usePipelineSession() {
 
       setCandidates(newCandidates);
       setSessionId(newSessionId);
+      setLastUpdated(new Date().toISOString());
       
       // Update URL with session ID using native browser API
       const newUrl = `${window.location.pathname}?session=${newSessionId}`;
@@ -147,6 +150,7 @@ export function usePipelineSession() {
   return {
     candidates,
     sessionId,
+    lastUpdated,
     isLoading,
     saveSession,
     clearSession,
