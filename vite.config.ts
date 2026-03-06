@@ -17,9 +17,10 @@ export default defineConfig(({ mode }) => ({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
-    dedupe: ["react", "react-dom"],
+    dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
   },
   optimizeDeps: {
-    include: ["react", "react-dom"],
+    include: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@radix-ui/react-dialog"],
+    force: true,
   },
 }));
