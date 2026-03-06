@@ -104,7 +104,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
       }
 
       const result = await res.json();
-      toast.success(result.message || `Synced ${events.length} events to Google Calendar`);
+      toast.success(result.message || `Synced ${allEvents.length} events to Google Calendar`);
     } catch {
       toast.error("Failed to sync to Google Calendar");
     } finally {
