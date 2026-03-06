@@ -128,6 +128,7 @@ export function usePipelineSession() {
 
       setCandidates(newCandidates);
       setSessionId(newSessionId);
+      setLastUpdated(new Date().toISOString());
       
       // Update URL with session ID using native browser API
       const newUrl = `${window.location.pathname}?session=${newSessionId}`;
