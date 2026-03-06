@@ -26,7 +26,7 @@ export function usePipelineSession() {
       // Verify session exists
       const { data: session, error: sessionError } = await supabase
         .from("pipeline_sessions")
-        .select("id")
+        .select("id, updated_at")
         .eq("id", id)
         .maybeSingle();
 
