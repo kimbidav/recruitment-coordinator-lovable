@@ -150,6 +150,7 @@ export function usePipelineSession() {
   return {
     candidates,
     sessionId,
+    lastUpdated,
     isLoading,
     saveSession,
     clearSession,
