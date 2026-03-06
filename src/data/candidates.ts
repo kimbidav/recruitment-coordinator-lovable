@@ -23,6 +23,7 @@ export interface Candidate {
   current_stage_avg_score?: number;
   current_stage_date?: string;
   interview_history_summary?: string;
+  interview_events?: Array<{ id: string; interview_title: string; start_time: string; end_time: string }>;
 }
 
 // Empty by default - data is loaded from CSV uploads
