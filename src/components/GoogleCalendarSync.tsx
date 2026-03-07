@@ -56,33 +56,43 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
 
   const handleSync = async () => {
     const now = new Date();
+    const currentYear = now.getFullYear();
 
-    // Extract just the interview type name from strings like "• Founder Call (03/09) - Michael Lee - No score yet"
-    // or "Gina Wang x Forge (FD Technical Screen)" patterns
+    // Extract interview type from strings like "• Technical Screen Interview (03/10) - Dar Mehta - No score yet"
     const extractInterviewType = (raw: string): string => {
       const cleaned = raw.replace(/^•\s*/, "").split("\n")[0].trim();
-      // If it contains "x CompanyName (Type)" pattern, extract just the type
-      const xMatch = cleaned.match(/\((?:FD\s+)?(.+?)\)\s*$/);
-      if (xMatch) return xMatch[1].trim();
-      // Remove everything from the date parenthetical onward: "Founder Call (03/09) - ..." → "Founder Call"
+      // Match pattern before (MM/DD): "Technical Screen Interview (03/10)" → "Technical Screen Interview"
       const match = cleaned.match(/^(.+?)\s*\(\d{2}\/\d{2}\)/);
-      return match ? match[1].trim() : cleaned.split(" - ")[0].trim();
+      let type = match ? match[1].trim() : cleaned.split(" - ")[0].trim();
+      // Strip trailing " Interview" suffix
+      type = type.replace(/\s+Interview$/i, "");
+      return type;
     };
 
-    // Parse date and set to 5pm local time
-    const parseStageDate = (dateStr: string): Date => {
-      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        return new Date(dateStr + "T17:00:00");
+    // Extract (MM/DD) date from interview string and build a Date at 5pm local
+    const extractDateFromInterviews = (interviews: string, fallbackDate?: string): Date | null => {
+      const dateMatch = interviews.match(/\((\d{2})\/(\d{2})\)/);
+      if (dateMatch) {
+        const month = parseInt(dateMatch[1], 10);
+        const day = parseInt(dateMatch[2], 10);
+        return new Date(currentYear, month - 1, day, 17, 0, 0);
       }
-      return new Date(dateStr);
+      // Fallback to current_stage_date
+      if (fallbackDate) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(fallbackDate)) {
+          return new Date(fallbackDate + "T17:00:00");
+        }
+        return new Date(fallbackDate);
+      }
+      return null;
     };
 
-    const withInterviews = candidates.filter((c) => c.current_stage_interviews && c.current_stage_date);
-    console.log("Candidates with interviews+date:", withInterviews.length, withInterviews.map(c => ({ name: c.candidate_name, date: c.current_stage_date, interviews: c.current_stage_interviews })));
+    const withInterviews = candidates.filter((c) => c.current_stage_interviews);
 
     const events = withInterviews
       .map((c) => {
-        const stageDate = parseStageDate(c.current_stage_date!);
+        const stageDate = extractDateFromInterviews(c.current_stage_interviews!, c.current_stage_date);
+        if (!stageDate || isNaN(stageDate.getTime())) return null;
         const interviewType = extractInterviewType(c.current_stage_interviews!);
         return {
           id: c.candidate_id,
@@ -92,7 +102,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
           candidate_name: c.candidate_name,
         };
       })
-      .filter((e) => new Date(e.start_time) >= now);
+      .filter((e): e is NonNullable<typeof e> => e !== null && new Date(e.start_time) >= now);
 
     // Also include any structured interview_events
     const structuredEvents = candidates
