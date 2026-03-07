@@ -118,7 +118,7 @@ const Index = () => {
                   Copy Share Link
                 </Button>
               )}
-              <GoogleCalendarSync candidates={filteredCandidates} />
+              <GoogleCalendarSync candidates={candidates} />
               <AshbyFetchButton onUpload={handleCsvUpload} />
               <CsvUpload onUpload={handleCsvUpload} />
             </div>
