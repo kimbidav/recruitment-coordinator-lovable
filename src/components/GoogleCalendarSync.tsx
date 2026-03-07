@@ -56,13 +56,32 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
 
   const handleSync = async () => {
     const now = new Date();
+
+    // Extract just the interview type name from strings like "• Founder Call (03/09) - Michael Lee - No score yet"
+    const extractInterviewType = (raw: string): string => {
+      const cleaned = raw.replace(/^•\s*/, "").split("\n")[0].trim();
+      // Remove everything from the date parenthetical onward: "Founder Call (03/09) - ..." → "Founder Call"
+      const match = cleaned.match(/^(.+?)\s*\(\d{2}\/\d{2}\)/);
+      return match ? match[1].trim() : cleaned.split(" - ")[0].trim();
+    };
+
+    // Parse date avoiding timezone shift: "2026-03-09" → treat as noon local time
+    const parseStageDate = (dateStr: string): Date => {
+      // If it's just a date (no time component), add T12:00:00 to avoid UTC midnight → previous day in local TZ
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return new Date(dateStr + "T12:00:00");
+      }
+      return new Date(dateStr);
+    };
+
     const events = candidates
       .filter((c) => c.current_stage_interviews && c.current_stage_date)
       .map((c) => {
-        const stageDate = new Date(c.current_stage_date!);
+        const stageDate = parseStageDate(c.current_stage_date!);
+        const interviewType = extractInterviewType(c.current_stage_interviews!);
         return {
           id: c.candidate_id,
-          interview_title: `${c.candidate_name} – ${c.current_stage_interviews!.replace(/^•\s*/, "")}`,
+          interview_title: `${c.candidate_name} x ${c.company_name} (${interviewType})`,
           start_time: stageDate.toISOString(),
           end_time: new Date(stageDate.getTime() + 60 * 60 * 1000).toISOString(),
           candidate_name: c.candidate_name,
