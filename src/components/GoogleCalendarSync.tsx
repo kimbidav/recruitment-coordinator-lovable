@@ -82,7 +82,6 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
 
     const events = withInterviews
       .map((c) => {
-      .map((c) => {
         const stageDate = parseStageDate(c.current_stage_date!);
         const interviewType = extractInterviewType(c.current_stage_interviews!);
         return {
