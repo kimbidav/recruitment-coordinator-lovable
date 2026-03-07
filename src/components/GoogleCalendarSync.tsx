@@ -96,7 +96,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
         const interviewType = extractInterviewType(c.current_stage_interviews!);
         return {
           id: c.candidate_id,
-          interview_title: `${c.candidate_name} x ${c.company_name} (${interviewType})`,
+          interview_title: `${c.candidate_name} x ${c.company_name} (${c.pipeline_stage})`,
           start_time: stageDate.toISOString(),
           end_time: new Date(stageDate.getTime() + 30 * 60 * 1000).toISOString(),
           candidate_name: c.candidate_name,
