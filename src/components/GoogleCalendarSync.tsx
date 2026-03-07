@@ -104,12 +104,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
       })
       .filter((e): e is NonNullable<typeof e> => e !== null && new Date(e.start_time) >= now);
 
-    // Also include any structured interview_events
-    const structuredEvents = candidates
-      .flatMap((c) => (c.interview_events || []).map((e) => ({ ...e, candidate_name: c.candidate_name })))
-      .filter((e) => new Date(e.start_time) >= now);
-
-    const allEvents = [...events, ...structuredEvents];
+    const allEvents = events;
 
     if (allEvents.length === 0) {
       toast.info("No upcoming interviews to sync");
