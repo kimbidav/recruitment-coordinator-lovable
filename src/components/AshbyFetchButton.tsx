@@ -41,44 +41,18 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         }
       );
 
+      const data = await res.json();
+
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || `API returned ${res.status}`);
+        if (res.status === 401) {
+          toast.error("Session expired. Please paste a fresh cookie from Ashby.");
+        } else {
+          toast.error(data.error || `API returned ${res.status}`);
+        }
         return;
       }
 
-      const data = await res.json();
-
-      // The API should return an array of candidate objects
-      const candidates: Candidate[] = (Array.isArray(data) ? data : data.candidates ?? []).map(
-        (row: Record<string, unknown>): Candidate => ({
-          company_name: String(row.company_name ?? ""),
-          job_title: String(row.job_title ?? ""),
-          job_id: String(row.job_id ?? ""),
-          candidate_name: String(row.candidate_name ?? ""),
-          candidate_id: String(row.candidate_id ?? ""),
-          pipeline_stage: String(row.pipeline_stage ?? ""),
-          decision_status: String(row.decision_status ?? ""),
-          stage_type: String(row.stage_type ?? ""),
-          current_stage_index: Number(row.current_stage_index) || 0,
-          total_stages: Number(row.total_stages) || 0,
-          stage_progress: String(row.stage_progress ?? ""),
-          last_activity_at: String(row.last_activity_at ?? ""),
-          days_in_stage: Number(row.days_in_stage) || 0,
-          needs_scheduling: row.needs_scheduling === true || String(row.needs_scheduling).toLowerCase() === "true",
-          credited_to: String(row.credited_to ?? ""),
-          source: String(row.source ?? ""),
-          feedback_count: Number(row.feedback_count) || 0,
-          latest_recommendation: row.latest_recommendation != null ? Number(row.latest_recommendation) : undefined,
-          latest_feedback_author: row.latest_feedback_author ? String(row.latest_feedback_author) : undefined,
-          latest_feedback_date: row.latest_feedback_date ? String(row.latest_feedback_date) : undefined,
-          current_stage_interviews: row.current_stage_interviews ? String(row.current_stage_interviews) : undefined,
-          current_stage_avg_score: row.current_stage_avg_score != null ? Number(row.current_stage_avg_score) : undefined,
-          current_stage_date: row.current_stage_date ? String(row.current_stage_date) : undefined,
-          interview_history_summary: row.interview_history_summary ? String(row.interview_history_summary) : undefined,
-          interview_events: Array.isArray(row.interview_events) ? row.interview_events as Array<{ id: string; interview_title: string; start_time: string; end_time: string }> : [],
-        })
-      );
+      const candidates: Candidate[] = data.candidates ?? (Array.isArray(data) ? data : []);
 
       if (candidates.length === 0) {
         toast.error("No candidates returned from Ashby");
