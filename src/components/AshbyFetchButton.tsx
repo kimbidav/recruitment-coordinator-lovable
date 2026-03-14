@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,8 +11,64 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
 import { Candidate } from "@/data/candidates";
 import { toast } from "sonner";
+
+const PROGRESS_STEPS = [
+  { at: 0, label: "Connecting to Ashby..." },
+  { at: 5, label: "Authenticating session..." },
+  { at: 10, label: "Discovering organizations..." },
+  { at: 20, label: "Fetching open jobs..." },
+  { at: 35, label: "Loading active candidates..." },
+  { at: 50, label: "Enriching candidate data..." },
+  { at: 65, label: "Processing interview feedback..." },
+  { at: 80, label: "Aggregating across orgs..." },
+  { at: 90, label: "Finalizing results..." },
+];
+
+function useSimulatedProgress(active: boolean) {
+  const [progress, setProgress] = useState(0);
+  const [label, setLabel] = useState("");
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setProgress(0);
+      setLabel("");
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      return;
+    }
+
+    let current = 0;
+    setProgress(0);
+    setLabel(PROGRESS_STEPS[0].label);
+
+    intervalRef.current = setInterval(() => {
+      current = Math.min(current + 0.5 + Math.random() * 1.5, 95);
+      setProgress(current);
+
+      // Find the matching step label
+      for (let i = PROGRESS_STEPS.length - 1; i >= 0; i--) {
+        if (current >= PROGRESS_STEPS[i].at) {
+          setLabel(PROGRESS_STEPS[i].label);
+          break;
+        }
+      }
+    }, 800);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [active]);
+
+  const complete = () => {
+    setProgress(100);
+    setLabel("Done!");
+  };
+
+  return { progress, label, complete };
+}
 
 interface AshbyFetchButtonProps {
   onUpload: (candidates: Candidate[]) => void;
@@ -22,6 +78,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
+  const { progress, label, complete } = useSimulatedProgress(loading);
 
   const handleFetch = async () => {
     const trimmed = cookie.trim();
@@ -58,6 +115,9 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         toast.error("No candidates returned from Ashby");
         return;
       }
+
+      complete();
+      await new Promise((r) => setTimeout(r, 500));
 
       onUpload(candidates);
       toast.success(`Loaded ${candidates.length} candidates from Ashby`);
@@ -100,11 +160,23 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           onChange={(e) => setCookie(e.target.value)}
           rows={3}
           className="font-mono text-xs"
+          disabled={loading}
         />
+
+        {loading && (
+          <div className="space-y-2 py-1">
+            <Progress value={progress} className="h-2" />
+            <p className="text-xs text-muted-foreground flex items-center gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {label}
+            </p>
+          </div>
+        )}
+
         <DialogFooter>
           <Button onClick={handleFetch} disabled={loading} className="gap-2">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            {loading ? "Fetching..." : "Fetch Candidates"}
+            {loading ? "Extracting..." : "Fetch Candidates"}
           </Button>
         </DialogFooter>
       </DialogContent>
