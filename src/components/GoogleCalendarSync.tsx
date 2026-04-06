@@ -3,9 +3,9 @@ import { Button } from "@/components/ui/button";
 import { Calendar, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Candidate } from "@/data/candidates";
+import { ASHBY_AUTOMATION_API_BASE, readErrorPayload } from "@/lib/ashbyAutomation";
 
 const TOKENS_KEY = "google_calendar_tokens";
-const API_BASE = "https://ashby-automation-production.up.railway.app";
 
 interface GoogleCalendarSyncProps {
   candidates: Candidate[];
@@ -39,16 +39,15 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   const handleConnect = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/google/auth`);
+      const res = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/google/auth`);
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || `Failed to get auth URL (${res.status})`);
+        toast.error(await readErrorPayload(res));
         return;
       }
       const data = await res.json();
       window.location.href = data.url;
     } catch {
-      toast.error("Failed to start Google auth");
+      toast.error(`Failed to start Google auth via ${ASHBY_AUTOMATION_API_BASE}`);
     } finally {
       setIsLoading(false);
     }
@@ -113,7 +112,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
 
     setIsLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/calendar/add`, {
+      const res = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/calendar/add`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ events: allEvents, google_tokens: tokens }),
@@ -127,8 +126,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
       }
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || `Sync failed (${res.status})`);
+        toast.error(await readErrorPayload(res));
         return;
       }
 

@@ -13,6 +13,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Candidate } from "@/data/candidates";
+import { ASHBY_AUTOMATION_API_BASE, readErrorPayload } from "@/lib/ashbyAutomation";
 import { toast } from "sonner";
 
 const PROGRESS_STEPS = [
@@ -21,8 +22,8 @@ const PROGRESS_STEPS = [
   { at: 10, label: "Discovering organizations..." },
   { at: 20, label: "Fetching open jobs..." },
   { at: 35, label: "Loading active candidates..." },
-  { at: 50, label: "Enriching candidate data..." },
-  { at: 65, label: "Processing interview feedback..." },
+  { at: 50, label: "Preparing pipeline..." },
+  { at: 65, label: "Finalizing results..." },
   { at: 80, label: "Aggregating across orgs..." },
   { at: 90, label: "Finalizing results..." },
 ];
@@ -74,6 +75,10 @@ interface AshbyFetchButtonProps {
   onUpload: (candidates: Candidate[]) => void;
 }
 
+function parseAshbyResponse(data: any): Candidate[] {
+  return data.candidates ?? (Array.isArray(data) ? data : []);
+}
+
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
@@ -89,27 +94,23 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
 
     setLoading(true);
     try {
-      const res = await fetch(
-        "https://ashby-automation-production.up.railway.app/api/extract",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cookie: trimmed }),
-        }
-      );
+      const basicRes = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cookie: trimmed, include_enrichment: false }),
+      });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (res.status === 401) {
+      if (!basicRes.ok) {
+        if (basicRes.status === 401) {
           toast.error("Session expired. Please paste a fresh cookie from Ashby.");
         } else {
-          toast.error(data.error || `API returned ${res.status}`);
+          toast.error(await readErrorPayload(basicRes));
         }
         return;
       }
 
-      const candidates: Candidate[] = data.candidates ?? (Array.isArray(data) ? data : []);
+      const basicData = await basicRes.json();
+      const candidates = parseAshbyResponse(basicData);
 
       if (candidates.length === 0) {
         toast.error("No candidates returned from Ashby");
@@ -122,10 +123,43 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       onUpload(candidates);
       toast.success(`Loaded ${candidates.length} candidates from Ashby`);
       setOpen(false);
+
+      setTimeout(async () => {
+        try {
+          toast.message("Pulling interview feedback and stage dates in the background...");
+
+          const enrichedRes = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cookie: trimmed, include_enrichment: true }),
+          });
+
+          if (!enrichedRes.ok) {
+            console.error("Ashby enrichment error:", await readErrorPayload(enrichedRes));
+            toast.error("Loaded basic Ashby data, but enrichment did not finish.");
+            return;
+          }
+
+          const enrichedData = await enrichedRes.json();
+          const enrichedCandidates = parseAshbyResponse(enrichedData);
+          if (enrichedCandidates.length > 0) {
+            onUpload(enrichedCandidates);
+            toast.success("Ashby enrichment complete: feedback and interview dates loaded.");
+          }
+        } catch (enrichmentError) {
+          console.error("Ashby enrichment error:", enrichmentError);
+          toast.error("Loaded basic Ashby data, but enrichment did not finish.");
+        }
+      }, 0);
+
       setCookie("");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Ashby fetch error:", err);
-      toast.error("Failed to fetch from Ashby. Check your cookie and try again.");
+      const message =
+        err instanceof TypeError
+          ? `Could not reach Ashby automation at ${ASHBY_AUTOMATION_API_BASE}. The deployed extractor may be down or not redeployed.`
+          : "Failed to fetch from Ashby.";
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -145,6 +179,9 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           <DialogDescription asChild>
             <div className="space-y-3">
               <p>Follow these steps to get your session token:</p>
+              <p className="text-[11px] text-muted-foreground">
+                API: <code className="rounded bg-muted px-1 py-0.5 font-mono">{ASHBY_AUTOMATION_API_BASE}</code>
+              </p>
               <ol className="list-decimal list-inside space-y-1.5 text-xs text-muted-foreground">
                 <li>Open <span className="font-medium text-foreground">app.ashbyhq.com</span> in Chrome and sign in</li>
                 <li>Open DevTools (<kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">⌘⌥I</kbd>) → <span className="font-medium text-foreground">Application</span> → <span className="font-medium text-foreground">Cookies</span> → <span className="font-medium text-foreground">app.ashbyhq.com</span></li>
@@ -176,7 +213,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         <DialogFooter>
           <Button onClick={handleFetch} disabled={loading} className="gap-2">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            {loading ? "Extracting..." : "Fetch Candidates"}
+            {loading ? "Fetching..." : "Fetch Candidates"}
           </Button>
         </DialogFooter>
       </DialogContent>

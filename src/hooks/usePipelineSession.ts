@@ -86,24 +86,47 @@ export function usePipelineSession() {
 
   const saveSession = useCallback(async (newCandidates: Candidate[]) => {
     try {
-      // Create a new session
-      const { data: session, error: sessionError } = await supabase
-        .from("pipeline_sessions")
-        .insert({})
-        .select("id")
-        .single();
+      let targetSessionId = sessionId;
 
-      if (sessionError || !session) {
-        console.error("Error creating session:", sessionError);
-        toast.error("Failed to save pipeline");
-        return;
+      if (!targetSessionId) {
+        const { data: session, error: sessionError } = await supabase
+          .from("pipeline_sessions")
+          .insert({})
+          .select("id")
+          .single();
+
+        if (sessionError || !session) {
+          console.error("Error creating session:", sessionError);
+          toast.error("Failed to save pipeline");
+          return;
+        }
+
+        targetSessionId = session.id;
+      } else {
+        const { error: deleteError } = await supabase
+          .from("candidates")
+          .delete()
+          .eq("session_id", targetSessionId);
+
+        if (deleteError) {
+          console.error("Error replacing candidates:", deleteError);
+          toast.error("Failed to update pipeline");
+          return;
+        }
+
+        const { error: touchError } = await supabase
+          .from("pipeline_sessions")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", targetSessionId);
+
+        if (touchError) {
+          console.error("Error updating session timestamp:", touchError);
+        }
       }
-
-      const newSessionId = session.id;
 
       // Insert all candidates
       const candidatesToInsert = newCandidates.map((c) => ({
-        session_id: newSessionId,
+        session_id: targetSessionId,
         candidate_name: c.candidate_name,
         company_name: c.company_name,
         job_title: c.job_title,
@@ -127,19 +150,23 @@ export function usePipelineSession() {
       }
 
       setCandidates(newCandidates);
-      setSessionId(newSessionId);
+      setSessionId(targetSessionId);
       setLastUpdated(new Date().toISOString());
       
       // Update URL with session ID using native browser API
-      const newUrl = `${window.location.pathname}?session=${newSessionId}`;
+      const newUrl = `${window.location.pathname}?session=${targetSessionId}`;
       window.history.replaceState({}, "", newUrl);
       
-      toast.success(`Saved ${newCandidates.length} candidates. Share this URL to share your pipeline!`);
+      if (sessionId) {
+        toast.success(`Updated ${newCandidates.length} candidates from Ashby enrichment.`);
+      } else {
+        toast.success(`Saved ${newCandidates.length} candidates. Share this URL to share your pipeline!`);
+      }
     } catch (error) {
       console.error("Error saving session:", error);
       toast.error("Failed to save pipeline");
     }
-  }, []);
+  }, [sessionId]);
 
   const clearSession = useCallback(() => {
     setCandidates([]);
