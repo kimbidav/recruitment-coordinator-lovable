@@ -79,6 +79,15 @@ function parseAshbyResponse(data: any): Candidate[] {
   return data.candidates ?? (Array.isArray(data) ? data : []);
 }
 
+interface ExtractJobResponse {
+  job_id: string;
+  status: "running" | "done" | "error";
+  stage: "queued" | "discovering" | "basic" | "enriching" | "done" | "error";
+  basic_result?: { candidates?: Candidate[] };
+  result?: { candidates?: Candidate[] };
+  error?: string;
+}
+
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
@@ -94,65 +103,73 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
 
     setLoading(true);
     try {
-      const basicRes = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract`, {
+      const startRes = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cookie: trimmed, include_enrichment: false }),
+        body: JSON.stringify({ cookie: trimmed }),
       });
 
-      if (!basicRes.ok) {
-        if (basicRes.status === 401) {
+      if (!startRes.ok) {
+        if (startRes.status === 401) {
           toast.error("Session expired. Please paste a fresh cookie from Ashby.");
         } else {
-          toast.error(await readErrorPayload(basicRes));
+          toast.error(await readErrorPayload(startRes));
         }
         return;
       }
 
-      const basicData = await basicRes.json();
-      const candidates = parseAshbyResponse(basicData);
+      const startData: ExtractJobResponse = await startRes.json();
+      const jobId = startData.job_id;
 
-      if (candidates.length === 0) {
-        toast.error("No candidates returned from Ashby");
-        return;
-      }
+      let uploadedBasic = false;
+      let uploadedFinal = false;
+      let pollAttempts = 0;
 
-      complete();
-      await new Promise((r) => setTimeout(r, 500));
+      while (pollAttempts < 180) {
+        await new Promise((r) => setTimeout(r, 1000));
+        pollAttempts += 1;
 
-      onUpload(candidates);
-      toast.success(`Loaded ${candidates.length} candidates from Ashby`);
-      setOpen(false);
+        const jobRes = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract/jobs/${jobId}`);
+        if (!jobRes.ok) {
+          toast.error(await readErrorPayload(jobRes));
+          return;
+        }
 
-      setTimeout(async () => {
-        try {
-          toast.message("Pulling interview feedback and stage dates in the background...");
+        const job: ExtractJobResponse = await jobRes.json();
 
-          const enrichedRes = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cookie: trimmed, include_enrichment: true }),
-          });
-
-          if (!enrichedRes.ok) {
-            console.error("Ashby enrichment error:", await readErrorPayload(enrichedRes));
-            toast.error("Loaded basic Ashby data, but enrichment did not finish.");
-            return;
+        if (!uploadedBasic && job.basic_result) {
+          const basicCandidates = parseAshbyResponse(job.basic_result);
+          if (basicCandidates.length > 0) {
+            complete();
+            await new Promise((r) => setTimeout(r, 300));
+            onUpload(basicCandidates);
+            toast.success(`Loaded ${basicCandidates.length} candidates from Ashby`);
+            toast.message("Pulling interview feedback and stage dates in the background...");
+            setOpen(false);
+            uploadedBasic = true;
           }
+        }
 
-          const enrichedData = await enrichedRes.json();
-          const enrichedCandidates = parseAshbyResponse(enrichedData);
-          if (enrichedCandidates.length > 0) {
+        if (job.status === "done" && job.result) {
+          const enrichedCandidates = parseAshbyResponse(job.result);
+          if (enrichedCandidates.length > 0 && !uploadedFinal) {
             onUpload(enrichedCandidates);
             toast.success("Ashby enrichment complete: feedback and interview dates loaded.");
+            uploadedFinal = true;
+          } else if (!uploadedBasic) {
+            toast.error("No candidates returned from Ashby");
           }
-        } catch (enrichmentError) {
-          console.error("Ashby enrichment error:", enrichmentError);
-          toast.error("Loaded basic Ashby data, but enrichment did not finish.");
+          setCookie("");
+          return;
         }
-      }, 0);
 
-      setCookie("");
+        if (job.status === "error") {
+          toast.error(job.error || "Ashby extraction failed.");
+          return;
+        }
+      }
+
+      toast.error("Ashby extraction timed out before enrichment completed.");
     } catch (err: any) {
       console.error("Ashby fetch error:", err);
       const message =
