@@ -62,14 +62,19 @@ export function usePipelineSession() {
         current_stage_index: c.current_stage_index,
         total_stages: c.total_stages,
         stage_progress: `${c.current_stage_index}/${c.total_stages}`,
-        last_activity_at: c.created_at,
+        last_activity_at: c.last_activity_at || c.created_at,
         days_in_stage: 0,
         needs_scheduling: false,
         credited_to: c.credited_to,
         source: "",
-        feedback_count: 0,
+        feedback_count: c.feedback_count || 0,
+        latest_recommendation: c.latest_recommendation || undefined,
+        latest_feedback_author: c.latest_feedback_author || undefined,
+        latest_feedback_date: c.latest_feedback_date || undefined,
         interview_history_summary: c.interview_history_summary || undefined,
         current_stage_interviews: c.current_stage_interviews || undefined,
+        current_stage_avg_score: c.current_stage_avg_score || undefined,
+        current_stage_date: c.current_stage_date || undefined,
       }));
 
       setCandidates(loadedCandidates);
@@ -135,8 +140,15 @@ export function usePipelineSession() {
         credited_to: c.credited_to,
         current_stage_index: c.current_stage_index,
         total_stages: c.total_stages,
+        feedback_count: c.feedback_count || 0,
+        latest_recommendation: c.latest_recommendation ?? null,
+        latest_feedback_author: c.latest_feedback_author || null,
+        latest_feedback_date: c.latest_feedback_date || null,
+        current_stage_avg_score: c.current_stage_avg_score ?? null,
+        current_stage_date: c.current_stage_date || null,
         interview_history_summary: c.interview_history_summary || null,
         current_stage_interviews: c.current_stage_interviews || null,
+        last_activity_at: c.last_activity_at || null,
       }));
 
       const { error: insertError } = await supabase

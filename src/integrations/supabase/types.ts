@@ -21,11 +21,18 @@ export type Database = {
           created_at: string
           credited_to: string
           current_stage_index: number
+          current_stage_avg_score: number | null
+          current_stage_date: string | null
           current_stage_interviews: string | null
           decision_status: string
+          feedback_count: number
           id: string
           interview_history_summary: string | null
           job_title: string
+          last_activity_at: string | null
+          latest_feedback_author: string | null
+          latest_feedback_date: string | null
+          latest_recommendation: number | null
           pipeline_stage: string
           session_id: string
           total_stages: number
@@ -36,11 +43,18 @@ export type Database = {
           created_at?: string
           credited_to: string
           current_stage_index?: number
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
           current_stage_interviews?: string | null
           decision_status: string
+          feedback_count?: number
           id?: string
           interview_history_summary?: string | null
           job_title: string
+          last_activity_at?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          latest_recommendation?: number | null
           pipeline_stage: string
           session_id: string
           total_stages?: number
@@ -51,11 +65,18 @@ export type Database = {
           created_at?: string
           credited_to?: string
           current_stage_index?: number
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
           current_stage_interviews?: string | null
           decision_status?: string
+          feedback_count?: number
           id?: string
           interview_history_summary?: string | null
           job_title?: string
+          last_activity_at?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          latest_recommendation?: number | null
           pipeline_stage?: string
           session_id?: string
           total_stages?: number
