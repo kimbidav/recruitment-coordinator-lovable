@@ -50,7 +50,7 @@ export function usePipelineSession() {
         return;
       }
 
-      const loadedCandidates: Candidate[] = (candidatesData || []).map((c) => ({
+      const loadedCandidates: Candidate[] = (candidatesData || []).map((c: any) => ({
         company_name: c.company_name,
         job_title: c.job_title,
         job_id: c.id,
