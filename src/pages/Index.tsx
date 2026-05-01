@@ -9,6 +9,10 @@ import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
 import { SlackConnectButton } from "@/components/SlackConnectButton";
+import { SlackThreadPanel } from "@/components/SlackThreadPanel";
+import { EmailComposer } from "@/components/EmailComposer";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
 import { useSlackSubmissions } from "@/hooks/useSlackSubmissions";
 import { useAuth } from "@/contexts/AuthContext";
@@ -21,7 +25,7 @@ import {
 } from "@/lib/slackParse";
 
 const Index = () => {
-  const { candidates, lastUpdated, isLoading, saveSession } = usePipelineSession();
+  const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
   const [search, setSearch] = useState("");
@@ -30,6 +34,8 @@ const Index = () => {
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [submitterFilter, setSubmitterFilter] = useState<string[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [slackThreadFor, setSlackThreadFor] = useState<Candidate | null>(null);
+  const [emailFor, setEmailFor] = useState<Candidate | null>(null);
 
   const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
     saveSession(uploadedCandidates);
@@ -176,6 +182,7 @@ const Index = () => {
   // Collapse granular pipeline stages into two buckets the user cares about:
   // "In Process" (still active) vs "Closed" (rejected / withdrawn / not in process / hired).
   const stageBucket = (c: Candidate): "In Process" | "Closed" => {
+    if (c.closed_locally) return "Closed";
     const decision = (c.decision_status || "").toLowerCase();
     const stage = (c.pipeline_stage || "").toLowerCase();
     const closedDecision = ["rejected", "withdrawn", "archived", "hired", "closed"].some((k) =>
@@ -386,10 +393,56 @@ const Index = () => {
                 setSubmitterFilter([]);
                 setSourceFilter([]);
               }}
+              onOpenSlackThread={(c) => setSlackThreadFor(c)}
+              onOpenEmail={(c) => setEmailFor(c)}
+              onCloseCandidate={async (c) => {
+                // Always mark closed locally so next Ashby fetch respects it.
+                await markCandidateClosed(c.candidate_id, c.job_id, true);
+                // If Slack thread is known, also add a ⛔ reaction in Slack.
+                if (c.slack_meta?.channel_id && c.slack_meta?.message_ts) {
+                  try {
+                    const { data, error } = await supabase.functions.invoke("slack-thread", {
+                      body: {
+                        action: "close",
+                        channel_id: c.slack_meta.channel_id,
+                        message_ts: c.slack_meta.message_ts,
+                      },
+                    });
+                    if (error) throw error;
+                    if (data?.error) throw new Error(data.error);
+                    toast.success(`${c.candidate_name} closed · ⛔ added in Slack`);
+                  } catch (e) {
+                    const msg = e instanceof Error ? e.message : "Slack reaction failed";
+                    toast.error(`Closed locally, but Slack reaction failed: ${msg}`);
+                  }
+                } else {
+                  toast.success(`${c.candidate_name} closed`);
+                }
+              }}
             />
           </>
         )}
       </main>
+
+      <SlackThreadPanel
+        open={!!slackThreadFor}
+        onOpenChange={(o) => !o && setSlackThreadFor(null)}
+        channelId={slackThreadFor?.slack_meta?.channel_id ?? null}
+        messageTs={slackThreadFor?.slack_meta?.message_ts ?? null}
+        candidateName={slackThreadFor?.candidate_name ?? ""}
+        companyName={slackThreadFor?.company_name ?? ""}
+      />
+
+      <EmailComposer
+        open={!!emailFor}
+        onOpenChange={(o) => !o && setEmailFor(null)}
+        candidateName={emailFor?.candidate_name ?? ""}
+        opportunities={
+          emailFor
+            ? mergedCandidates.filter((c) => c.candidate_name === emailFor.candidate_name)
+            : []
+        }
+      />
     </div>
   );
 };

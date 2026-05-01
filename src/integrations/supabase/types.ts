@@ -19,6 +19,8 @@ export type Database = {
           ashby_candidate_id: string | null
           ashby_job_id: string | null
           candidate_name: string
+          closed_at: string | null
+          closed_locally: boolean
           company_name: string
           created_at: string
           credited_to: string
@@ -46,6 +48,8 @@ export type Database = {
           ashby_candidate_id?: string | null
           ashby_job_id?: string | null
           candidate_name: string
+          closed_at?: string | null
+          closed_locally?: boolean
           company_name: string
           created_at?: string
           credited_to: string
@@ -73,6 +77,8 @@ export type Database = {
           ashby_candidate_id?: string | null
           ashby_job_id?: string | null
           candidate_name?: string
+          closed_at?: string | null
+          closed_locally?: boolean
           company_name?: string
           created_at?: string
           credited_to?: string
