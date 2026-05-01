@@ -264,7 +264,12 @@ export function SlackThreadPanel({
                     )}
                   </div>
                   <div className="text-sm text-foreground whitespace-pre-wrap break-words mt-0.5">
-                    {m.text || <span className="text-muted-foreground italic">(no text)</span>}
+                    {m.text
+                      ? m.text.replace(/<@([A-Z0-9]+)>/g, (_, id) => {
+                          const u = users.find((x) => x.id === id);
+                          return `@${u?.name ?? id}`;
+                        })
+                      : <span className="text-muted-foreground italic">(no text)</span>}
                   </div>
                   {m.reactions.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
