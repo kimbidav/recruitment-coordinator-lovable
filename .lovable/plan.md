@@ -1,79 +1,176 @@
-# Onboarding UX Polish
+## Goal
 
-Two independent improvements to the first-run experience.
+Pull every candidate the signed-in user has personally submitted into a CandidateLabs Slack channel, infer the client from the channel name, infer status from emoji reactions, and merge those rows with the existing Ashby data so the dashboard shows the user's complete pipeline.
 
----
+## How it works (end-to-end)
 
-## 1. Make Ashby session token capture painless
+```text
+User clicks "Connect Slack" in the dashboard
+        |
+        v
+[edge fn: slack-connect]  -> redirect to Slack OAuth (user scopes)
+        |
+        v
+Slack -> /slack/callback -> [edge fn: slack-callback]
+        - exchanges code for user-token
+        - stores in slack_tokens (per Lovable user)
+        - records the user's Slack user_id + workspace
+        |
+        v
+User clicks "Sync from Slack" (or auto-runs after connect)
+        |
+        v
+[edge fn: slack-sync]
+        1. List external/shared channels the user is in
+        2. For each, fetch recent parent messages authored by THIS user
+        3. Extract LinkedIn URL + candidate name from each message
+        4. Read reactions on the parent message -> derive status
+        5. Infer client name from channel name
+        6. Upsert into `slack_submissions`
+        |
+        v
+Dashboard merges `candidates` (Ashby) + `slack_submissions` by
+(client + normalized name) -> single row, Ashby data preferred,
+"Also in Slack" badge added.
+```
 
-The DevTools → Application → Cookies path is the part new users get stuck on. We can't avoid the cookie (Ashby has no per-user API), but we can make the steps copy-paste foolproof.
+## Slack auth model
 
-### Changes to the "Connect Ashby" dialog (`src/components/AshbyFetchButton.tsx`)
+The user picked "Sign in with Slack". The built-in Lovable Slack connector authenticates the workspace owner, not each end-user, so it doesn't fit. Instead we mirror the existing Google Calendar pattern:
 
-- **Replace the terse 3-step list with a guided, visual walkthrough**, OS-aware:
-  - Detect Mac vs Windows/Linux from `navigator.platform` and show the correct DevTools shortcut (`⌘⌥I` vs `F12` / `Ctrl+Shift+I`).
-  - Use a numbered, illustrated stepper with small inline screenshots/diagrams (static SVGs in `public/onboarding/`) showing: the DevTools panel, the Application tab location, the Cookies tree, and the `ashby_session_token` row highlighted.
-  - Each step is a collapsible card; the active step expands automatically.
-- **One-click "Open Ashby cookies page"** button that opens `https://app.ashbyhq.com/` in a new tab with a tooltip reminding the user to come back.
-- **Copy-ready DevTools snippet** as an alternative path for power users:
-  ```js
-  copy(document.cookie.split('; ').find(r => r.startsWith('ashby_session_token='))?.split('=')[1])
-  ```
-  Render in a code block with a "Copy snippet" button. After running it in the Ashby tab's console, the token is on their clipboard — they paste once.
-- **Live token validation** in the textarea: as soon as something is pasted, validate shape (length, no `ashby_session_token=` prefix, no surrounding quotes). Auto-strip common paste mistakes (whole `cookie:` header, quotes, `Name\tValue` from DevTools row copy). Show a green check when it looks valid, red hint when it doesn't.
-- **"Why do you need this?" disclosure** linking to a short explanation (no covert collection, stored in browser localStorage, never sent anywhere except the extraction service). Reinforces our privacy-first stance.
+1. The user creates (or we provide a manifest for) a custom Slack app with **user token scopes**: `channels:read`, `groups:read`, `channels:history`, `groups:history`, `reactions:read`, `users:read`, `users:read.email`. (These are user-token scopes, not bot scopes — required so we can read messages in any channel the user is already a member of, including external/Slack-Connect channels, without an admin invite.)
+2. We add two secrets (`SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`) — the user pastes them once, same flow Google Calendar uses today.
+3. Per-user OAuth tokens are stored in a new `slack_tokens` table (RLS = own-row only), refreshed when expired.
 
-### Optional follow-up (not in this plan, just flagged)
+We will surface the manifest JSON and the redirect URI (`{site}/slack/callback`) in the connect dialog so setup is copy-paste.
 
-A browser extension or bookmarklet would eliminate DevTools entirely. Out of scope for now — the snippet approach gets ~90% of the benefit with zero install.
+## Data model (new tables)
 
----
+`slack_tokens` — one row per Lovable user
+- `user_id uuid` (RLS key)
+- `slack_user_id text`, `slack_team_id text`, `slack_team_name text`
+- `access_token text` (user token), `refresh_token text` nullable, `expires_at timestamptz` nullable
+- `scope text`, `created_at`, `updated_at`
 
-## 2. Merge Google Calendar connect into the sign-in flow
+`slack_channel_mappings` — auto-discovered channel -> client name, editable
+- `user_id uuid`, `channel_id text`, `channel_name text`
+- `client_name text` (default = parsed from channel name, user-overridable)
+- `enabled boolean default true`
+- unique (user_id, channel_id)
 
-### Constraint to know up front
+`slack_submissions` — one row per parent message authored by the user
+- `user_id uuid`, `channel_id text`, `message_ts text` (Slack timestamp = unique id)
+- `client_name text`, `candidate_name text`, `linkedin_url text` nullable
+- `submitted_at timestamptz`
+- `status text` — one of `submitted` | `accepted` | `not_in_process` | `disqualified`
+- `raw_text text` (for debugging / re-parse), `permalink text`
+- unique (user_id, channel_id, message_ts)
 
-Lovable Cloud's managed "Continue with Google" handles authentication only — it does not request Calendar scopes and does not return a refresh token we can store for offline calendar writes. To push events to a user's calendar later (without them being signed into Google in the browser at that exact moment), we need our own OAuth consent with `calendar.events` scope and `access_type=offline`. That's exactly what `google-calendar-connect` already does.
+All three tables: RLS `auth.uid() = user_id` (select/insert/update/delete).
 
-So we can't literally combine them into one Google consent screen via the managed provider, **but we can make it feel like one step** by auto-triggering the Calendar consent immediately after first sign-in. The user clicks "Continue with Google" → approves sign-in → is bounced straight into the Calendar consent → lands on the dashboard fully connected. From their perspective: one Google flow.
+## Channel & message parsing rules
 
-### Changes
+**Channel discovery**: call `users.conversations` with `types=public_channel,private_channel,mpim` and `exclude_archived=true`, paginated. Filter to channels where `is_ext_shared = true` OR `is_shared = true` OR `is_org_shared = true` (these are the external client channels). Also include channels whose name matches `candidatelabs-*` as a fallback heuristic. The user can disable any channel from a settings drawer.
 
-**`src/pages/Auth.tsx`**
-- When the user clicks "Continue with Google", set a `pendingCalendarConnect=1` flag in `sessionStorage` *before* redirecting to Google.
-- Add a small "Also sync interviews to Google Calendar" checkbox (default checked) under the Google button so users who don't want Calendar can opt out.
+**Client name inference** (from channel name):
+- `candidatelabs-serval-engineers` -> `Serval`
+- `candidatelabs-netic-engineers` -> `Netic`
+- `candidatelabs-coderabbit-engineers` -> `CodeRabbit`
+- General regex: strip `candidatelabs-` prefix and `-engineers?$` / `-eng$` suffix, then title-case. Editable per-channel mapping handles edge cases.
 
-**New: `src/components/PostSignInCalendarPrompt.tsx`** (mounted in `src/pages/Index.tsx`)
-- On mount, if user is authenticated AND `sessionStorage.pendingCalendarConnect === "1"` AND no row exists in `google_calendar_tokens` for this user:
-  - Clear the flag.
-  - Immediately call `google-calendar-connect` and redirect to Google's consent screen — same code path `GoogleCalendarSync` uses today, just auto-fired.
-- After return from `/google-calendar/callback`, the existing handler stores the token and lands the user on `/`. Show a one-time success toast: "Google Calendar connected as <email>".
-- If they email/password sign up instead, this prompt never fires — the manual "Connect Google Calendar" button in the toolbar still works for them.
+**"Authored by me" filter**: after fetching `conversations.history`, keep messages where `user === slack_tokens.slack_user_id` and `thread_ts` is absent or equals `ts` (parent messages only).
 
-**`src/components/GoogleCalendarSync.tsx`**
-- No behavioral change required. It will simply detect the token already exists and render the "Sync filtered to Calendar" button on first dashboard load.
+**Candidate extraction from each message**:
+- LinkedIn URL: regex `https?://(www\.)?linkedin\.com/in/[A-Za-z0-9\-_%]+/?` against the raw `text` AND any `<https://...|label>` link spans in `blocks`/`elements`. First match wins.
+- Candidate name: prefer the link label text in the message blocks (covers "hyperlinked to candidate's name"). Fallback: characters before the first ` - ` / `—` / `(` after the link. If we can't find a name, still store the row with `candidate_name = ""` so nothing is silently dropped (per the project's completeness rule) and flag it visibly in the UI as "Needs review".
 
-### UX result
+**Status from reactions** (Slack `reactions` array on the parent message; we look at reaction `name`, ignoring who reacted):
+- `white_check_mark` present, `no_entry` absent -> `accepted`
+- `no_entry` present, `white_check_mark` absent -> `not_in_process`
+- both present -> `disqualified`
+- neither -> `submitted`
 
-| Path | Before | After |
-|---|---|---|
-| Continue with Google | 1. Sign in. 2. Later, find the Calendar button. 3. Click connect. 4. Approve again. | 1. Sign in. 2. Approve Calendar. 3. Done — sync button is live. |
-| Email/password | Same as before — manual connect button. | Same as before. |
+We re-read reactions on every sync so status updates over time.
 
----
+## Edge functions
 
-## Technical notes
+All three deploy as Lovable-managed functions (`verify_jwt = false`, validate user JWT in code, same as the Google Calendar functions).
 
-- No DB migrations needed.
-- No new edge functions; reusing `google-calendar-connect` + `google-calendar-callback`.
-- The `sessionStorage` flag is the cleanest carrier through the OAuth round-trip because Supabase's Google OAuth redirect strips custom query params.
-- The Ashby walkthrough screenshots are static assets — small PNG/SVG, no runtime cost.
-- Privacy memory respected: the Ashby token is still stored only in `localStorage` and only sent to the extraction service the user explicitly invokes. The new console snippet runs in *their* Ashby tab and only copies to *their* clipboard.
+1. **`slack-connect`**: builds the Slack OAuth authorize URL with the user-token scopes above and `state = user.id`. Returns `{ url }` for the frontend to redirect to.
 
----
+2. **`slack-callback`**: exchanges `code` for tokens via `slack.com/api/oauth.v2.access`, calls `auth.test` to grab the user's `slack_user_id`/team, upserts into `slack_tokens`, redirects to `/?slack=connected`.
 
-## Out of scope
+3. **`slack-sync`**: 
+   - Loads the caller's `slack_tokens` row (refresh if expired and refresh token exists).
+   - Lists channels (paginated), upserts into `slack_channel_mappings` (preserving existing `client_name` overrides and `enabled` flag).
+   - For each enabled channel: pulls `conversations.history` for the last N days (configurable, default 90), filters to user's parent messages, fetches reactions if not already inline, parses, upserts into `slack_submissions`.
+   - Returns `{ channels_scanned, messages_seen, submissions_upserted, missing_name_count }`.
+   - Emits a `pipeline_save_reports`-style row so the existing reconciliation pattern catches drops.
 
-- Browser extension for Ashby cookie (mentioned above).
-- Auto-refreshing Ashby tokens (impossible without an Ashby API key).
-- Changing the Calendar sync behavior itself — confirmed "good enough" earlier.
+Pagination uses `next_cursor`. We chunk Supabase upserts at 500 rows. Same defensive patterns as `usePipelineSession`.
+
+## Frontend changes
+
+**New: `SlackConnectButton.tsx`** (next to `AshbyFetchButton` in `Index.tsx` header)
+- "Connect Slack" when no token, "Sync from Slack" once connected.
+- First-time dialog includes the Slack app manifest JSON + redirect URI + a field to paste `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` (we trigger `add_secret` for these once).
+- Shows last sync timestamp and missing-name count if any.
+
+**New: `/slack/callback` route** -> small page that calls the callback edge fn with `code` + `state`, then routes to `/`.
+
+**New: `SlackChannelSettings.tsx`** (gear icon next to the Slack button)
+- Lists discovered channels with toggle (enabled), editable client-name override, last-seen submissions count.
+
+**Merging into the table** (`Index.tsx` + `usePipelineSession.ts`):
+- Add a second loader `useSlackSubmissions()` returning `SlackSubmission[]`.
+- Build merged list:
+  - Key = `normalize(client_name) + "::" + normalize(candidate_name)`.
+  - If both Ashby + Slack rows match -> use the Ashby row, attach `slack_meta` (status + submitted_at + permalink).
+  - If only Slack -> synthesize a `Candidate` with `source = "slack"`, `pipeline_stage` derived from Slack status (`accepted` -> "In Process", `not_in_process` -> "Not in process", `disqualified` -> "Disqualified", `submitted` -> "Submitted"), `credited_to = current user`, `total_stages = 1`, `current_stage_index = 0`/`1`.
+- Filters keep working unchanged (company, stage, status, submitter).
+
+**Table changes** (`CandidateTable.tsx`):
+- New small "Source" pill column showing `Ashby` / `Slack` / `Both`.
+- For `Both` rows, expanded row shows the Slack permalink + reaction status + submitted date.
+- Slack-only rows show LinkedIn link in the expanded section (since there's no interview history).
+
+**Stats** (`DashboardStats.tsx`): include Slack-only rows in totals so the "complete pipeline" headline is honest. Add a line "X submissions tracked from Slack".
+
+## Privacy & scope (per project's core rule)
+
+- Slack scopes are user-token only — we never see channels the user isn't already in.
+- We only persist messages the signed-in user authored. Other people's submissions in the same channel are ignored and never stored.
+- The connect dialog explicitly lists what we read and store before the OAuth click (no covert collection).
+- A "Disconnect Slack" button deletes the token row and (on confirm) all `slack_submissions` for that user.
+
+## Open follow-ups (out of scope for this change)
+
+- Real-time updates via Slack Events API (would need a custom app + webhook); for now sync is on-demand + a "last sync" stamp.
+- Auto-detecting candidate email/role from the message thread replies (often where resumes live).
+- Cross-recruiter view (today: only "messages I posted").
+
+## File map
+
+New:
+- `supabase/functions/slack-connect/index.ts`
+- `supabase/functions/slack-callback/index.ts`
+- `supabase/functions/slack-sync/index.ts`
+- `src/components/SlackConnectButton.tsx`
+- `src/components/SlackChannelSettings.tsx`
+- `src/pages/SlackCallback.tsx`
+- `src/hooks/useSlackSubmissions.ts`
+- `src/lib/slackParse.ts` (LinkedIn regex, name extraction, client-name inference, reaction -> status)
+
+Migration: `slack_tokens`, `slack_channel_mappings`, `slack_submissions` with RLS.
+
+Modified:
+- `src/pages/Index.tsx` (button, merging, route)
+- `src/App.tsx` (route)
+- `src/components/CandidateTable.tsx` (Source column, Slack expansion)
+- `src/components/DashboardStats.tsx`
+- `src/data/candidates.ts` (add optional `source`, `slack_meta` fields)
+
+## Required from you before I build
+
+1. Approve creating a custom Slack app (we'll give you a one-paste manifest + walk through where to find the client ID/secret).
+2. After approval, you'll add `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` when prompted.
