@@ -54,6 +54,42 @@ export function SlackThreadPanel({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // @mention autocomplete state
+  const [users, setUsers] = useState<SlackUser[]>([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionStart, setMentionStart] = useState<number | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  const filteredUsers = useMemo(() => {
+    if (!mentionOpen) return [];
+    const q = mentionQuery.toLowerCase();
+    const matches = users.filter(
+      (u) =>
+        u.name.toLowerCase().includes(q) ||
+        u.real_name.toLowerCase().includes(q),
+    );
+    return matches.slice(0, 8);
+  }, [mentionOpen, mentionQuery, users]);
+
+  // Load workspace users (once per open) for @mentions
+  useEffect(() => {
+    if (!open || users.length > 0) return;
+    (async () => {
+      try {
+        const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
+          body: { action: "users" },
+        });
+        if (invErr) throw invErr;
+        if (data?.error) throw new Error(data.error);
+        setUsers(data.users ?? []);
+      } catch {
+        // Non-fatal — autocomplete just won't appear.
+      }
+    })();
+  }, [open, users.length]);
 
   const load = async () => {
     if (!channelId || !messageTs) return;
