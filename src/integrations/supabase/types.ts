@@ -40,6 +40,7 @@ export type Database = {
           pipeline_stage: string
           session_id: string
           total_stages: number
+          user_id: string
         }
         Insert: {
           ashby_candidate_id?: string | null
@@ -66,6 +67,7 @@ export type Database = {
           pipeline_stage: string
           session_id: string
           total_stages?: number
+          user_id: string
         }
         Update: {
           ashby_candidate_id?: string | null
@@ -92,6 +94,7 @@ export type Database = {
           pipeline_stage?: string
           session_id?: string
           total_stages?: number
+          user_id?: string
         }
         Relationships: [
           {
@@ -103,6 +106,39 @@ export type Database = {
           },
         ]
       }
+      google_calendar_tokens: {
+        Row: {
+          access_token: string | null
+          created_at: string
+          expires_at: string | null
+          google_email: string | null
+          refresh_token: string
+          scope: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token?: string | null
+          created_at?: string
+          expires_at?: string | null
+          google_email?: string | null
+          refresh_token: string
+          scope?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string | null
+          created_at?: string
+          expires_at?: string | null
+          google_email?: string | null
+          refresh_token?: string
+          scope?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       interview_events: {
         Row: {
           ashby_event_id: string | null
@@ -113,6 +149,7 @@ export type Database = {
           interview_title: string
           interviewers: Json
           start_time: string
+          user_id: string
         }
         Insert: {
           ashby_event_id?: string | null
@@ -123,6 +160,7 @@ export type Database = {
           interview_title: string
           interviewers?: Json
           start_time: string
+          user_id: string
         }
         Update: {
           ashby_event_id?: string | null
@@ -133,6 +171,7 @@ export type Database = {
           interview_title?: string
           interviewers?: Json
           start_time?: string
+          user_id?: string
         }
         Relationships: [
           {
@@ -149,16 +188,19 @@ export type Database = {
           created_at: string
           id: string
           updated_at: string
+          user_id: string
         }
         Insert: {
           created_at?: string
           id?: string
           updated_at?: string
+          user_id: string
         }
         Update: {
           created_at?: string
           id?: string
           updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
