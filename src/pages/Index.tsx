@@ -330,9 +330,15 @@ const Index = () => {
             </div>
             <h2 className="text-xl font-semibold text-foreground mb-2">No candidates yet</h2>
             <p className="text-muted-foreground mb-6 max-w-md">
-              Connect Ashby or Slack, or upload a CSV, to start populating your pipeline.
+              Finish connecting Ashby and Slack to start populating your pipeline — or upload a CSV.
             </p>
-            <CsvUpload onUpload={handleCsvUpload} />
+            <div className="flex items-center gap-3">
+              <Button onClick={() => navigate("/onboarding")} className="gap-2">
+                <Sparkles className="h-4 w-4" />
+                Finish setup
+              </Button>
+              <CsvUpload onUpload={handleCsvUpload} />
+            </div>
           </div>
         ) : (
           <>
