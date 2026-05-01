@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -12,6 +12,13 @@ import { Loader2, Send, RefreshCw, MessagesSquare } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { format } from "date-fns";
+
+interface SlackUser {
+  id: string;
+  name: string;
+  real_name: string;
+  image: string | null;
+}
 
 interface SlackMessage {
   ts: string;
