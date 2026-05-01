@@ -1,0 +1,2 @@
+CREATE POLICY "users insert own google tokens" ON public.google_calendar_tokens FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "users update own google tokens" ON public.google_calendar_tokens FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
