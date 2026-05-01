@@ -80,21 +80,43 @@ export function EmailComposer({
     }
   }, [open, draft.subject, draft.body]);
 
+  const parseFnError = async (
+    error: unknown,
+    data: { error?: string; code?: string } | null,
+  ): Promise<{ message: string; code?: string }> => {
+    // Try response body first (works for 2xx responses)
+    if (data?.error) return { message: data.error, code: data.code };
+    // Then try the error.context.body for non-2xx responses
+    const ctx = (error as { context?: Response })?.context;
+    if (ctx && typeof ctx.text === "function") {
+      try {
+        const txt = await ctx.text();
+        const parsed = JSON.parse(txt) as { error?: string; code?: string };
+        if (parsed?.error) return { message: parsed.error, code: parsed.code };
+      } catch {
+        /* ignore */
+      }
+    }
+    return { message: error instanceof Error ? error.message : "Request failed" };
+  };
+
+  const friendlyMessage = (msg: string, code?: string): string => {
+    if (code === "google_not_connected") return "Connect Google Calendar first to enable Gmail.";
+    if (code === "gmail_scope_missing")
+      return "Reconnect Google to grant Gmail access (Disconnect → Connect Google Calendar).";
+    return msg;
+  };
+
   const handleLookup = async () => {
     setLookingUp(true);
     try {
       const { data, error } = await supabase.functions.invoke("gmail-helper", {
         body: { action: "lookup", name: candidateName },
       });
-      if (error) throw error;
-      if (data?.error) {
-        if (data.code === "google_not_connected") {
-          throw new Error("Connect Google Calendar first to enable Gmail lookup.");
-        }
-        if (data.code === "gmail_scope_missing") {
-          throw new Error("Reconnect Google to grant Gmail access.");
-        }
-        throw new Error(data.error);
+      if (error || data?.error) {
+        const { message, code } = await parseFnError(error, data ?? null);
+        toast.error(friendlyMessage(message, code));
+        return;
       }
       const results = (data.results ?? []) as { email: string; count: number }[];
       setSuggestions(results);
@@ -111,6 +133,7 @@ export function EmailComposer({
     }
   };
 
+
   const handleSend = async () => {
     if (!to.trim()) {
       toast.error("Recipient email required");
@@ -121,15 +144,10 @@ export function EmailComposer({
       const { data, error } = await supabase.functions.invoke("gmail-helper", {
         body: { action: "send", to: to.trim(), subject, body },
       });
-      if (error) throw error;
-      if (data?.error) {
-        if (data.code === "gmail_scope_missing") {
-          throw new Error("Reconnect Google to grant 'Send mail' permission.");
-        }
-        if (data.code === "google_not_connected") {
-          throw new Error("Connect Google Calendar to enable email sending.");
-        }
-        throw new Error(data.error);
+      if (error || data?.error) {
+        const { message, code } = await parseFnError(error, data ?? null);
+        toast.error(friendlyMessage(message, code));
+        return;
       }
       toast.success(`Email sent from ${data.from ?? "your Gmail"}`);
       onOpenChange(false);
