@@ -22,6 +22,18 @@ export function SlackConnectButton({ onSynced }: SlackConnectButtonProps) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === "slack-connected") {
+        toast.success("Slack connected");
+        void reload();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [reload]);
+
   const handleConnect = async () => {
     setBusy(true);
     try {
