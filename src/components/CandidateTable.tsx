@@ -136,7 +136,7 @@ export function CandidateTable({
   };
 
   return (
-    <div className="bg-card rounded-lg border border-border shadow-card overflow-hidden">
+    <div className="bg-card rounded-lg border border-border shadow-card overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent border-border">
