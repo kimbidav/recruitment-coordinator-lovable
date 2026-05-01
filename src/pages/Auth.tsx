@@ -7,8 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Loader2, Users } from "lucide-react";
+
+const PENDING_CALENDAR_KEY = "pendingCalendarConnect";
 
 const Auth = () => {
   const { user, loading } = useAuth();
@@ -17,6 +20,7 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [connectCalendar, setConnectCalendar] = useState(true);
 
   useEffect(() => {
     document.title = mode === "signup" ? "Sign up — Candidate Pipeline" : "Sign in — Candidate Pipeline";
@@ -58,6 +62,12 @@ const Auth = () => {
   const handleGoogle = async () => {
     setBusy(true);
     try {
+      // Carry the user's preference through the OAuth round-trip.
+      if (connectCalendar) {
+        sessionStorage.setItem(PENDING_CALENDAR_KEY, "1");
+      } else {
+        sessionStorage.removeItem(PENDING_CALENDAR_KEY);
+      }
       const result = await lovable.auth.signInWithOAuth("google", {
         redirect_uri: window.location.origin,
       });
@@ -87,9 +97,21 @@ const Auth = () => {
           </p>
         </div>
 
-        <Button variant="outline" className="w-full" onClick={handleGoogle} disabled={busy}>
-          Continue with Google
-        </Button>
+        <div className="space-y-3">
+          <Button variant="outline" className="w-full" onClick={handleGoogle} disabled={busy}>
+            Continue with Google
+          </Button>
+          <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+            <Checkbox
+              checked={connectCalendar}
+              onCheckedChange={(v) => setConnectCalendar(v === true)}
+              className="mt-0.5"
+            />
+            <span>
+              Also connect Google Calendar so I can sync upcoming interviews. You'll be asked once after signing in.
+            </span>
+          </label>
+        </div>
 
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
