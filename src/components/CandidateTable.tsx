@@ -279,8 +279,12 @@ export function CandidateTable({
                   <TableCell>
                     <StatusBadge status={candidate.decision_status} />
                   </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
+                  <TableCell
+                    onClick={(e) => e.stopPropagation()}
+                    className="sticky right-0 bg-card shadow-[-4px_0_8px_-4px_hsl(var(--border))]"
+                  >
                     <div className="flex items-center gap-2 text-sm">
+
                       {candidate.slack_meta && onOpenSlackThread && (
                         <button
                           type="button"
