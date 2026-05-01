@@ -357,6 +357,51 @@ export function usePipelineSession() {
     setCandidates([]);
   }, []);
 
+  /**
+   * Mark a single candidate as closed locally. Updates the row in Supabase by
+   * (session_id, ashby_candidate_id, ashby_job_id) and reflects it in local state.
+   * Slack-only candidates (no Ashby IDs) just update local state — they have no DB row.
+   */
+  const markCandidateClosed = useCallback(
+    async (candidateId: string, jobId: string, closed: boolean) => {
+      if (!sessionId || !user) return;
+
+      // Optimistic local update
+      setCandidates((prev) =>
+        prev.map((c) =>
+          c.candidate_id === candidateId && c.job_id === jobId
+            ? {
+                ...c,
+                closed_locally: closed,
+                closed_at: closed ? new Date().toISOString() : undefined,
+              }
+            : c,
+        ),
+      );
+
+      // Persist if it's an Ashby-backed row (Slack-only IDs use "slack:..." prefix)
+      if (candidateId.startsWith("slack:") || jobId.startsWith("slack:")) return;
+      try {
+        const { error } = await supabase
+          .from("candidates")
+          .update({
+            closed_locally: closed,
+            closed_at: closed ? new Date().toISOString() : null,
+          })
+          .eq("session_id", sessionId)
+          .eq("ashby_candidate_id", candidateId)
+          .eq("ashby_job_id", jobId);
+        if (error) {
+          console.error("Failed to persist close state:", error);
+          toast.error("Couldn't save close state");
+        }
+      } catch (e) {
+        console.error("Failed to persist close state:", e);
+      }
+    },
+    [sessionId, user],
+  );
+
   return {
     candidates,
     sessionId,
@@ -364,5 +409,6 @@ export function usePipelineSession() {
     isLoading,
     saveSession,
     clearSession,
+    markCandidateClosed,
   };
 }
