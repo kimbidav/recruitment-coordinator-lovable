@@ -47,7 +47,59 @@ const Index = () => {
   // - Ashby only -> source="ashby"
   // - Slack only -> synthesize a Candidate row, source="slack"
   const mergedCandidates = useMemo<Candidate[]>(() => {
-    const userLabel = user?.email ?? "Me";
+    // Build a lookup of "name-ish tokens" -> canonical display name from Ashby
+    // credited_to values, so Slack rows (credited under email) collapse onto the
+    // same submitter as Ashby rows for the same person.
+    const tokenize = (s: string) =>
+      s
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+        .split(" ")
+        .filter(Boolean);
+
+    const canonicalByToken = new Map<string, string>();
+    for (const c of candidates) {
+      const name = c.credited_to?.trim();
+      if (!name || name.includes("@")) continue;
+      const tokens = tokenize(name);
+      // Map full normalized name + each token (first/last) to the display name.
+      canonicalByToken.set(tokens.join(" "), name);
+      for (const t of tokens) {
+        if (t.length >= 2 && !canonicalByToken.has(t)) {
+          canonicalByToken.set(t, name);
+        }
+      }
+    }
+
+    const canonicalizeSubmitter = (raw: string): string => {
+      if (!raw) return raw;
+      const trimmed = raw.trim();
+      // If it's an email, derive tokens from local-part (e.g. "dkimball" or "david.kimball").
+      if (trimmed.includes("@")) {
+        const local = trimmed.split("@")[0];
+        const parts = local.split(/[._\-+]/).filter(Boolean);
+        // Try full local-part joined, then individual parts.
+        const candidates = [parts.join(" "), ...parts, local];
+        for (const cand of candidates) {
+          const hit = canonicalByToken.get(cand.toLowerCase());
+          if (hit) return hit;
+        }
+        // Also try matching by first-letter + remainder (e.g. "dkimball" -> "kimball").
+        if (parts.length === 1 && local.length > 2) {
+          const tail = local.slice(1);
+          const hit = canonicalByToken.get(tail);
+          if (hit) return hit;
+        }
+        return trimmed;
+      }
+      const hit = canonicalByToken.get(tokenize(trimmed).join(" "));
+      return hit ?? trimmed;
+    };
+
+    const userLabel = canonicalizeSubmitter(user?.email ?? "Me");
     const ashbyByKey = new Map<string, Candidate>();
     for (const c of candidates) {
       ashbyByKey.set(candidateMatchKey(c.company_name, c.candidate_name), c);
