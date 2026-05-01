@@ -58,9 +58,15 @@ Deno.serve(async (req) => {
     const action: string = body.action;
     const channelId: string = body.channel_id;
     const messageTs: string = body.message_ts;
-    if (!action || !channelId || !messageTs) {
+    if (!action) {
       return new Response(
-        JSON.stringify({ error: "action, channel_id, message_ts required" }),
+        JSON.stringify({ error: "action required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    if (action !== "users" && (!channelId || !messageTs)) {
+      return new Response(
+        JSON.stringify({ error: "channel_id, message_ts required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -82,6 +88,45 @@ Deno.serve(async (req) => {
       });
     }
     const token = tok.access_token as string;
+
+    if (action === "users") {
+      // List workspace users for @mention autocomplete.
+      const members: any[] = [];
+      let cursor = "";
+      try {
+        for (let i = 0; i < 10; i++) {
+          const params = new URLSearchParams({ limit: "200" });
+          if (cursor) params.set("cursor", cursor);
+          const r = await fetch(
+            `https://slack.com/api/users.list?${params.toString()}`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          const j = await r.json();
+          if (!j.ok) throw new Error(`users.list: ${j.error}`);
+          for (const m of j.members ?? []) {
+            if (m.deleted || m.is_bot || m.id === "USLACKBOT") continue;
+            const p = m.profile ?? {};
+            members.push({
+              id: m.id,
+              name: p.display_name || p.real_name || m.name || m.id,
+              real_name: p.real_name || m.name || "",
+              image: p.image_48 ?? p.image_72 ?? null,
+            });
+          }
+          cursor = j.response_metadata?.next_cursor ?? "";
+          if (!cursor) break;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return new Response(JSON.stringify({ error: msg }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, users: members }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     if (action === "fetch") {
       const params = new URLSearchParams({

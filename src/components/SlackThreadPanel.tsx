@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -12,6 +12,13 @@ import { Loader2, Send, RefreshCw, MessagesSquare } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { format } from "date-fns";
+
+interface SlackUser {
+  id: string;
+  name: string;
+  real_name: string;
+  image: string | null;
+}
 
 interface SlackMessage {
   ts: string;
@@ -47,6 +54,42 @@ export function SlackThreadPanel({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // @mention autocomplete state
+  const [users, setUsers] = useState<SlackUser[]>([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionStart, setMentionStart] = useState<number | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  const filteredUsers = useMemo(() => {
+    if (!mentionOpen) return [];
+    const q = mentionQuery.toLowerCase();
+    const matches = users.filter(
+      (u) =>
+        u.name.toLowerCase().includes(q) ||
+        u.real_name.toLowerCase().includes(q),
+    );
+    return matches.slice(0, 8);
+  }, [mentionOpen, mentionQuery, users]);
+
+  // Load workspace users (once per open) for @mentions
+  useEffect(() => {
+    if (!open || users.length > 0) return;
+    (async () => {
+      try {
+        const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
+          body: { action: "users" },
+        });
+        if (invErr) throw invErr;
+        if (data?.error) throw new Error(data.error);
+        setUsers(data.users ?? []);
+      } catch {
+        // Non-fatal — autocomplete just won't appear.
+      }
+    })();
+  }, [open, users.length]);
 
   const load = async () => {
     if (!channelId || !messageTs) return;
@@ -80,17 +123,37 @@ export function SlackThreadPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, channelId, messageTs]);
 
+  // Convert "@displayname" tokens in the draft into Slack mention syntax "<@U123>".
+  // Longest matching name wins to handle names that overlap (e.g. "shel" vs "shelby").
+  const encodeMentions = (raw: string): string => {
+    if (users.length === 0) return raw;
+    const sorted = [...users].sort((a, b) => b.name.length - a.name.length);
+    let out = raw;
+    for (const u of sorted) {
+      const escaped = u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`@${escaped}\\b`, "gi");
+      out = out.replace(re, `<@${u.id}>`);
+    }
+    return out;
+  };
+
   const handleSend = async () => {
     const text = reply.trim();
     if (!text || !channelId || !messageTs) return;
     setSending(true);
     try {
       const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
-        body: { action: "reply", channel_id: channelId, message_ts: messageTs, text },
+        body: {
+          action: "reply",
+          channel_id: channelId,
+          message_ts: messageTs,
+          text: encodeMentions(text),
+        },
       });
       if (invErr) throw invErr;
       if (data?.error) throw new Error(data.error);
       setReply("");
+      setMentionOpen(false);
       await load();
       toast.success("Reply sent to Slack");
     } catch (e) {
@@ -99,6 +162,41 @@ export function SlackThreadPanel({
     } finally {
       setSending(false);
     }
+  };
+
+  // Detect "@query" before the caret as the user types.
+  const handleReplyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setReply(value);
+    const caret = e.target.selectionStart ?? value.length;
+    const upToCaret = value.slice(0, caret);
+    const match = upToCaret.match(/(?:^|\s)@([\w.\-]*)$/);
+    if (match) {
+      setMentionOpen(true);
+      setMentionQuery(match[1] ?? "");
+      setMentionStart(caret - (match[1]?.length ?? 0) - 1); // position of '@'
+      setMentionIndex(0);
+    } else {
+      setMentionOpen(false);
+    }
+  };
+
+  const insertMention = (u: SlackUser) => {
+    if (mentionStart === null) return;
+    const before = reply.slice(0, mentionStart);
+    const caret = textareaRef.current?.selectionStart ?? reply.length;
+    const after = reply.slice(caret);
+    const inserted = `@${u.name} `;
+    const next = before + inserted + after;
+    setReply(next);
+    setMentionOpen(false);
+    setMentionQuery("");
+    setMentionStart(null);
+    requestAnimationFrame(() => {
+      const pos = (before + inserted).length;
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(pos, pos);
+    });
   };
 
   const formatTs = (ts: string) => {
@@ -166,7 +264,12 @@ export function SlackThreadPanel({
                     )}
                   </div>
                   <div className="text-sm text-foreground whitespace-pre-wrap break-words mt-0.5">
-                    {m.text || <span className="text-muted-foreground italic">(no text)</span>}
+                    {m.text
+                      ? m.text.replace(/<@([A-Z0-9]+)>/g, (_, id) => {
+                          const u = users.find((x) => x.id === id);
+                          return `@${u?.name ?? id}`;
+                        })
+                      : <span className="text-muted-foreground italic">(no text)</span>}
                   </div>
                   {m.reactions.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
@@ -186,14 +289,70 @@ export function SlackThreadPanel({
           )}
         </div>
 
-        <div className="border-t border-border p-4 space-y-2">
+        <div className="border-t border-border p-4 space-y-2 relative">
+          {mentionOpen && filteredUsers.length > 0 && (
+            <div className="absolute bottom-full left-4 right-4 mb-2 z-50 max-h-60 overflow-y-auto rounded-md border border-border bg-popover shadow-md">
+              {filteredUsers.map((u, i) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    insertMention(u);
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent ${
+                    i === mentionIndex ? "bg-accent" : ""
+                  }`}
+                >
+                  {u.image ? (
+                    <img src={u.image} alt={u.name} className="h-6 w-6 rounded" />
+                  ) : (
+                    <div className="h-6 w-6 rounded bg-muted flex items-center justify-center text-[10px] font-medium">
+                      {u.name.slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="font-medium text-foreground">@{u.name}</span>
+                  {u.real_name && u.real_name !== u.name && (
+                    <span className="text-muted-foreground text-xs truncate">
+                      {u.real_name}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
           <Textarea
+            ref={textareaRef}
             value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            placeholder="Reply in this Slack thread..."
+            onChange={handleReplyChange}
+            placeholder="Reply in this Slack thread... (use @ to mention)"
             rows={3}
             className="resize-none"
             onKeyDown={(e) => {
+              if (mentionOpen && filteredUsers.length > 0) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionIndex((i) => (i + 1) % filteredUsers.length);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionIndex(
+                    (i) => (i - 1 + filteredUsers.length) % filteredUsers.length,
+                  );
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  insertMention(filteredUsers[mentionIndex]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMentionOpen(false);
+                  return;
+                }
+              }
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 void handleSend();
@@ -201,7 +360,9 @@ export function SlackThreadPanel({
             }}
           />
           <div className="flex justify-between items-center">
-            <span className="text-xs text-muted-foreground">⌘+Enter to send</span>
+            <span className="text-xs text-muted-foreground">
+              @ to mention · ⌘+Enter to send
+            </span>
             <Button onClick={() => void handleSend()} disabled={sending || !reply.trim()} size="sm">
               {sending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
