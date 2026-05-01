@@ -171,15 +171,6 @@ export function CandidateTable({
             <TableHead>Source</TableHead>
             <TableHead
               className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("job_title")}
-            >
-              <div className="flex items-center gap-1.5">
-                Role
-                <SortIcon field="job_title" />
-              </div>
-            </TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
               onClick={() => handleSort("pipeline_stage")}
             >
               <div className="flex items-center gap-1.5">
