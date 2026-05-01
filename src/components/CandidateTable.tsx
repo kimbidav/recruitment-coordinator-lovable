@@ -325,7 +325,7 @@ export function CandidateTable({
                 </TableRow>
                 {isExpanded && (
                   <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
-                    <TableCell colSpan={12} className="p-4">
+                    <TableCell colSpan={9} className="p-4">
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-sm font-semibold text-foreground mb-2">
