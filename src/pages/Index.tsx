@@ -393,10 +393,56 @@ const Index = () => {
                 setSubmitterFilter([]);
                 setSourceFilter([]);
               }}
+              onOpenSlackThread={(c) => setSlackThreadFor(c)}
+              onOpenEmail={(c) => setEmailFor(c)}
+              onCloseCandidate={async (c) => {
+                // Always mark closed locally so next Ashby fetch respects it.
+                await markCandidateClosed(c.candidate_id, c.job_id, true);
+                // If Slack thread is known, also add a ⛔ reaction in Slack.
+                if (c.slack_meta?.channel_id && c.slack_meta?.message_ts) {
+                  try {
+                    const { data, error } = await supabase.functions.invoke("slack-thread", {
+                      body: {
+                        action: "close",
+                        channel_id: c.slack_meta.channel_id,
+                        message_ts: c.slack_meta.message_ts,
+                      },
+                    });
+                    if (error) throw error;
+                    if (data?.error) throw new Error(data.error);
+                    toast.success(`${c.candidate_name} closed · ⛔ added in Slack`);
+                  } catch (e) {
+                    const msg = e instanceof Error ? e.message : "Slack reaction failed";
+                    toast.error(`Closed locally, but Slack reaction failed: ${msg}`);
+                  }
+                } else {
+                  toast.success(`${c.candidate_name} closed`);
+                }
+              }}
             />
           </>
         )}
       </main>
+
+      <SlackThreadPanel
+        open={!!slackThreadFor}
+        onOpenChange={(o) => !o && setSlackThreadFor(null)}
+        channelId={slackThreadFor?.slack_meta?.channel_id ?? null}
+        messageTs={slackThreadFor?.slack_meta?.message_ts ?? null}
+        candidateName={slackThreadFor?.candidate_name ?? ""}
+        companyName={slackThreadFor?.company_name ?? ""}
+      />
+
+      <EmailComposer
+        open={!!emailFor}
+        onOpenChange={(o) => !o && setEmailFor(null)}
+        candidateName={emailFor?.candidate_name ?? ""}
+        opportunities={
+          emailFor
+            ? mergedCandidates.filter((c) => c.candidate_name === emailFor.candidate_name)
+            : []
+        }
+      />
     </div>
   );
 };
