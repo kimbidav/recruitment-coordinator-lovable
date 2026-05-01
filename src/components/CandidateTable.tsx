@@ -41,9 +41,10 @@ type SortDirection = "asc" | "desc";
 
 interface CandidateTableProps {
   candidates: Candidate[];
+  onFilterByCandidate?: (name: string) => void;
 }
 
-export function CandidateTable({ candidates }: CandidateTableProps) {
+export function CandidateTable({ candidates, onFilterByCandidate }: CandidateTableProps) {
   const [sortField, setSortField] = useState<SortField>("last_activity_at");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
