@@ -176,6 +176,7 @@ const Index = () => {
   // Collapse granular pipeline stages into two buckets the user cares about:
   // "In Process" (still active) vs "Closed" (rejected / withdrawn / not in process / hired).
   const stageBucket = (c: Candidate): "In Process" | "Closed" => {
+    if (c.closed_locally) return "Closed";
     const decision = (c.decision_status || "").toLowerCase();
     const stage = (c.pipeline_stage || "").toLowerCase();
     const closedDecision = ["rejected", "withdrawn", "archived", "hired", "closed"].some((k) =>
