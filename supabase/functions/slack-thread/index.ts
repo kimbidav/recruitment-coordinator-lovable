@@ -58,9 +58,15 @@ Deno.serve(async (req) => {
     const action: string = body.action;
     const channelId: string = body.channel_id;
     const messageTs: string = body.message_ts;
-    if (!action || !channelId || !messageTs) {
+    if (!action) {
       return new Response(
-        JSON.stringify({ error: "action, channel_id, message_ts required" }),
+        JSON.stringify({ error: "action required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    if (action !== "users" && (!channelId || !messageTs)) {
+      return new Response(
+        JSON.stringify({ error: "channel_id, message_ts required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
