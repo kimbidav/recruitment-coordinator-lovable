@@ -281,35 +281,6 @@ export function CandidateTable({
                   <TableCell>
                     <StatusBadge status={candidate.decision_status} />
                   </TableCell>
-                  <TableCell>
-                    <span
-                      className={cn(
-                        "font-medium",
-                        candidate.days_in_stage > 30
-                          ? "text-status-warning"
-                          : "text-foreground"
-                      )}
-                    >
-                      {candidate.days_in_stage}d
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDate(candidate.last_activity_at)}
-                  </TableCell>
-                  <TableCell>
-                    {candidate.feedback_count > 0 ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-medium">{candidate.feedback_count}</span>
-                        {candidate.latest_recommendation && (
-                          <span className="text-xs text-muted-foreground">
-                            (avg: {candidate.latest_recommendation})
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-2 text-sm">
                       {candidate.slack_meta && onOpenSlackThread && (
