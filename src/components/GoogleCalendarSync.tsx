@@ -1,53 +1,49 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Candidate } from "@/data/candidates";
-import { ASHBY_AUTOMATION_API_BASE, readErrorPayload } from "@/lib/ashbyAutomation";
-
-const TOKENS_KEY = "google_calendar_tokens";
+import { supabase } from "@/integrations/supabase/client";
 
 interface GoogleCalendarSyncProps {
   candidates: Candidate[];
 }
 
 export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
-  const [tokens, setTokens] = useState<Record<string, unknown> | null>(() => {
-    const stored = localStorage.getItem(TOKENS_KEY);
-    return stored ? JSON.parse(stored) : null;
-  });
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tokenParam = params.get("google_tokens");
-    if (tokenParam) {
-      try {
-        const parsed = JSON.parse(decodeURIComponent(tokenParam));
-        localStorage.setItem(TOKENS_KEY, JSON.stringify(parsed));
-        setTokens(parsed);
-        toast.success("Google Calendar connected!");
-      } catch {
-        toast.error("Failed to parse Google tokens");
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("google_calendar_tokens")
+        .select("google_email")
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) {
+        setConnected(false);
+        return;
       }
-      params.delete("google_tokens");
-      const cleanUrl = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
-      window.history.replaceState({}, "", cleanUrl);
-    }
+      setConnected(!!data);
+      setEmail(data?.google_email ?? null);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const handleConnect = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/google/auth`);
-      if (!res.ok) {
-        toast.error(await readErrorPayload(res));
+      const redirectUri = `${window.location.origin}/google-calendar/callback`;
+      const { data, error } = await supabase.functions.invoke("google-calendar-connect", {
+        body: { redirect_uri: redirectUri },
+      });
+      if (error || !data?.url) {
+        toast.error(`Failed to start Google auth: ${error?.message || data?.error || "no url"}`);
         return;
       }
-      const data = await res.json();
       window.location.href = data.url;
-    } catch {
-      toast.error(`Failed to start Google auth via ${ASHBY_AUTOMATION_API_BASE}`);
     } finally {
       setIsLoading(false);
     }
@@ -57,89 +53,71 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
     const now = new Date();
     const currentYear = now.getFullYear();
 
-    // Extract interview type from strings like "• Technical Screen Interview (03/10) - Dar Mehta - No score yet"
     const extractInterviewType = (raw: string): string => {
       const cleaned = raw.replace(/^•\s*/, "").split("\n")[0].trim();
-      // Match pattern before (MM/DD): "Technical Screen Interview (03/10)" → "Technical Screen Interview"
       const match = cleaned.match(/^(.+?)\s*\(\d{2}\/\d{2}\)/);
       let type = match ? match[1].trim() : cleaned.split(" - ")[0].trim();
-      // Strip trailing " Interview" suffix
       type = type.replace(/\s+Interview$/i, "");
       return type;
     };
 
-    // Extract (MM/DD) date from interview string and build a Date at 5pm local
     const extractDateFromInterviews = (interviews: string, fallbackDate?: string): Date | null => {
       const dateMatch = interviews.match(/\((\d{2})\/(\d{2})\)/);
       if (dateMatch) {
-        const month = parseInt(dateMatch[1], 10);
-        const day = parseInt(dateMatch[2], 10);
-        return new Date(currentYear, month - 1, day, 17, 0, 0);
+        return new Date(currentYear, parseInt(dateMatch[1], 10) - 1, parseInt(dateMatch[2], 10), 17, 0, 0);
       }
-      // Fallback to current_stage_date
       if (fallbackDate) {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(fallbackDate)) {
-          return new Date(fallbackDate + "T17:00:00");
-        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(fallbackDate)) return new Date(fallbackDate + "T17:00:00");
         return new Date(fallbackDate);
       }
       return null;
     };
 
-    const withInterviews = candidates.filter((c) => c.current_stage_interviews);
-
-    const events = withInterviews
+    const events = candidates
+      .filter((c) => c.current_stage_interviews)
       .map((c) => {
         const stageDate = extractDateFromInterviews(c.current_stage_interviews!, c.current_stage_date);
         if (!stageDate || isNaN(stageDate.getTime())) return null;
-        const interviewType = extractInterviewType(c.current_stage_interviews!);
+        extractInterviewType(c.current_stage_interviews!);
         return {
           id: c.candidate_id,
           interview_title: `${c.candidate_name} x ${c.company_name} (${c.pipeline_stage})`,
           start_time: stageDate.toISOString(),
           end_time: new Date(stageDate.getTime() + 30 * 60 * 1000).toISOString(),
-          candidate_name: c.candidate_name,
         };
       })
       .filter((e): e is NonNullable<typeof e> => e !== null && new Date(e.start_time) >= now);
 
-    const allEvents = events;
-
-    if (allEvents.length === 0) {
+    if (events.length === 0) {
       toast.info("No upcoming interviews to sync");
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/calendar/add`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: allEvents, google_tokens: tokens }),
+      const { data, error } = await supabase.functions.invoke("google-calendar-sync", {
+        body: { events },
       });
-
-      if (res.status === 401) {
-        localStorage.removeItem(TOKENS_KEY);
-        setTokens(null);
-        toast.error("Google session expired. Please reconnect.");
+      if (error || data?.error) {
+        toast.error(`Sync failed: ${error?.message || data?.error}`);
+        if ((data?.error || "").toLowerCase().includes("not connected")) setConnected(false);
         return;
       }
-
-      if (!res.ok) {
-        toast.error(await readErrorPayload(res));
-        return;
-      }
-
-      const result = await res.json();
-      toast.success(result.message || `Synced ${allEvents.length} events to Google Calendar`);
-    } catch {
-      toast.error("Failed to sync to Google Calendar");
+      toast.success(data?.message || `Synced ${events.length} events`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  if (!tokens) {
+  if (connected === null) {
+    return (
+      <Button variant="outline" size="sm" disabled className="gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+      </Button>
+    );
+  }
+
+  if (!connected) {
     return (
       <Button variant="outline" size="sm" onClick={handleConnect} disabled={isLoading} className="gap-2">
         {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calendar className="h-4 w-4" />}
@@ -149,7 +127,14 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={handleSync} disabled={isLoading} className="gap-2">
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={handleSync}
+      disabled={isLoading}
+      className="gap-2"
+      title={email ? `Connected as ${email}` : "Connected"}
+    >
       {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calendar className="h-4 w-4" />}
       Sync to Calendar
     </Button>
