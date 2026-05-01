@@ -197,33 +197,8 @@ export function CandidateTable({
               </div>
             </TableHead>
             <TableHead>Status</TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("days_in_stage")}
-            >
-              <div className="flex items-center gap-1.5">
-                Days in Stage
-                <SortIcon field="days_in_stage" />
-              </div>
-            </TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("last_activity_at")}
-            >
-              <div className="flex items-center gap-1.5">
-                Last Activity
-                <SortIcon field="last_activity_at" />
-              </div>
-            </TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("feedback_count")}
-            >
-              <div className="flex items-center gap-1.5">
-                Feedback
-                <SortIcon field="feedback_count" />
-              </div>
-            </TableHead>
+
+
             <TableHead>Actions</TableHead>
           </TableRow>
         </TableHeader>
