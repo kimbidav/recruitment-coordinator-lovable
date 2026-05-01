@@ -197,9 +197,7 @@ export function CandidateTable({
               </div>
             </TableHead>
             <TableHead>Status</TableHead>
-
-
-            <TableHead>Actions</TableHead>
+            <TableHead className="sticky right-0 bg-card shadow-[-4px_0_8px_-4px_hsl(var(--border))]">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
