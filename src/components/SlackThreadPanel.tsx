@@ -123,17 +123,37 @@ export function SlackThreadPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, channelId, messageTs]);
 
+  // Convert "@displayname" tokens in the draft into Slack mention syntax "<@U123>".
+  // Longest matching name wins to handle names that overlap (e.g. "shel" vs "shelby").
+  const encodeMentions = (raw: string): string => {
+    if (users.length === 0) return raw;
+    const sorted = [...users].sort((a, b) => b.name.length - a.name.length);
+    let out = raw;
+    for (const u of sorted) {
+      const escaped = u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`@${escaped}\\b`, "gi");
+      out = out.replace(re, `<@${u.id}>`);
+    }
+    return out;
+  };
+
   const handleSend = async () => {
     const text = reply.trim();
     if (!text || !channelId || !messageTs) return;
     setSending(true);
     try {
       const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
-        body: { action: "reply", channel_id: channelId, message_ts: messageTs, text },
+        body: {
+          action: "reply",
+          channel_id: channelId,
+          message_ts: messageTs,
+          text: encodeMentions(text),
+        },
       });
       if (invErr) throw invErr;
       if (data?.error) throw new Error(data.error);
       setReply("");
+      setMentionOpen(false);
       await load();
       toast.success("Reply sent to Slack");
     } catch (e) {
@@ -142,6 +162,41 @@ export function SlackThreadPanel({
     } finally {
       setSending(false);
     }
+  };
+
+  // Detect "@query" before the caret as the user types.
+  const handleReplyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setReply(value);
+    const caret = e.target.selectionStart ?? value.length;
+    const upToCaret = value.slice(0, caret);
+    const match = upToCaret.match(/(?:^|\s)@([\w.\-]*)$/);
+    if (match) {
+      setMentionOpen(true);
+      setMentionQuery(match[1] ?? "");
+      setMentionStart(caret - (match[1]?.length ?? 0) - 1); // position of '@'
+      setMentionIndex(0);
+    } else {
+      setMentionOpen(false);
+    }
+  };
+
+  const insertMention = (u: SlackUser) => {
+    if (mentionStart === null) return;
+    const before = reply.slice(0, mentionStart);
+    const caret = textareaRef.current?.selectionStart ?? reply.length;
+    const after = reply.slice(caret);
+    const inserted = `@${u.name} `;
+    const next = before + inserted + after;
+    setReply(next);
+    setMentionOpen(false);
+    setMentionQuery("");
+    setMentionStart(null);
+    requestAnimationFrame(() => {
+      const pos = (before + inserted).length;
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(pos, pos);
+    });
   };
 
   const formatTs = (ts: string) => {
