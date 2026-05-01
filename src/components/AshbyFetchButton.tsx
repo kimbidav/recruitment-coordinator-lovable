@@ -295,7 +295,17 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
             disabled={loading}
           />
           {loading && (
-            <div className="space-y-2 py-1">
+            <div className="space-y-3 py-1">
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-foreground">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                <div className="space-y-0.5">
+                  <p className="font-medium">Heads up: Ashby may sign you out in another tab.</p>
+                  <p className="text-muted-foreground">
+                    That's expected — your token is in use server-side. Don't re-sign in until this finishes,
+                    or the running session will be invalidated and orgs may be dropped.
+                  </p>
+                </div>
+              </div>
               <Progress value={progress} className="h-2" />
               <p className="text-xs text-muted-foreground flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin" />
