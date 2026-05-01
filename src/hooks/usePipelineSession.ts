@@ -142,6 +142,8 @@ export function usePipelineSession() {
         current_stage_avg_score: (c.current_stage_avg_score as number) ?? undefined,
         current_stage_date: (c.current_stage_date as string) ?? undefined,
         interview_events: eventsByCandidate.get(c.id as string) ?? [],
+        closed_locally: (c.closed_locally as boolean) ?? false,
+        closed_at: (c.closed_at as string) ?? undefined,
       }));
 
       setCandidates(loaded);
