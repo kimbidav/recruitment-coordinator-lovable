@@ -238,8 +238,37 @@ export function CandidateTable({ candidates, onFilterByCandidate }: CandidateTab
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium text-foreground">
-                      {candidate.candidate_name}
+                    <div className="flex items-center gap-2 group/name">
+                      <span className="font-medium text-foreground">
+                        {candidate.candidate_name}
+                      </span>
+                      <div className="flex items-center gap-1 opacity-0 group-hover/name:opacity-100 transition-opacity">
+                        {linkedinByName.get(candidate.candidate_name) && (
+                          <a
+                            href={linkedinByName.get(candidate.candidate_name)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open LinkedIn profile"
+                            className="text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            <Linkedin className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                        {onFilterByCandidate && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onFilterByCandidate(candidate.candidate_name);
+                            }}
+                            title={`Filter to all processes for ${candidate.candidate_name}`}
+                            className="text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            <Filter className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>
