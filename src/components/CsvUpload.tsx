@@ -55,7 +55,7 @@ function parseCsvRow(row: CsvRow): Candidate {
     credited_to: row.credited_to || "",
     source: row.source || "",
     feedback_count: parseInt(row.feedback_count, 10) || 0,
-    latest_recommendation: row.latest_recommendation ? parseInt(row.latest_recommendation, 10) : undefined,
+    latest_recommendation: row.latest_recommendation || undefined,
     latest_feedback_author: row.latest_feedback_author || undefined,
     latest_feedback_date: row.latest_feedback_date || undefined,
     current_stage_interviews: row.current_stage_interviews || undefined,

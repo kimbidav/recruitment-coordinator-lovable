@@ -16,46 +16,79 @@ export type Database = {
     Tables: {
       candidates: {
         Row: {
+          ashby_candidate_id: string | null
+          ashby_job_id: string | null
           candidate_name: string
           company_name: string
           created_at: string
           credited_to: string
+          current_stage_avg_score: number | null
+          current_stage_date: string | null
           current_stage_index: number
           current_stage_interviews: string | null
+          days_in_stage: number | null
           decision_status: string
+          feedback_count: number | null
           id: string
           interview_history_summary: string | null
           job_title: string
+          last_activity_at: string | null
+          latest_feedback_author: string | null
+          latest_feedback_date: string | null
+          latest_recommendation: string | null
+          needs_scheduling: boolean | null
           pipeline_stage: string
           session_id: string
           total_stages: number
         }
         Insert: {
+          ashby_candidate_id?: string | null
+          ashby_job_id?: string | null
           candidate_name: string
           company_name: string
           created_at?: string
           credited_to: string
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
           current_stage_index?: number
           current_stage_interviews?: string | null
+          days_in_stage?: number | null
           decision_status: string
+          feedback_count?: number | null
           id?: string
           interview_history_summary?: string | null
           job_title: string
+          last_activity_at?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          latest_recommendation?: string | null
+          needs_scheduling?: boolean | null
           pipeline_stage: string
           session_id: string
           total_stages?: number
         }
         Update: {
+          ashby_candidate_id?: string | null
+          ashby_job_id?: string | null
           candidate_name?: string
           company_name?: string
           created_at?: string
           credited_to?: string
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
           current_stage_index?: number
           current_stage_interviews?: string | null
+          days_in_stage?: number | null
           decision_status?: string
+          feedback_count?: number | null
           id?: string
           interview_history_summary?: string | null
           job_title?: string
+          last_activity_at?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          latest_recommendation?: string | null
+          needs_scheduling?: boolean | null
           pipeline_stage?: string
           session_id?: string
           total_stages?: number
@@ -66,6 +99,47 @@ export type Database = {
             columns: ["session_id"]
             isOneToOne: false
             referencedRelation: "pipeline_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      interview_events: {
+        Row: {
+          ashby_event_id: string | null
+          candidate_row_id: string
+          created_at: string
+          end_time: string | null
+          id: string
+          interview_title: string
+          interviewers: Json
+          start_time: string
+        }
+        Insert: {
+          ashby_event_id?: string | null
+          candidate_row_id: string
+          created_at?: string
+          end_time?: string | null
+          id?: string
+          interview_title: string
+          interviewers?: Json
+          start_time: string
+        }
+        Update: {
+          ashby_event_id?: string | null
+          candidate_row_id?: string
+          created_at?: string
+          end_time?: string | null
+          id?: string
+          interview_title?: string
+          interviewers?: Json
+          start_time?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "interview_events_candidate_row_id_fkey"
+            columns: ["candidate_row_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
             referencedColumns: ["id"]
           },
         ]
