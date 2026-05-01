@@ -264,44 +264,83 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                 {isExpanded && (
                   <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
                     <TableCell colSpan={10} className="p-4">
-                      <div className="grid grid-cols-2 gap-6">
-                        <div className="space-y-3">
-                          <h4 className="text-sm font-semibold text-foreground">Current Stage Interviews</h4>
-                          {candidate.current_stage_interviews ? (
-                            <div className="text-sm text-muted-foreground whitespace-pre-line bg-card p-3 rounded-md border border-border">
-                              {candidate.current_stage_interviews}
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="text-sm font-semibold text-foreground mb-2">
+                            Interview timeline
+                          </h4>
+                          {candidate.interview_events && candidate.interview_events.length > 0 ? (
+                            <div className="space-y-2">
+                              {[...candidate.interview_events]
+                                .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
+                                .map((ev) => {
+                                  const start = new Date(ev.start_time);
+                                  const isUpcoming = start.getTime() > Date.now();
+                                  return (
+                                    <div
+                                      key={ev.id}
+                                      className="bg-card p-3 rounded-md border border-border"
+                                    >
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <div className="text-sm font-medium text-foreground">
+                                            {ev.interview_title}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground mt-0.5">
+                                            {format(start, "EEE, MMM d, yyyy 'at' h:mm a")}
+                                          </div>
+                                        </div>
+                                        <span
+                                          className={cn(
+                                            "text-[10px] uppercase tracking-wide font-medium px-2 py-0.5 rounded",
+                                            isUpcoming
+                                              ? "bg-status-success/10 text-status-success"
+                                              : "bg-muted text-muted-foreground"
+                                          )}
+                                        >
+                                          {isUpcoming ? "Scheduled" : "Completed"}
+                                        </span>
+                                      </div>
+                                      {ev.interviewers && ev.interviewers.length > 0 && (
+                                        <div className="mt-2 space-y-1">
+                                          {ev.interviewers.map((iv, i) => (
+                                            <div key={i} className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
+                                              <span className="font-medium text-foreground">{iv.name}</span>
+                                              {iv.score && (
+                                                <span className="text-[10px] uppercase font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                                                  {iv.score}
+                                                </span>
+                                              )}
+                                              {iv.feedback_text && (
+                                                <span className="italic">"{iv.feedback_text}"</span>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                             </div>
-                          ) : (
-                            <p className="text-sm text-muted-foreground">No interviews scheduled</p>
-                          )}
-                          {candidate.current_stage_avg_score && (
-                            <p className="text-sm">
-                              <span className="text-muted-foreground">Avg Score: </span>
-                              <span className="font-medium">{candidate.current_stage_avg_score}</span>
-                            </p>
-                          )}
-                        </div>
-                        <div className="space-y-3">
-                          <h4 className="text-sm font-semibold text-foreground">Interview History</h4>
-                          {candidate.interview_history_summary ? (
+                          ) : candidate.interview_history_summary ? (
                             <div className="text-sm text-muted-foreground bg-card p-3 rounded-md border border-border">
                               {candidate.interview_history_summary.split(" | ").map((item, i) => (
                                 <div key={i} className="py-0.5">{item}</div>
                               ))}
                             </div>
                           ) : (
-                            <p className="text-sm text-muted-foreground">No history available</p>
-                          )}
-                          {candidate.latest_feedback_author && (
-                            <p className="text-sm">
-                              <span className="text-muted-foreground">Latest feedback by: </span>
-                              <span className="font-medium">{candidate.latest_feedback_author}</span>
-                              {candidate.latest_feedback_date && (
-                                <span className="text-muted-foreground"> on {formatDate(candidate.latest_feedback_date)}</span>
-                              )}
-                            </p>
+                            <p className="text-sm text-muted-foreground">No interviews recorded yet</p>
                           )}
                         </div>
+                        {candidate.latest_feedback_author && (
+                          <p className="text-sm">
+                            <span className="text-muted-foreground">Latest feedback by: </span>
+                            <span className="font-medium">{candidate.latest_feedback_author}</span>
+                            {candidate.latest_feedback_date && (
+                              <span className="text-muted-foreground"> on {formatDate(candidate.latest_feedback_date)}</span>
+                            )}
+                          </p>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
