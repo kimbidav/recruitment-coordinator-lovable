@@ -14,6 +14,27 @@ import { ProgressBar } from "./ProgressBar";
 import { Candidate } from "@/data/candidates";
 import { cn } from "@/lib/utils";
 import { format, parseISO } from "date-fns";
+import { SLACK_STATUS_LABEL, SlackStatus } from "@/lib/slackParse";
+
+function SourcePill({ source, hasSlack }: { source: string; hasSlack: boolean }) {
+  const label =
+    source === "both" || (source === "ashby" && hasSlack)
+      ? "Both"
+      : source === "slack"
+        ? "Slack"
+        : "Ashby";
+  const cls =
+    label === "Both"
+      ? "bg-primary/10 text-primary"
+      : label === "Slack"
+        ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+        : "bg-muted text-muted-foreground";
+  return (
+    <span className={cn("text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded", cls)}>
+      {label}
+    </span>
+  );
+}
 
 type SortField = "candidate_name" | "company_name" | "job_title" | "pipeline_stage" | "days_in_stage" | "last_activity_at" | "feedback_count" | "credited_to" | "progress";
 type SortDirection = "asc" | "desc";
@@ -267,7 +288,7 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                 </TableRow>
                 {isExpanded && (
                   <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
-                    <TableCell colSpan={10} className="p-4">
+                    <TableCell colSpan={11} className="p-4">
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-sm font-semibold text-foreground mb-2">
