@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { Candidate } from "@/data/candidates";
 import { CandidateTable } from "@/components/CandidateTable";
 import { DashboardStats } from "@/components/DashboardStats";
@@ -15,14 +16,18 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
 import { useSlackSubmissions } from "@/hooks/useSlackSubmissions";
+import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
 import { useAuth } from "@/contexts/AuthContext";
-import { Users, Loader2, Clock, LogOut } from "lucide-react";
+import { Users, Loader2, Clock, LogOut, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   candidateMatchKey,
   slackStatusToDecision,
   slackStatusToPipelineStage,
 } from "@/lib/slackParse";
+
+const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
+const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 const Index = () => {
   const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
