@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronUp, Linkedin, Filter } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -41,9 +41,10 @@ type SortDirection = "asc" | "desc";
 
 interface CandidateTableProps {
   candidates: Candidate[];
+  onFilterByCandidate?: (name: string) => void;
 }
 
-export function CandidateTable({ candidates }: CandidateTableProps) {
+export function CandidateTable({ candidates, onFilterByCandidate }: CandidateTableProps) {
   const [sortField, setSortField] = useState<SortField>("last_activity_at");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -66,6 +67,16 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
     }
     setExpandedRows(newExpanded);
   };
+
+  // Build a lookup from candidate_name -> first available LinkedIn URL across all rows for that person.
+  const linkedinByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of candidates) {
+      const url = c.slack_meta?.linkedin_url;
+      if (url && !map.has(c.candidate_name)) map.set(c.candidate_name, url);
+    }
+    return map;
+  }, [candidates]);
 
   const sortedCandidates = useMemo(() => {
     return [...candidates].sort((a, b) => {
@@ -227,8 +238,37 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium text-foreground">
-                      {candidate.candidate_name}
+                    <div className="flex items-center gap-2 group/name">
+                      <span className="font-medium text-foreground">
+                        {candidate.candidate_name}
+                      </span>
+                      <div className="flex items-center gap-1 opacity-0 group-hover/name:opacity-100 transition-opacity">
+                        {linkedinByName.get(candidate.candidate_name) && (
+                          <a
+                            href={linkedinByName.get(candidate.candidate_name)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open LinkedIn profile"
+                            className="text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            <Linkedin className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                        {onFilterByCandidate && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onFilterByCandidate(candidate.candidate_name);
+                            }}
+                            title={`Filter to all processes for ${candidate.candidate_name}`}
+                            className="text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            <Filter className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>
