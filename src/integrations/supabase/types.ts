@@ -279,6 +279,132 @@ export type Database = {
         }
         Relationships: []
       }
+      slack_channel_mappings: {
+        Row: {
+          channel_id: string
+          channel_name: string
+          client_name: string
+          created_at: string
+          enabled: boolean
+          id: string
+          last_synced_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          channel_id: string
+          channel_name: string
+          client_name: string
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          last_synced_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          channel_id?: string
+          channel_name?: string
+          client_name?: string
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          last_synced_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      slack_submissions: {
+        Row: {
+          candidate_name: string
+          channel_id: string
+          client_name: string
+          created_at: string
+          id: string
+          linkedin_url: string | null
+          message_ts: string
+          needs_review: boolean
+          permalink: string | null
+          raw_text: string | null
+          status: string
+          submitted_at: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          candidate_name?: string
+          channel_id: string
+          client_name: string
+          created_at?: string
+          id?: string
+          linkedin_url?: string | null
+          message_ts: string
+          needs_review?: boolean
+          permalink?: string | null
+          raw_text?: string | null
+          status?: string
+          submitted_at: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          candidate_name?: string
+          channel_id?: string
+          client_name?: string
+          created_at?: string
+          id?: string
+          linkedin_url?: string | null
+          message_ts?: string
+          needs_review?: boolean
+          permalink?: string | null
+          raw_text?: string | null
+          status?: string
+          submitted_at?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      slack_tokens: {
+        Row: {
+          access_token: string
+          created_at: string
+          expires_at: string | null
+          refresh_token: string | null
+          scope: string | null
+          slack_team_id: string
+          slack_team_name: string | null
+          slack_user_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token: string
+          created_at?: string
+          expires_at?: string | null
+          refresh_token?: string | null
+          scope?: string | null
+          slack_team_id: string
+          slack_team_name?: string | null
+          slack_user_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string
+          created_at?: string
+          expires_at?: string | null
+          refresh_token?: string | null
+          scope?: string | null
+          slack_team_id?: string
+          slack_team_name?: string | null
+          slack_user_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
