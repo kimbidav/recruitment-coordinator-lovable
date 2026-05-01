@@ -171,15 +171,6 @@ export function CandidateTable({
             <TableHead>Source</TableHead>
             <TableHead
               className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("job_title")}
-            >
-              <div className="flex items-center gap-1.5">
-                Role
-                <SortIcon field="job_title" />
-              </div>
-            </TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
               onClick={() => handleSort("pipeline_stage")}
             >
               <div className="flex items-center gap-1.5">
@@ -264,9 +255,6 @@ export function CandidateTable({
                     <SourcePill source={candidate.source} hasSlack={!!candidate.slack_meta} />
                   </TableCell>
                   <TableCell>
-                    <span className="text-sm">{candidate.job_title}</span>
-                  </TableCell>
-                  <TableCell>
                     <StageBadge stage={candidate.pipeline_stage} />
                   </TableCell>
                   <TableCell>
@@ -327,8 +315,12 @@ export function CandidateTable({
                 </TableRow>
                 {isExpanded && (
                   <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
-                    <TableCell colSpan={9} className="p-4">
+                    <TableCell colSpan={8} className="p-4">
                       <div className="space-y-4">
+                        <div>
+                          <h4 className="text-sm font-semibold text-foreground mb-1">Role</h4>
+                          <p className="text-sm text-muted-foreground">{candidate.job_title}</p>
+                        </div>
                         <div>
                           <h4 className="text-sm font-semibold text-foreground mb-2">
                             Interview timeline
