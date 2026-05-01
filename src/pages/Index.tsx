@@ -7,6 +7,7 @@ import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { CsvUpload } from "@/components/CsvUpload";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
+import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
 import { useAuth } from "@/contexts/AuthContext";
 import { Users, Loader2, Clock, LogOut } from "lucide-react";
@@ -81,6 +82,7 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      <PostSignInCalendarPrompt />
       {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container py-4">
