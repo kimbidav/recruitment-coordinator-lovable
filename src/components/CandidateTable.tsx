@@ -42,9 +42,18 @@ type SortDirection = "asc" | "desc";
 interface CandidateTableProps {
   candidates: Candidate[];
   onFilterByCandidate?: (name: string) => void;
+  onOpenSlackThread?: (c: Candidate) => void;
+  onOpenEmail?: (c: Candidate) => void;
+  onCloseCandidate?: (c: Candidate) => void;
 }
 
-export function CandidateTable({ candidates, onFilterByCandidate }: CandidateTableProps) {
+export function CandidateTable({
+  candidates,
+  onFilterByCandidate,
+  onOpenSlackThread,
+  onOpenEmail,
+  onCloseCandidate,
+}: CandidateTableProps) {
   const [sortField, setSortField] = useState<SortField>("last_activity_at");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
