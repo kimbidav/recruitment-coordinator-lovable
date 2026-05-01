@@ -224,6 +224,7 @@ export function CandidateTable({
                 <SortIcon field="feedback_count" />
               </div>
             </TableHead>
+            <TableHead>Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
