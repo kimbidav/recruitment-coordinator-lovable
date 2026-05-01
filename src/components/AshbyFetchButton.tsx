@@ -77,12 +77,23 @@ interface AshbyFetchButtonProps {
   onUpload: (candidates: Candidate[]) => void;
 }
 
-function parseAshbyResponse(data: unknown): Candidate[] {
-  if (Array.isArray(data)) return data as Candidate[];
-  if (data && typeof data === "object" && Array.isArray((data as { candidates?: unknown }).candidates)) {
-    return (data as { candidates: Candidate[] }).candidates;
+interface ExtractionStats {
+  orgs_total?: number;
+  orgs_fetched?: number;
+  orgs_failed?: number;
+  orgs_retried?: number;
+  total_seconds?: number;
+}
+
+function parseAshbyResponse(data: unknown): { candidates: Candidate[]; stats: ExtractionStats } {
+  if (Array.isArray(data)) return { candidates: data as Candidate[], stats: {} };
+  if (data && typeof data === "object") {
+    const obj = data as { candidates?: unknown; extraction_stats?: ExtractionStats };
+    if (Array.isArray(obj.candidates)) {
+      return { candidates: obj.candidates as Candidate[], stats: obj.extraction_stats ?? {} };
+    }
   }
-  return [];
+  return { candidates: [], stats: {} };
 }
 
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
@@ -113,7 +124,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       }
 
       const data = await res.json();
-      const candidates = parseAshbyResponse(data);
+      const { candidates, stats } = parseAshbyResponse(data);
 
       if (candidates.length === 0) {
         toast.error("No candidates returned from Ashby");
@@ -124,7 +135,23 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       await new Promise((r) => setTimeout(r, 400));
       setStoredAshbyCookie(cookieToUse);
       onUpload(candidates);
-      toast.success(`Loaded ${candidates.length} candidates from Ashby`);
+
+      // Surface upstream coverage so silent drops are visible.
+      const orgsTotal = stats.orgs_total;
+      const orgsFetched = stats.orgs_fetched;
+      const orgsFailed = stats.orgs_failed ?? 0;
+      if (orgsTotal && orgsFetched !== undefined && orgsFailed > 0) {
+        toast.warning(
+          `Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed and may be missing candidates.`,
+          { duration: 10000 },
+        );
+      } else if (orgsTotal && orgsFetched !== undefined) {
+        toast.success(
+          `Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs`,
+        );
+      } else {
+        toast.success(`Loaded ${candidates.length} candidates from Ashby`);
+      }
       setOpen(false);
       setCookie("");
     } catch (err) {
