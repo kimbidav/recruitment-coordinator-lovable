@@ -191,8 +191,10 @@ export function usePipelineSession() {
 
         if (eventsToInsert.length > 0) {
           const { error: evErr } = await supabase
+            // jsonb columns generated as `Json` cause friction with our local
+            // type — cast through unknown.
             .from("interview_events")
-            .insert(eventsToInsert);
+            .insert(eventsToInsert as unknown as never);
           if (evErr) console.error("Error inserting interview events:", evErr);
         }
 
