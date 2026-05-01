@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Hash, Loader2, RefreshCw, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +22,18 @@ export function SlackConnectButton({ onSynced }: SlackConnectButtonProps) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === "slack-connected") {
+        toast.success("Slack connected");
+        void reload();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [reload]);
+
   const handleConnect = async () => {
     setBusy(true);
     try {
@@ -33,7 +45,14 @@ export function SlackConnectButton({ onSynced }: SlackConnectButtonProps) {
         toast.error(`Failed to start Slack auth: ${error?.message || data?.error || "no url"}`);
         return;
       }
-      window.location.href = data.url;
+      // Open in a new tab — Slack's OAuth page refuses to load inside iframes (e.g. Lovable preview)
+      const w = window.open(data.url, "_blank", "noopener,noreferrer");
+      if (!w) {
+        toast.error("Popup blocked. Allow popups for this site, or open the preview in a new tab.");
+        return;
+      }
+      setOpen(false);
+      toast.info("Complete Slack authorization in the new tab, then return here.");
     } finally {
       setBusy(false);
     }

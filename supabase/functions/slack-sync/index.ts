@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 const SLACK_API = "https://slack.com/api";
-const HISTORY_DAYS_DEFAULT = 120;
+const HISTORY_DAYS_DEFAULT = 75;
 
 interface SlackChannel {
   id: string;
