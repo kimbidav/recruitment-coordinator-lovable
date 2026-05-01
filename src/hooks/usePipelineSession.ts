@@ -158,92 +158,111 @@ export function usePipelineSession() {
         toast.error("Not signed in");
         return;
       }
+      const t0 = performance.now();
       try {
         await supabase
           .from("pipeline_sessions")
           .update({ updated_at: new Date().toISOString() })
           .eq("id", sessionId);
 
-        const { error: deleteError } = await supabase
-          .from("candidates")
-          .delete()
-          .eq("session_id", sessionId);
-        if (deleteError) {
-          console.error("Error clearing candidates:", deleteError);
-          toast.error("Failed to update pipeline");
-          return;
-        }
+        // Build payload. Note: ashby_candidate_id and ashby_job_id are part of the
+        // unique key (session_id, ashby_candidate_id, ashby_job_id) — ensure non-null.
+        const candidatesToUpsert = newCandidates
+          .filter((c) => c.candidate_id && c.job_id)
+          .map((c) => ({
+            user_id: user.id,
+            session_id: sessionId,
+            ashby_candidate_id: c.candidate_id,
+            ashby_job_id: c.job_id,
+            candidate_name: c.candidate_name,
+            company_name: c.company_name,
+            job_title: c.job_title,
+            pipeline_stage: c.pipeline_stage,
+            decision_status: c.decision_status,
+            credited_to: c.credited_to,
+            current_stage_index: c.current_stage_index,
+            total_stages: c.total_stages,
+            days_in_stage: c.days_in_stage ?? 0,
+            needs_scheduling: c.needs_scheduling ?? false,
+            feedback_count: c.feedback_count ?? 0,
+            latest_recommendation: c.latest_recommendation ?? null,
+            latest_feedback_author: c.latest_feedback_author ?? null,
+            latest_feedback_date: c.latest_feedback_date ?? null,
+            current_stage_avg_score: c.current_stage_avg_score ?? null,
+            current_stage_date: c.current_stage_date ?? null,
+            interview_history_summary: c.interview_history_summary ?? null,
+            current_stage_interviews: c.current_stage_interviews ?? null,
+            last_activity_at: c.last_activity_at ?? null,
+          }));
 
-        const candidatesToInsert = newCandidates.map((c) => ({
-          user_id: user.id,
-          session_id: sessionId,
-          ashby_candidate_id: c.candidate_id,
-          ashby_job_id: c.job_id,
-          candidate_name: c.candidate_name,
-          company_name: c.company_name,
-          job_title: c.job_title,
-          pipeline_stage: c.pipeline_stage,
-          decision_status: c.decision_status,
-          credited_to: c.credited_to,
-          current_stage_index: c.current_stage_index,
-          total_stages: c.total_stages,
-          days_in_stage: c.days_in_stage ?? 0,
-          needs_scheduling: c.needs_scheduling ?? false,
-          feedback_count: c.feedback_count ?? 0,
-          latest_recommendation: c.latest_recommendation ?? null,
-          latest_feedback_author: c.latest_feedback_author ?? null,
-          latest_feedback_date: c.latest_feedback_date ?? null,
-          current_stage_avg_score: c.current_stage_avg_score ?? null,
-          current_stage_date: c.current_stage_date ?? null,
-          interview_history_summary: c.interview_history_summary ?? null,
-          current_stage_interviews: c.current_stage_interviews ?? null,
-          last_activity_at: c.last_activity_at ?? null,
-        }));
+        const incoming = candidatesToUpsert.length;
+        const incomingKeys = new Set(
+          candidatesToUpsert.map((c) => candidateKey(c.ashby_candidate_id, c.ashby_job_id)),
+        );
 
-        // Chunked inserts: if a single chunk fails, try rows one-by-one and report what dropped.
-        const insertedRows: Array<{ id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }> = [];
-        const droppedRows: Array<{ candidate_name: string; company_name: string; reason: string }> = [];
-
-        for (let i = 0; i < candidatesToInsert.length; i += INSERT_CHUNK) {
-          const chunk = candidatesToInsert.slice(i, i + INSERT_CHUNK);
-          const { data, error } = await supabase
+        // Idempotent bulk upsert — no destructive delete, no row-by-row fallback.
+        const upsertFailures: Array<{ chunkStart: number; size: number; error: string }> = [];
+        for (let i = 0; i < candidatesToUpsert.length; i += INSERT_CHUNK) {
+          const chunk = candidatesToUpsert.slice(i, i + INSERT_CHUNK);
+          const { error } = await supabase
             .from("candidates")
-            .insert(chunk)
-            .select("id, ashby_candidate_id, ashby_job_id");
-
+            .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
           if (error) {
-            console.warn(`Chunk insert ${i}-${i + chunk.length} failed (${error.message}); retrying row-by-row`);
-            for (const row of chunk) {
-              const { data: one, error: oneErr } = await supabase
-                .from("candidates")
-                .insert(row)
-                .select("id, ashby_candidate_id, ashby_job_id")
-                .single();
-              if (oneErr || !one) {
-                droppedRows.push({
-                  candidate_name: row.candidate_name,
-                  company_name: row.company_name,
-                  reason: oneErr?.message ?? "unknown",
-                });
-                console.error(`Dropped: ${row.candidate_name} @ ${row.company_name} — ${oneErr?.message}`);
-              } else {
-                insertedRows.push(one);
-              }
-            }
-          } else if (data) {
-            insertedRows.push(...data);
+            console.error(`Upsert chunk ${i}-${i + chunk.length} failed:`, error.message);
+            upsertFailures.push({ chunkStart: i, size: chunk.length, error: error.message });
           }
         }
 
-        // Composite key (candidate_id + job_id) so the same person on two jobs doesn't collapse.
+        // Read back what's in the DB after upsert to know real saved IDs and reconcile.
+        const savedRows = await selectAll<{
+          id: string;
+          ashby_candidate_id: string | null;
+          ashby_job_id: string | null;
+        }>((from, to) =>
+          supabase
+            .from("candidates")
+            .select("id, ashby_candidate_id, ashby_job_id")
+            .eq("session_id", sessionId)
+            .range(from, to) as unknown as PromiseLike<{
+            data: { id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }[] | null;
+            error: unknown;
+          }>,
+        );
+
+        // Sync semantics: delete rows that are no longer in the incoming payload.
+        const idsToDelete = savedRows
+          .filter((r) => {
+            if (!r.ashby_candidate_id || !r.ashby_job_id) return true;
+            return !incomingKeys.has(candidateKey(r.ashby_candidate_id, r.ashby_job_id));
+          })
+          .map((r) => r.id);
+
+        if (idsToDelete.length > 0) {
+          for (let i = 0; i < idsToDelete.length; i += INSERT_CHUNK) {
+            const chunk = idsToDelete.slice(i, i + INSERT_CHUNK);
+            const { error: delErr } = await supabase
+              .from("candidates")
+              .delete()
+              .in("id", chunk);
+            if (delErr) console.error("Stale delete chunk failed:", delErr.message);
+          }
+        }
+
+        // Build id-by-key from the freshly-read saved rows (excludes deleted stale ones).
         const idByKey = new Map<string, string>();
-        for (const row of insertedRows) {
+        const savedKeys = new Set<string>();
+        for (const row of savedRows) {
           if (row.ashby_candidate_id && row.ashby_job_id) {
-            idByKey.set(candidateKey(row.ashby_candidate_id, row.ashby_job_id), row.id);
+            const key = candidateKey(row.ashby_candidate_id, row.ashby_job_id);
+            if (incomingKeys.has(key)) {
+              idByKey.set(key, row.id);
+              savedKeys.add(key);
+            }
           }
         }
 
-        const eventsToInsert: Array<{
+        // Events: also idempotent upsert by (candidate_row_id, ashby_event_id).
+        const eventsToUpsert: Array<{
           user_id: string;
           candidate_row_id: string;
           ashby_event_id: string | null;
@@ -257,11 +276,11 @@ export function usePipelineSession() {
           const rowId = idByKey.get(candidateKey(c.candidate_id, c.job_id));
           if (!rowId || !c.interview_events) continue;
           for (const ev of c.interview_events) {
-            if (!ev.start_time) continue;
-            eventsToInsert.push({
+            if (!ev.start_time || !ev.id) continue; // need ashby_event_id for conflict target
+            eventsToUpsert.push({
               user_id: user.id,
               candidate_row_id: rowId,
-              ashby_event_id: ev.id ?? null,
+              ashby_event_id: ev.id,
               interview_title: ev.interview_title ?? "Interview",
               start_time: ev.start_time,
               end_time: ev.end_time ?? null,
@@ -270,33 +289,58 @@ export function usePipelineSession() {
           }
         }
 
-        // Chunk event inserts too.
-        for (let i = 0; i < eventsToInsert.length; i += INSERT_CHUNK) {
-          const chunk = eventsToInsert.slice(i, i + INSERT_CHUNK);
+        for (let i = 0; i < eventsToUpsert.length; i += INSERT_CHUNK) {
+          const chunk = eventsToUpsert.slice(i, i + INSERT_CHUNK);
           const { error: evErr } = await supabase
             .from("interview_events")
-            .insert(chunk as unknown as never);
-          if (evErr) console.error(`Event chunk ${i} failed:`, evErr.message);
+            .upsert(chunk as unknown as never, {
+              onConflict: "candidate_row_id,ashby_event_id",
+            });
+          if (evErr) console.error(`Event upsert chunk ${i} failed:`, evErr.message);
         }
 
         setCandidates(newCandidates);
         setLastUpdated(new Date().toISOString());
 
-        // Reconciliation toast — make drops impossible to miss.
-        const saved = insertedRows.length;
-        const incoming = newCandidates.length;
-        if (saved === incoming && droppedRows.length === 0) {
-          toast.success(`Saved ${saved} candidates`);
+        // Reconciliation: list missing candidates by name and persist a save report.
+        const missing = candidatesToUpsert
+          .filter((c) => !savedKeys.has(candidateKey(c.ashby_candidate_id, c.ashby_job_id)))
+          .map((c) => ({
+            candidate_name: c.candidate_name,
+            company_name: c.company_name,
+            ashby_candidate_id: c.ashby_candidate_id,
+            ashby_job_id: c.ashby_job_id,
+          }));
+
+        const saved = incoming - missing.length;
+        const elapsedMs = Math.round(performance.now() - t0);
+
+        // Persist auditable report (best-effort; don't block UX on failure).
+        void supabase
+          .from("pipeline_save_reports")
+          .insert({
+            user_id: user.id,
+            session_id: sessionId,
+            expected_count: incoming,
+            saved_count: saved,
+            missing,
+          })
+          .then(({ error }) => {
+            if (error) console.warn("save report insert failed:", error.message);
+          });
+
+        if (missing.length === 0 && upsertFailures.length === 0) {
+          toast.success(`Saved ${saved} candidates in ${(elapsedMs / 1000).toFixed(1)}s`);
         } else {
-          const sample = droppedRows
+          const sample = missing
             .slice(0, 3)
             .map((d) => `${d.candidate_name} (${d.company_name})`)
             .join(", ");
           toast.warning(
-            `Saved ${saved}/${incoming} candidates. ${droppedRows.length} dropped${
-              sample ? `: ${sample}${droppedRows.length > 3 ? "…" : ""}` : ""
-            }. Check console for details.`,
-            { duration: 10000 },
+            `Saved ${saved}/${incoming} candidates. ${missing.length} missing${
+              sample ? `: ${sample}${missing.length > 3 ? "…" : ""}` : ""
+            }. Full report stored.`,
+            { duration: 15000 },
           );
         }
       } catch (error) {

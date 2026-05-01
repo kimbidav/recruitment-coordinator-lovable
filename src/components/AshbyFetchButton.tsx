@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2, RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,6 +18,8 @@ import {
   setStoredAshbyCookie,
   clearStoredAshbyCookie,
 } from "@/lib/ashbyCookie";
+import { createFetchJob, updateFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
+import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 const PROGRESS_STEPS = [
@@ -97,13 +99,33 @@ function parseAshbyResponse(data: unknown): { candidates: Candidate[]; stats: Ex
 }
 
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
+  const [staleJobNotified, setStaleJobNotified] = useState(false);
   const { progress, label, complete } = useSimulatedProgress(loading);
+
+  // On mount: warn if a previous fetch is still marked running (likely stalled).
+  useEffect(() => {
+    if (!user || staleJobNotified) return;
+    void (async () => {
+      const job = await getLatestRunningJob(user.id);
+      if (!job) return;
+      const ageMin = (Date.now() - new Date(job.started_at).getTime()) / 60_000;
+      if (ageMin > 10) {
+        toast.warning(
+          `A previous Ashby fetch from ${ageMin.toFixed(0)} min ago is still marked running. It may have stalled — re-run when ready.`,
+          { duration: 12000 },
+        );
+        setStaleJobNotified(true);
+      }
+    })();
+  }, [user, staleJobNotified]);
 
   const runFetch = async (cookieToUse: string) => {
     setLoading(true);
+    const job = user ? await createFetchJob(user.id) : null;
     try {
       const res = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract`, {
         method: "POST",
@@ -115,11 +137,22 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         clearStoredAshbyCookie();
         setOpen(true);
         toast.error("Ashby session expired. Paste a fresh cookie.");
+        if (job) await updateFetchJob(job.id, {
+          status: "failed",
+          finished_at: new Date().toISOString(),
+          error_message: "Ashby session expired (401)",
+        });
         return;
       }
 
       if (!res.ok) {
-        toast.error(await readErrorPayload(res));
+        const msg = await readErrorPayload(res);
+        toast.error(msg);
+        if (job) await updateFetchJob(job.id, {
+          status: "failed",
+          finished_at: new Date().toISOString(),
+          error_message: msg.slice(0, 500),
+        });
         return;
       }
 
@@ -128,6 +161,14 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
 
       if (candidates.length === 0) {
         toast.error("No candidates returned from Ashby");
+        if (job) await updateFetchJob(job.id, {
+          status: "failed",
+          finished_at: new Date().toISOString(),
+          error_message: "No candidates returned",
+          orgs_total: stats.orgs_total ?? null,
+          orgs_fetched: stats.orgs_fetched ?? null,
+          orgs_failed: stats.orgs_failed ?? null,
+        });
         return;
       }
 
@@ -140,10 +181,12 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       const orgsTotal = stats.orgs_total;
       const orgsFetched = stats.orgs_fetched;
       const orgsFailed = stats.orgs_failed ?? 0;
-      if (orgsTotal && orgsFetched !== undefined && orgsFailed > 0) {
+      const partial = !!(orgsTotal && orgsFetched !== undefined && orgsFailed > 0);
+
+      if (partial) {
         toast.warning(
-          `Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed and may be missing candidates.`,
-          { duration: 10000 },
+          `Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed. Re-run with a fresh cookie to recover missing data.`,
+          { duration: 15000 },
         );
       } else if (orgsTotal && orgsFetched !== undefined) {
         toast.success(
@@ -152,6 +195,16 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       } else {
         toast.success(`Loaded ${candidates.length} candidates from Ashby`);
       }
+
+      if (job) await updateFetchJob(job.id, {
+        status: partial ? "partial" : "succeeded",
+        finished_at: new Date().toISOString(),
+        orgs_total: orgsTotal ?? null,
+        orgs_fetched: orgsFetched ?? null,
+        orgs_failed: orgsFailed,
+        candidate_count: candidates.length,
+      });
+
       setOpen(false);
       setCookie("");
     } catch (err) {
@@ -161,6 +214,11 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           ? `Could not reach Ashby automation at ${ASHBY_AUTOMATION_API_BASE}.`
           : "Failed to fetch from Ashby.";
       toast.error(message);
+      if (job) await updateFetchJob(job.id, {
+        status: "failed",
+        finished_at: new Date().toISOString(),
+        error_message: message,
+      });
     } finally {
       setLoading(false);
     }
@@ -237,7 +295,17 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
             disabled={loading}
           />
           {loading && (
-            <div className="space-y-2 py-1">
+            <div className="space-y-3 py-1">
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-foreground">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                <div className="space-y-0.5">
+                  <p className="font-medium">Heads up: Ashby may sign you out in another tab.</p>
+                  <p className="text-muted-foreground">
+                    That's expected — your token is in use server-side. Don't re-sign in until this finishes,
+                    or the running session will be invalidated and orgs may be dropped.
+                  </p>
+                </div>
+              </div>
               <Progress value={progress} className="h-2" />
               <p className="text-xs text-muted-foreground flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin" />

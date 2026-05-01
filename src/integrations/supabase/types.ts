@@ -106,6 +106,51 @@ export type Database = {
           },
         ]
       }
+      fetch_jobs: {
+        Row: {
+          candidate_count: number | null
+          created_at: string
+          error_message: string | null
+          finished_at: string | null
+          id: string
+          orgs_failed: number | null
+          orgs_fetched: number | null
+          orgs_total: number | null
+          started_at: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          candidate_count?: number | null
+          created_at?: string
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          orgs_failed?: number | null
+          orgs_fetched?: number | null
+          orgs_total?: number | null
+          started_at?: string
+          status: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          candidate_count?: number | null
+          created_at?: string
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          orgs_failed?: number | null
+          orgs_fetched?: number | null
+          orgs_total?: number | null
+          started_at?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       google_calendar_tokens: {
         Row: {
           access_token: string | null
@@ -182,6 +227,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      pipeline_save_reports: {
+        Row: {
+          created_at: string
+          expected_count: number
+          id: string
+          missing: Json
+          saved_count: number
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expected_count?: number
+          id?: string
+          missing?: Json
+          saved_count?: number
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expected_count?: number
+          id?: string
+          missing?: Json
+          saved_count?: number
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       pipeline_sessions: {
         Row: {
