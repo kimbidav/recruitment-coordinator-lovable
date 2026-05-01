@@ -8,12 +8,13 @@ import { CsvUpload } from "@/components/CsvUpload";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
-import { Users, Share2, Loader2, Clock } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { Users, Loader2, Clock, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { toast } from "sonner";
 
 const Index = () => {
-  const { candidates, sessionId, lastUpdated, isLoading, saveSession, clearSession } = usePipelineSession();
+  const { candidates, lastUpdated, isLoading, saveSession } = usePipelineSession();
+  const { user, signOut } = useAuth();
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
@@ -30,12 +31,7 @@ const Index = () => {
     setSearch("");
   };
 
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(window.location.href);
-    toast.success("Link copied to clipboard!");
-  };
-
-  const companies = useMemo(() => 
+  const companies = useMemo(() =>
     [...new Set(candidates.map(c => c.company_name))].sort(),
     [candidates]
   );
@@ -107,20 +103,21 @@ const Index = () => {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {sessionId && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCopyLink}
-                  className="gap-2"
-                >
-                  <Share2 className="h-4 w-4" />
-                  Copy Share Link
-                </Button>
-              )}
               <GoogleCalendarSync candidates={filteredCandidates} />
               <AshbyFetchButton onUpload={handleCsvUpload} />
               <CsvUpload onUpload={handleCsvUpload} />
+              {user && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={signOut}
+                  className="gap-2"
+                  title={user.email ?? "Sign out"}
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sign out
+                </Button>
+              )}
             </div>
           </div>
         </div>

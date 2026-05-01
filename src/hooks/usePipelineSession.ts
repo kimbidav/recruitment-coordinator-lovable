@@ -1,37 +1,60 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Candidate, InterviewEvent } from "@/data/candidates";
+import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
-// Singleton session id — there's one shared dashboard for this single-tenant app.
-// We keep this stable so the dashboard auto-loads on mount with no URL param.
-const DEFAULT_SESSION_ID = "00000000-0000-0000-0000-000000000001";
-
 export function usePipelineSession() {
+  const { user } = useAuth();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [sessionId] = useState<string>(DEFAULT_SESSION_ID);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Auto-load on mount.
+  // Load (or create) the user's session whenever the user changes.
   useEffect(() => {
-    void loadSession(DEFAULT_SESSION_ID);
+    if (!user) {
+      setCandidates([]);
+      setSessionId(null);
+      setLastUpdated(null);
+      setIsLoading(false);
+      return;
+    }
+    void loadOrCreateSession(user.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user?.id]);
 
-  const loadSession = async (id: string) => {
+  const loadOrCreateSession = async (userId: string) => {
     setIsLoading(true);
     try {
-      const { data: session } = await supabase
+      // Find this user's session, or create one.
+      let { data: session } = await supabase
         .from("pipeline_sessions")
         .select("id, updated_at")
-        .eq("id", id)
+        .eq("user_id", userId)
         .maybeSingle();
+
+      if (!session) {
+        const { data: created, error: createErr } = await supabase
+          .from("pipeline_sessions")
+          .insert({ user_id: userId })
+          .select("id, updated_at")
+          .single();
+        if (createErr) {
+          console.error("Error creating session:", createErr);
+          setIsLoading(false);
+          return;
+        }
+        session = created;
+      }
+
+      setSessionId(session.id);
+      setLastUpdated(session.updated_at ?? null);
 
       const { data: candidatesData, error: candidatesError } = await supabase
         .from("candidates")
         .select("*")
-        .eq("session_id", id);
+        .eq("session_id", session.id);
 
       if (candidatesError) {
         console.error("Error loading candidates:", candidatesError);
@@ -42,7 +65,6 @@ export function usePipelineSession() {
       const rows = candidatesData ?? [];
       const ids = rows.map((r) => r.id);
 
-      // Fetch all interview events for these candidates in one go.
       const eventsByCandidate = new Map<string, InterviewEvent[]>();
       if (ids.length > 0) {
         const { data: events } = await supabase
@@ -94,7 +116,6 @@ export function usePipelineSession() {
       }));
 
       setCandidates(loaded);
-      if (session?.updated_at) setLastUpdated(session.updated_at);
     } catch (error) {
       console.error("Error loading session:", error);
     } finally {
@@ -104,13 +125,16 @@ export function usePipelineSession() {
 
   const saveSession = useCallback(
     async (newCandidates: Candidate[]) => {
+      if (!user || !sessionId) {
+        toast.error("Not signed in");
+        return;
+      }
       try {
-        // Make sure the singleton session row exists.
         await supabase
           .from("pipeline_sessions")
-          .upsert({ id: sessionId, updated_at: new Date().toISOString() });
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", sessionId);
 
-        // Replace candidates for this session.
         const { error: deleteError } = await supabase
           .from("candidates")
           .delete()
@@ -122,6 +146,7 @@ export function usePipelineSession() {
         }
 
         const candidatesToInsert = newCandidates.map((c) => ({
+          user_id: user.id,
           session_id: sessionId,
           ashby_candidate_id: c.candidate_id,
           ashby_job_id: c.job_id,
@@ -157,19 +182,18 @@ export function usePipelineSession() {
           return;
         }
 
-        // Map ashby_candidate_id -> new row id, then bulk-insert interview events.
         const idByAshby = new Map<string, string>();
         for (const row of inserted ?? []) {
           if (row.ashby_candidate_id) idByAshby.set(row.ashby_candidate_id, row.id);
         }
 
         const eventsToInsert: Array<{
+          user_id: string;
           candidate_row_id: string;
           ashby_event_id: string | null;
           interview_title: string;
           start_time: string;
           end_time: string | null;
-          // Stored as jsonb on the DB side.
           interviewers: unknown[] | Record<string, unknown>;
         }> = [];
 
@@ -179,6 +203,7 @@ export function usePipelineSession() {
           for (const ev of c.interview_events) {
             if (!ev.start_time) continue;
             eventsToInsert.push({
+              user_id: user.id,
               candidate_row_id: rowId,
               ashby_event_id: ev.id ?? null,
               interview_title: ev.interview_title ?? "Interview",
@@ -191,8 +216,6 @@ export function usePipelineSession() {
 
         if (eventsToInsert.length > 0) {
           const { error: evErr } = await supabase
-            // jsonb columns generated as `Json` cause friction with our local
-            // type — cast through unknown.
             .from("interview_events")
             .insert(eventsToInsert as unknown as never);
           if (evErr) console.error("Error inserting interview events:", evErr);
@@ -206,7 +229,7 @@ export function usePipelineSession() {
         toast.error("Failed to save pipeline");
       }
     },
-    [sessionId]
+    [sessionId, user]
   );
 
   const clearSession = useCallback(() => {
