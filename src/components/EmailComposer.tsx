@@ -144,15 +144,10 @@ export function EmailComposer({
       const { data, error } = await supabase.functions.invoke("gmail-helper", {
         body: { action: "send", to: to.trim(), subject, body },
       });
-      if (error) throw error;
-      if (data?.error) {
-        if (data.code === "gmail_scope_missing") {
-          throw new Error("Reconnect Google to grant 'Send mail' permission.");
-        }
-        if (data.code === "google_not_connected") {
-          throw new Error("Connect Google Calendar to enable email sending.");
-        }
-        throw new Error(data.error);
+      if (error || data?.error) {
+        const { message, code } = await parseFnError(error, data ?? null);
+        toast.error(friendlyMessage(message, code));
+        return;
       }
       toast.success(`Email sent from ${data.from ?? "your Gmail"}`);
       onOpenChange(false);
