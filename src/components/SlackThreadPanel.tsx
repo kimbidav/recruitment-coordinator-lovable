@@ -284,14 +284,70 @@ export function SlackThreadPanel({
           )}
         </div>
 
-        <div className="border-t border-border p-4 space-y-2">
+        <div className="border-t border-border p-4 space-y-2 relative">
+          {mentionOpen && filteredUsers.length > 0 && (
+            <div className="absolute bottom-full left-4 right-4 mb-2 z-50 max-h-60 overflow-y-auto rounded-md border border-border bg-popover shadow-md">
+              {filteredUsers.map((u, i) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    insertMention(u);
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent ${
+                    i === mentionIndex ? "bg-accent" : ""
+                  }`}
+                >
+                  {u.image ? (
+                    <img src={u.image} alt={u.name} className="h-6 w-6 rounded" />
+                  ) : (
+                    <div className="h-6 w-6 rounded bg-muted flex items-center justify-center text-[10px] font-medium">
+                      {u.name.slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="font-medium text-foreground">@{u.name}</span>
+                  {u.real_name && u.real_name !== u.name && (
+                    <span className="text-muted-foreground text-xs truncate">
+                      {u.real_name}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
           <Textarea
+            ref={textareaRef}
             value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            placeholder="Reply in this Slack thread..."
+            onChange={handleReplyChange}
+            placeholder="Reply in this Slack thread... (use @ to mention)"
             rows={3}
             className="resize-none"
             onKeyDown={(e) => {
+              if (mentionOpen && filteredUsers.length > 0) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionIndex((i) => (i + 1) % filteredUsers.length);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionIndex(
+                    (i) => (i - 1 + filteredUsers.length) % filteredUsers.length,
+                  );
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  insertMention(filteredUsers[mentionIndex]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMentionOpen(false);
+                  return;
+                }
+              }
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 void handleSend();
@@ -299,7 +355,9 @@ export function SlackThreadPanel({
             }}
           />
           <div className="flex justify-between items-center">
-            <span className="text-xs text-muted-foreground">⌘+Enter to send</span>
+            <span className="text-xs text-muted-foreground">
+              @ to mention · ⌘+Enter to send
+            </span>
             <Button onClick={() => void handleSend()} disabled={sending || !reply.trim()} size="sm">
               {sending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
