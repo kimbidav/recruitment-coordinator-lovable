@@ -33,6 +33,22 @@ const Index = () => {
   const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
+  const onboarding = useOnboardingStatus();
+
+  // First-run redirect: brand-new users land on /onboarding instead of an
+  // empty dashboard. Honors a "skip for now" dismissal.
+  useEffect(() => {
+    if (onboarding.loading) return;
+    const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
+    const pending = sessionStorage.getItem(PENDING_ONBOARDING_KEY) === "1";
+    const allConnected =
+      onboarding.googleConnected && onboarding.slackConnected && onboarding.ashbyConnected;
+    const isFirstRun =
+      pending ||
+      (!dismissed && !allConnected && !onboarding.hasCandidates);
+    if (isFirstRun) navigate("/onboarding", { replace: true });
+  }, [onboarding.loading, onboarding.googleConnected, onboarding.slackConnected, onboarding.ashbyConnected, onboarding.hasCandidates, navigate]);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
