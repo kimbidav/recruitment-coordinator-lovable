@@ -1,5 +1,15 @@
-import { useState, useEffect, useRef } from "react";
-import { Download, Loader2, RefreshCw, AlertTriangle } from "lucide-react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import {
+  Download,
+  Loader2,
+  RefreshCw,
+  AlertTriangle,
+  ExternalLink,
+  Copy,
+  Check,
+  Shield,
+  ChevronDown,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,6 +19,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Candidate } from "@/data/candidates";
@@ -21,6 +36,7 @@ import {
 import { createFetchJob, updateFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 const PROGRESS_STEPS = [
   { at: 0, label: "Connecting to Ashby..." },
@@ -98,13 +114,51 @@ function parseAshbyResponse(data: unknown): { candidates: Candidate[]; stats: Ex
   return { candidates: [], stats: {} };
 }
 
+/** Strip common paste mistakes (whole cookie header, name=value form, quotes, whitespace). */
+function normalizeTokenInput(raw: string): string {
+  let v = raw.trim();
+  // Strip surrounding quotes
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    v = v.slice(1, -1).trim();
+  }
+  // If they pasted a whole "cookie:" header, try to extract the token
+  const cookieHeaderMatch = v.match(/ashby_session_token\s*=\s*([^;\s]+)/i);
+  if (cookieHeaderMatch) v = cookieHeaderMatch[1];
+  // If they copied the DevTools row "ashby_session_token<TAB>value..."
+  if (v.toLowerCase().startsWith("ashby_session_token")) {
+    const parts = v.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) v = parts[1];
+  }
+  return v.trim();
+}
+
+function validateToken(v: string): { valid: boolean; hint: string | null } {
+  if (!v) return { valid: false, hint: null };
+  if (v.length < 20) return { valid: false, hint: "Token looks too short" };
+  if (/\s/.test(v)) return { valid: false, hint: "Token shouldn't contain spaces" };
+  if (v.includes("=")) return { valid: false, hint: "Looks like you pasted name=value — paste only the value" };
+  return { valid: true, hint: null };
+}
+
+const CONSOLE_SNIPPET = `copy(document.cookie.split('; ').find(r => r.startsWith('ashby_session_token='))?.split('=')[1])`;
+
+function detectOS(): "mac" | "win" {
+  if (typeof navigator === "undefined") return "mac";
+  const p = navigator.platform || navigator.userAgent || "";
+  return /Mac|iPhone|iPad/i.test(p) ? "mac" : "win";
+}
+
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
   const [staleJobNotified, setStaleJobNotified] = useState(false);
+  const [snippetCopied, setSnippetCopied] = useState(false);
+  const [activeStep, setActiveStep] = useState<"quick" | "manual">("quick");
   const { progress, label, complete } = useSimulatedProgress(loading);
+  const os = useMemo(detectOS, []);
+  const devtoolsKey = os === "mac" ? "⌘⌥I" : "F12";
 
   // On mount: warn if a previous fetch is still marked running (likely stalled).
   useEffect(() => {
@@ -122,6 +176,8 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       }
     })();
   }, [user, staleJobNotified]);
+
+  const validation = validateToken(cookie);
 
   const runFetch = async (cookieToUse: string) => {
     setLoading(true);
@@ -177,7 +233,6 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       setStoredAshbyCookie(cookieToUse);
       onUpload(candidates);
 
-      // Surface upstream coverage so silent drops are visible.
       const orgsTotal = stats.orgs_total;
       const orgsFetched = stats.orgs_fetched;
       const orgsFailed = stats.orgs_failed ?? 0;
@@ -234,12 +289,33 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   };
 
   const handleDialogSubmit = () => {
-    const trimmed = cookie.trim();
-    if (!trimmed) {
+    const cleaned = normalizeTokenInput(cookie);
+    if (!cleaned) {
       toast.error("Please paste your Ashby session cookie");
       return;
     }
-    void runFetch(trimmed);
+    const v = validateToken(cleaned);
+    if (!v.valid) {
+      toast.error(v.hint ?? "Token doesn't look right");
+      return;
+    }
+    setCookie(cleaned);
+    void runFetch(cleaned);
+  };
+
+  const handlePaste = (raw: string) => {
+    const cleaned = normalizeTokenInput(raw);
+    setCookie(cleaned);
+  };
+
+  const copySnippet = async () => {
+    try {
+      await navigator.clipboard.writeText(CONSOLE_SNIPPET);
+      setSnippetCopied(true);
+      setTimeout(() => setSnippetCopied(false), 2000);
+    } catch {
+      toast.error("Couldn't copy. Select and copy manually.");
+    }
   };
 
   const hasStoredCookie = !!getStoredAshbyCookie();
@@ -263,37 +339,170 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Paste your Ashby session cookie</DialogTitle>
-            <DialogDescription asChild>
-              <div className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  We'll remember this in your browser and only ask again if it
-                  expires.
-                </p>
-                <ol className="list-decimal list-inside space-y-1.5 text-xs text-muted-foreground">
-                  <li>
-                    Open <span className="font-medium text-foreground">app.ashbyhq.com</span> and sign in
-                  </li>
-                  <li>
-                    DevTools (<kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">⌘⌥I</kbd>) → Application → Cookies → app.ashbyhq.com
-                  </li>
-                  <li>
-                    Copy the value of <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">ashby_session_token</code>
-                  </li>
-                </ol>
-              </div>
+            <DialogTitle>Connect your Ashby account</DialogTitle>
+            <DialogDescription>
+              We need your Ashby session token to pull candidates. Pick the path that works for you — most people use the quick way.
             </DialogDescription>
           </DialogHeader>
-          <Textarea
-            placeholder="Paste your ashby_session_token value here..."
-            value={cookie}
-            onChange={(e) => setCookie(e.target.value)}
-            rows={3}
-            className="font-mono text-xs"
-            disabled={loading}
-          />
+
+          {/* Method tabs */}
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            <button
+              type="button"
+              onClick={() => setActiveStep("quick")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                activeStep === "quick"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Quick way (recommended)
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveStep("manual")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                activeStep === "manual"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Manual (DevTools)
+            </button>
+          </div>
+
+          {activeStep === "quick" ? (
+            <ol className="space-y-3 text-sm">
+              <li className="flex gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">1</span>
+                <div className="flex-1 space-y-2">
+                  <p>Open Ashby and make sure you're signed in.</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 h-7 text-xs"
+                    onClick={() => window.open("https://app.ashbyhq.com/", "_blank", "noopener")}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Open Ashby
+                  </Button>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">2</span>
+                <div className="flex-1 space-y-2">
+                  <p>
+                    On the Ashby tab, open the browser Console:{" "}
+                    <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{devtoolsKey}</kbd>
+                    {os === "mac" ? "" : " then click the Console tab"}.
+                  </p>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">3</span>
+                <div className="flex-1 space-y-2">
+                  <p>Paste this snippet into the Console and press Enter — it copies your token to the clipboard:</p>
+                  <div className="relative">
+                    <pre className="overflow-x-auto rounded-md bg-muted p-2.5 pr-10 font-mono text-[11px] leading-relaxed">
+                      {CONSOLE_SNIPPET}
+                    </pre>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={copySnippet}
+                      className="absolute right-1 top-1 h-7 w-7 p-0"
+                      title="Copy snippet"
+                    >
+                      {snippetCopied ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-600" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">4</span>
+                <div className="flex-1">
+                  <p>Come back here and paste the token below.</p>
+                </div>
+              </li>
+            </ol>
+          ) : (
+            <ol className="list-decimal list-outside ml-5 space-y-1.5 text-xs text-muted-foreground">
+              <li>
+                Open <span className="font-medium text-foreground">app.ashbyhq.com</span> and sign in.
+              </li>
+              <li>
+                Open DevTools: <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{devtoolsKey}</kbd>
+                {os === "mac" ? "" : " (or Ctrl+Shift+I)"}.
+              </li>
+              <li>
+                Go to the <span className="font-medium text-foreground">Application</span> tab
+                {" "}(in Firefox: <span className="font-medium text-foreground">Storage</span>).
+              </li>
+              <li>
+                In the left sidebar, expand <span className="font-medium text-foreground">Cookies</span> → click{" "}
+                <span className="font-medium text-foreground">https://app.ashbyhq.com</span>.
+              </li>
+              <li>
+                Find the row named{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">ashby_session_token</code>,
+                double-click its <span className="font-medium text-foreground">Value</span>, and copy it.
+              </li>
+              <li>Paste below.</li>
+            </ol>
+          )}
+
+          {/* Token input */}
+          <div className="space-y-1.5">
+            <div className="relative">
+              <Textarea
+                placeholder="Paste your ashby_session_token value here..."
+                value={cookie}
+                onChange={(e) => handlePaste(e.target.value)}
+                rows={3}
+                className={cn(
+                  "font-mono text-xs pr-9",
+                  cookie && validation.valid && "border-emerald-500/60 focus-visible:ring-emerald-500/30",
+                  cookie && !validation.valid && "border-destructive/60 focus-visible:ring-destructive/30",
+                )}
+                disabled={loading}
+              />
+              {cookie && validation.valid && (
+                <Check className="absolute right-2 top-2 h-4 w-4 text-emerald-600" />
+              )}
+            </div>
+            {cookie && !validation.valid && validation.hint && (
+              <p className="text-xs text-destructive">{validation.hint}</p>
+            )}
+            {cookie && validation.valid && (
+              <p className="text-xs text-emerald-600">Looks good — ready to fetch.</p>
+            )}
+          </div>
+
+          {/* Privacy disclosure */}
+          <Collapsible>
+            <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+              <Shield className="h-3 w-3" />
+              Why do you need this?
+              <ChevronDown className="h-3 w-3" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-2 text-xs text-muted-foreground space-y-1">
+              <p>
+                Ashby has no per-user API key for external recruiters, so we use your session token to act on your behalf — only when you click Sync.
+              </p>
+              <p>
+                The token is stored in your browser's localStorage and is sent only to our extraction service to fetch your candidates. We don't share it, log it, or use it for anything else.
+              </p>
+            </CollapsibleContent>
+          </Collapsible>
+
           {loading && (
             <div className="space-y-3 py-1">
               <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-foreground">
@@ -313,8 +522,13 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
               </p>
             </div>
           )}
+
           <DialogFooter>
-            <Button onClick={handleDialogSubmit} disabled={loading} className="gap-2">
+            <Button
+              onClick={handleDialogSubmit}
+              disabled={loading || !validation.valid}
+              className="gap-2"
+            >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               {loading ? "Fetching..." : "Fetch Candidates"}
             </Button>
