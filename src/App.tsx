@@ -24,6 +24,14 @@ const App = () => (
           <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route
+              path="/onboarding"
+              element={
+                <ProtectedRoute>
+                  <Onboarding />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/google-calendar/callback"
               element={
                 <ProtectedRoute>
