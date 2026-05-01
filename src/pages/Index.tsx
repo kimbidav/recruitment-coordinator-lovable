@@ -173,10 +173,21 @@ const Index = () => {
     [mergedCandidates],
   );
 
-  const stages = useMemo(
-    () => [...new Set(mergedCandidates.map((c) => c.pipeline_stage))].sort(),
-    [mergedCandidates],
-  );
+  // Collapse granular pipeline stages into two buckets the user cares about:
+  // "In Process" (still active) vs "Closed" (rejected / withdrawn / not in process / hired).
+  const stageBucket = (c: Candidate): "In Process" | "Closed" => {
+    const decision = (c.decision_status || "").toLowerCase();
+    const stage = (c.pipeline_stage || "").toLowerCase();
+    const closedDecision = ["rejected", "withdrawn", "archived", "hired", "closed"].some((k) =>
+      decision.includes(k),
+    );
+    const closedStage = ["disqualified", "not in process", "rejected", "withdrawn", "hired", "archived"].some(
+      (k) => stage.includes(k),
+    );
+    return closedDecision || closedStage ? "Closed" : "In Process";
+  };
+
+  const stages = useMemo(() => ["In Process", "Closed"], []);
 
   const statuses = useMemo(
     () => [...new Set(mergedCandidates.map((c) => c.decision_status))].sort(),
@@ -205,7 +216,7 @@ const Index = () => {
       const matchesCompany =
         companyFilter.length === 0 || companyFilter.includes(candidate.company_name);
       const matchesStage =
-        stageFilter.length === 0 || stageFilter.includes(candidate.pipeline_stage);
+        stageFilter.length === 0 || stageFilter.includes(stageBucket(candidate));
       const matchesStatus =
         statusFilter.length === 0 || statusFilter.includes(candidate.decision_status);
       const matchesSubmitter =
