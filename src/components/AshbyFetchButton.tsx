@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2, RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,6 +18,8 @@ import {
   setStoredAshbyCookie,
   clearStoredAshbyCookie,
 } from "@/lib/ashbyCookie";
+import { createFetchJob, updateFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
+import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 const PROGRESS_STEPS = [
