@@ -37,6 +37,16 @@ export default function SlackCallback() {
         return;
       }
       toast.success(`Slack connected${data?.team_name ? ` (${data.team_name})` : ""}`);
+      // If opened in a popup/new tab from the dashboard, notify the opener and close.
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage({ type: "slack-connected" }, window.location.origin);
+        } catch {
+          // ignore cross-origin issues
+        }
+        window.close();
+        return;
+      }
       navigate("/?slack=connected", { replace: true });
     })();
   }, [params, navigate]);
