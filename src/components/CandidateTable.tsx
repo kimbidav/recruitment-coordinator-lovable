@@ -217,6 +217,9 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                     <span className="font-medium">{candidate.company_name}</span>
                   </TableCell>
                   <TableCell>
+                    <SourcePill source={candidate.source} hasSlack={!!candidate.slack_meta} />
+                  </TableCell>
+                  <TableCell>
                     <span className="text-sm">{candidate.job_title}</span>
                   </TableCell>
                   <TableCell>
