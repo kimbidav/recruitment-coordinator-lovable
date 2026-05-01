@@ -51,6 +51,9 @@ export interface Candidate {
   interview_history_summary?: string;
   interview_events?: InterviewEvent[];
   slack_meta?: SlackMeta;
+  /** True if the user closed this candidate locally from the dashboard. */
+  closed_locally?: boolean;
+  closed_at?: string;
 }
 
 // Empty by default - data is loaded from Ashby fetch / CSV uploads
