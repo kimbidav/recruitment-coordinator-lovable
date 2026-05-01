@@ -58,7 +58,7 @@ export function usePipelineSession() {
             start_time: ev.start_time,
             end_time: ev.end_time ?? undefined,
             interviewers: Array.isArray(ev.interviewers)
-              ? (ev.interviewers as InterviewEvent["interviewers"])
+              ? (ev.interviewers as unknown as InterviewEvent["interviewers"])
               : [],
           });
           eventsByCandidate.set(ev.candidate_row_id, list);
@@ -169,7 +169,8 @@ export function usePipelineSession() {
           interview_title: string;
           start_time: string;
           end_time: string | null;
-          interviewers: unknown;
+          // Stored as jsonb on the DB side.
+          interviewers: unknown[] | Record<string, unknown>;
         }> = [];
 
         for (const c of newCandidates) {
