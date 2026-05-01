@@ -366,6 +366,33 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                             )}
                           </p>
                         )}
+                        {candidate.slack_meta && (
+                          <div className="text-sm bg-card p-3 rounded-md border border-border space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400">
+                                Slack
+                              </span>
+                              <span className="text-muted-foreground">
+                                {SLACK_STATUS_LABEL[candidate.slack_meta.status as SlackStatus] ?? candidate.slack_meta.status}
+                                {" · submitted "}
+                                {formatDate(candidate.slack_meta.submitted_at)}
+                              </span>
+                            </div>
+                            {candidate.slack_meta.linkedin_url && (
+                              <a
+                                href={candidate.slack_meta.linkedin_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary underline text-xs break-all"
+                              >
+                                {candidate.slack_meta.linkedin_url}
+                              </a>
+                            )}
+                            {candidate.slack_meta.needs_review && (
+                              <p className="text-xs text-status-warning">Needs review — name couldn't be auto-extracted</p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
