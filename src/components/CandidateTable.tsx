@@ -127,6 +127,7 @@ export function CandidateTable({ candidates }: CandidateTableProps) {
                 <SortIcon field="company_name" />
               </div>
             </TableHead>
+            <TableHead>Source</TableHead>
             <TableHead
               className="cursor-pointer hover:bg-muted/50 transition-colors"
               onClick={() => handleSort("job_title")}
