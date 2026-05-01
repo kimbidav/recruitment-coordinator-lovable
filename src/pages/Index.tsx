@@ -21,7 +21,7 @@ import {
 } from "@/lib/slackParse";
 
 const Index = () => {
-  const { candidates, lastUpdated, isLoading, saveSession } = usePipelineSession();
+  const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
   const [search, setSearch] = useState("");
@@ -30,6 +30,8 @@ const Index = () => {
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [submitterFilter, setSubmitterFilter] = useState<string[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [slackThreadFor, setSlackThreadFor] = useState<Candidate | null>(null);
+  const [emailFor, setEmailFor] = useState<Candidate | null>(null);
 
   const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
     saveSession(uploadedCandidates);
