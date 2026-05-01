@@ -14,6 +14,15 @@ export interface InterviewEvent {
   interviewers?: InterviewInterviewer[];
 }
 
+export interface SlackMeta {
+  status: string; // submitted | accepted | not_in_process | disqualified
+  submitted_at: string;
+  channel_id: string;
+  message_ts: string;
+  linkedin_url: string | null;
+  needs_review: boolean;
+}
+
 export interface Candidate {
   company_name: string;
   job_title: string;
@@ -30,7 +39,7 @@ export interface Candidate {
   days_in_stage: number;
   needs_scheduling: boolean;
   credited_to: string;
-  source: string;
+  source: string; // "ashby" | "slack" | "both"
   feedback_count: number;
   // Ashby returns this as a string label (e.g. "Strong Hire") — not numeric.
   latest_recommendation?: string;
@@ -41,6 +50,7 @@ export interface Candidate {
   current_stage_date?: string;
   interview_history_summary?: string;
   interview_events?: InterviewEvent[];
+  slack_meta?: SlackMeta;
 }
 
 // Empty by default - data is loaded from Ashby fetch / CSV uploads

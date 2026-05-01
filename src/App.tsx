@@ -8,6 +8,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import GoogleCalendarCallback from "./pages/GoogleCalendarCallback";
+import SlackCallback from "./pages/SlackCallback";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,6 +27,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <GoogleCalendarCallback />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/slack/callback"
+              element={
+                <ProtectedRoute>
+                  <SlackCallback />
                 </ProtectedRoute>
               }
             />
