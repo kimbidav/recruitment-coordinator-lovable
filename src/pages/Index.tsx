@@ -216,7 +216,7 @@ const Index = () => {
       const matchesCompany =
         companyFilter.length === 0 || companyFilter.includes(candidate.company_name);
       const matchesStage =
-        stageFilter.length === 0 || stageFilter.includes(candidate.pipeline_stage);
+        stageFilter.length === 0 || stageFilter.includes(stageBucket(candidate));
       const matchesStatus =
         statusFilter.length === 0 || statusFilter.includes(candidate.decision_status);
       const matchesSubmitter =
