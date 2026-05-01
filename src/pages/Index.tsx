@@ -376,7 +376,17 @@ const Index = () => {
             </p>
 
             {/* Table */}
-            <CandidateTable candidates={filteredCandidates} />
+            <CandidateTable
+              candidates={filteredCandidates}
+              onFilterByCandidate={(name) => {
+                setSearch(name);
+                setCompanyFilter([]);
+                setStageFilter([]);
+                setStatusFilter([]);
+                setSubmitterFilter([]);
+                setSourceFilter([]);
+              }}
+            />
           </>
         )}
       </main>
