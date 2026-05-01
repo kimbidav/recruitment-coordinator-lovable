@@ -68,6 +68,16 @@ export function CandidateTable({ candidates, onFilterByCandidate }: CandidateTab
     setExpandedRows(newExpanded);
   };
 
+  // Build a lookup from candidate_name -> first available LinkedIn URL across all rows for that person.
+  const linkedinByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of candidates) {
+      const url = c.slack_meta?.linkedin_url;
+      if (url && !map.has(c.candidate_name)) map.set(c.candidate_name, url);
+    }
+    return map;
+  }, [candidates]);
+
   const sortedCandidates = useMemo(() => {
     return [...candidates].sort((a, b) => {
       let aVal: string | number;
