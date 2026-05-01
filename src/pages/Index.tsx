@@ -8,66 +8,169 @@ import { CsvUpload } from "@/components/CsvUpload";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
+import { SlackConnectButton } from "@/components/SlackConnectButton";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
+import { useSlackSubmissions } from "@/hooks/useSlackSubmissions";
 import { useAuth } from "@/contexts/AuthContext";
 import { Users, Loader2, Clock, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  candidateMatchKey,
+  slackStatusToDecision,
+  slackStatusToPipelineStage,
+} from "@/lib/slackParse";
 
 const Index = () => {
   const { candidates, lastUpdated, isLoading, saveSession } = usePipelineSession();
+  const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [submitterFilter, setSubmitterFilter] = useState<string[]>([]);
+  const [sourceFilter, setSourceFilter] = useState<string[]>([]);
 
   const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
     saveSession(uploadedCandidates);
-    // Reset filters when new data is loaded
     setCompanyFilter([]);
     setStageFilter([]);
     setStatusFilter([]);
     setSubmitterFilter([]);
+    setSourceFilter([]);
     setSearch("");
   };
 
-  const companies = useMemo(() =>
-    [...new Set(candidates.map(c => c.company_name))].sort(),
-    [candidates]
-  );
-  
-  const stages = useMemo(() => 
-    [...new Set(candidates.map(c => c.pipeline_stage))].sort(),
-    [candidates]
-  );
-  
-  const statuses = useMemo(() => 
-    [...new Set(candidates.map(c => c.decision_status))].sort(),
-    [candidates]
+  // Merge Ashby candidates with Slack submissions.
+  // Match key = normalized(client_name) + normalized(candidate_name).
+  // - Ashby + Slack match -> single Ashby row, slack_meta attached, source="both"
+  // - Ashby only -> source="ashby"
+  // - Slack only -> synthesize a Candidate row, source="slack"
+  const mergedCandidates = useMemo<Candidate[]>(() => {
+    const userLabel = user?.email ?? "Me";
+    const ashbyByKey = new Map<string, Candidate>();
+    for (const c of candidates) {
+      ashbyByKey.set(candidateMatchKey(c.company_name, c.candidate_name), c);
+    }
+
+    const matchedSlackKeys = new Set<string>();
+    const enriched: Candidate[] = candidates.map((c) => {
+      const key = candidateMatchKey(c.company_name, c.candidate_name);
+      const slack = slackSubs.find(
+        (s) => candidateMatchKey(s.client_name, s.candidate_name) === key,
+      );
+      if (slack) {
+        matchedSlackKeys.add(key);
+        return {
+          ...c,
+          source: "both",
+          slack_meta: {
+            status: slack.status,
+            submitted_at: slack.submitted_at,
+            channel_id: slack.channel_id,
+            message_ts: slack.message_ts,
+            linkedin_url: slack.linkedin_url,
+            needs_review: slack.needs_review,
+          },
+        };
+      }
+      return { ...c, source: c.source || "ashby" };
+    });
+
+    const slackOnly: Candidate[] = slackSubs
+      .filter((s) => {
+        const k = candidateMatchKey(s.client_name, s.candidate_name);
+        return !matchedSlackKeys.has(k) && !ashbyByKey.has(k);
+      })
+      .map((s) => ({
+        company_name: s.client_name,
+        job_title: "—",
+        job_id: `slack:${s.channel_id}`,
+        candidate_name: s.candidate_name || "(name needs review)",
+        candidate_id: `slack:${s.channel_id}:${s.message_ts}`,
+        pipeline_stage: slackStatusToPipelineStage(s.status),
+        decision_status: slackStatusToDecision(s.status),
+        stage_type: "",
+        current_stage_index: s.status === "accepted" ? 1 : 0,
+        total_stages: 1,
+        stage_progress: s.status === "accepted" ? "1/1" : "0/1",
+        last_activity_at: s.submitted_at,
+        days_in_stage: Math.max(
+          0,
+          Math.floor((Date.now() - new Date(s.submitted_at).getTime()) / 86_400_000),
+        ),
+        needs_scheduling: false,
+        credited_to: userLabel,
+        source: "slack",
+        feedback_count: 0,
+        slack_meta: {
+          status: s.status,
+          submitted_at: s.submitted_at,
+          channel_id: s.channel_id,
+          message_ts: s.message_ts,
+          linkedin_url: s.linkedin_url,
+          needs_review: s.needs_review,
+        },
+      }));
+
+    return [...enriched, ...slackOnly];
+  }, [candidates, slackSubs, user?.email]);
+
+  const companies = useMemo(
+    () => [...new Set(mergedCandidates.map((c) => c.company_name))].sort(),
+    [mergedCandidates],
   );
 
-  const submitters = useMemo(() => 
-    [...new Set(candidates.map(c => c.credited_to))].sort(),
-    [candidates]
+  const stages = useMemo(
+    () => [...new Set(mergedCandidates.map((c) => c.pipeline_stage))].sort(),
+    [mergedCandidates],
+  );
+
+  const statuses = useMemo(
+    () => [...new Set(mergedCandidates.map((c) => c.decision_status))].sort(),
+    [mergedCandidates],
+  );
+
+  const submitters = useMemo(
+    () => [...new Set(mergedCandidates.map((c) => c.credited_to))].sort(),
+    [mergedCandidates],
+  );
+
+  const sources = useMemo(
+    () => [...new Set(mergedCandidates.map((c) => c.source || "ashby"))].sort(),
+    [mergedCandidates],
   );
 
   const filteredCandidates = useMemo(() => {
-    return candidates.filter((candidate) => {
-      const matchesSearch = search === "" || 
+    return mergedCandidates.filter((candidate) => {
+      const matchesSearch =
+        search === "" ||
         candidate.candidate_name.toLowerCase().includes(search.toLowerCase()) ||
         candidate.company_name.toLowerCase().includes(search.toLowerCase()) ||
         candidate.job_title.toLowerCase().includes(search.toLowerCase()) ||
         candidate.credited_to.toLowerCase().includes(search.toLowerCase());
 
-      const matchesCompany = companyFilter.length === 0 || companyFilter.includes(candidate.company_name);
-      const matchesStage = stageFilter.length === 0 || stageFilter.includes(candidate.pipeline_stage);
-      const matchesStatus = statusFilter.length === 0 || statusFilter.includes(candidate.decision_status);
-      const matchesSubmitter = submitterFilter.length === 0 || submitterFilter.includes(candidate.credited_to);
+      const matchesCompany =
+        companyFilter.length === 0 || companyFilter.includes(candidate.company_name);
+      const matchesStage =
+        stageFilter.length === 0 || stageFilter.includes(candidate.pipeline_stage);
+      const matchesStatus =
+        statusFilter.length === 0 || statusFilter.includes(candidate.decision_status);
+      const matchesSubmitter =
+        submitterFilter.length === 0 || submitterFilter.includes(candidate.credited_to);
+      const matchesSource =
+        sourceFilter.length === 0 || sourceFilter.includes(candidate.source || "ashby");
 
-      return matchesSearch && matchesCompany && matchesStage && matchesStatus && matchesSubmitter;
+      return (
+        matchesSearch &&
+        matchesCompany &&
+        matchesStage &&
+        matchesStatus &&
+        matchesSubmitter &&
+        matchesSource
+      );
     });
-  }, [candidates, search, companyFilter, stageFilter, statusFilter, submitterFilter]);
+  }, [mergedCandidates, search, companyFilter, stageFilter, statusFilter, submitterFilter, sourceFilter]);
 
   if (isLoading) {
     return (
@@ -98,14 +201,16 @@ const Index = () => {
                   {lastUpdated && (
                     <span className="flex items-center gap-1 text-xs">
                       <Clock className="h-3 w-3" />
-                      Last imported: {new Date(lastUpdated).toLocaleDateString()} {new Date(lastUpdated).toLocaleTimeString()}
+                      Last imported: {new Date(lastUpdated).toLocaleDateString()}{" "}
+                      {new Date(lastUpdated).toLocaleTimeString()}
                     </span>
                   )}
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <GoogleCalendarSync candidates={filteredCandidates} />
+              <SlackConnectButton onSynced={reloadSlack} />
               <AshbyFetchButton onUpload={handleCsvUpload} />
               <CsvUpload onUpload={handleCsvUpload} />
               {user && (
@@ -127,22 +232,21 @@ const Index = () => {
 
       {/* Main Content */}
       <main className="container py-6 space-y-6">
-        {candidates.length === 0 ? (
+        {mergedCandidates.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="p-4 bg-muted rounded-full mb-4">
               <Users className="h-8 w-8 text-muted-foreground" />
             </div>
             <h2 className="text-xl font-semibold text-foreground mb-2">No candidates yet</h2>
             <p className="text-muted-foreground mb-6 max-w-md">
-              Upload a CSV file from your Ashby pipeline export to get started. 
-              Once uploaded, you'll get a shareable link.
+              Connect Ashby or Slack, or upload a CSV, to start populating your pipeline.
             </p>
             <CsvUpload onUpload={handleCsvUpload} />
           </div>
         ) : (
           <>
             {/* Stats */}
-            <DashboardStats candidates={candidates} />
+            <DashboardStats candidates={mergedCandidates} />
 
             {/* Filters */}
             <div className="flex flex-col sm:flex-row gap-3">
@@ -185,12 +289,27 @@ const Index = () => {
                   allLabel="All Statuses"
                   className="w-[180px]"
                 />
+                {sources.length > 1 && (
+                  <MultiSelectDropdown
+                    values={sourceFilter}
+                    onChange={setSourceFilter}
+                    options={sources}
+                    placeholder="Source"
+                    allLabel="All Sources"
+                    className="w-[140px]"
+                  />
+                )}
               </div>
             </div>
 
             {/* Results count */}
             <p className="text-sm text-muted-foreground">
-              Showing {filteredCandidates.length} of {candidates.length} candidates
+              Showing {filteredCandidates.length} of {mergedCandidates.length} candidates
+              {slackSubs.length > 0 && (
+                <span className="ml-2">
+                  · {slackSubs.length} from Slack
+                </span>
+              )}
             </p>
 
             {/* Table */}
