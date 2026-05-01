@@ -197,34 +197,7 @@ export function CandidateTable({
               </div>
             </TableHead>
             <TableHead>Status</TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("days_in_stage")}
-            >
-              <div className="flex items-center gap-1.5">
-                Days in Stage
-                <SortIcon field="days_in_stage" />
-              </div>
-            </TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("last_activity_at")}
-            >
-              <div className="flex items-center gap-1.5">
-                Last Activity
-                <SortIcon field="last_activity_at" />
-              </div>
-            </TableHead>
-            <TableHead
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => handleSort("feedback_count")}
-            >
-              <div className="flex items-center gap-1.5">
-                Feedback
-                <SortIcon field="feedback_count" />
-              </div>
-            </TableHead>
-            <TableHead>Actions</TableHead>
+            <TableHead className="sticky right-0 bg-card shadow-[-4px_0_8px_-4px_hsl(var(--border))]">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -306,37 +279,12 @@ export function CandidateTable({
                   <TableCell>
                     <StatusBadge status={candidate.decision_status} />
                   </TableCell>
-                  <TableCell>
-                    <span
-                      className={cn(
-                        "font-medium",
-                        candidate.days_in_stage > 30
-                          ? "text-status-warning"
-                          : "text-foreground"
-                      )}
-                    >
-                      {candidate.days_in_stage}d
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDate(candidate.last_activity_at)}
-                  </TableCell>
-                  <TableCell>
-                    {candidate.feedback_count > 0 ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-medium">{candidate.feedback_count}</span>
-                        {candidate.latest_recommendation && (
-                          <span className="text-xs text-muted-foreground">
-                            (avg: {candidate.latest_recommendation})
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
+                  <TableCell
+                    onClick={(e) => e.stopPropagation()}
+                    className="sticky right-0 bg-card shadow-[-4px_0_8px_-4px_hsl(var(--border))]"
+                  >
                     <div className="flex items-center gap-2 text-sm">
+
                       {candidate.slack_meta && onOpenSlackThread && (
                         <button
                           type="button"
@@ -379,7 +327,7 @@ export function CandidateTable({
                 </TableRow>
                 {isExpanded && (
                   <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
-                    <TableCell colSpan={12} className="p-4">
+                    <TableCell colSpan={9} className="p-4">
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-sm font-semibold text-foreground mb-2">
