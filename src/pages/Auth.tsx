@@ -7,24 +7,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Loader2, Users } from "lucide-react";
 
 const PENDING_CALENDAR_KEY = "pendingCalendarConnect";
+const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 const Auth = () => {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [showEmail, setShowEmail] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [connectCalendar, setConnectCalendar] = useState(true);
 
   useEffect(() => {
-    document.title = mode === "signup" ? "Sign up — Candidate Pipeline" : "Sign in — Candidate Pipeline";
-  }, [mode]);
+    document.title = "Sign in — Candidate Pipeline";
+  }, []);
 
   if (loading) {
     return (
@@ -39,6 +39,8 @@ const Auth = () => {
     e.preventDefault();
     setBusy(true);
     try {
+      // Email-path users still get steered through onboarding.
+      sessionStorage.setItem(PENDING_ONBOARDING_KEY, "1");
       if (mode === "signup") {
         const { error } = await supabase.auth.signUp({
           email,
@@ -62,12 +64,10 @@ const Auth = () => {
   const handleGoogle = async () => {
     setBusy(true);
     try {
-      // Carry the user's preference through the OAuth round-trip.
-      if (connectCalendar) {
-        sessionStorage.setItem(PENDING_CALENDAR_KEY, "1");
-      } else {
-        sessionStorage.removeItem(PENDING_CALENDAR_KEY);
-      }
+      // Always trigger the Calendar/Gmail consent right after sign-in so
+      // the user only goes through one Google round-trip.
+      sessionStorage.setItem(PENDING_CALENDAR_KEY, "1");
+      sessionStorage.setItem(PENDING_ONBOARDING_KEY, "1");
       const result = await lovable.auth.signInWithOAuth("google", {
         redirect_uri: window.location.origin,
       });
@@ -91,77 +91,89 @@ const Auth = () => {
           <div className="p-2 bg-primary rounded-lg">
             <Users className="h-5 w-5 text-primary-foreground" />
           </div>
-          <h1 className="text-2xl font-semibold">Candidate Pipeline</h1>
+          <h1 className="text-2xl font-semibold">Welcome</h1>
           <p className="text-sm text-muted-foreground">
-            {mode === "signin" ? "Sign in to your account" : "Create your account"}
+            Sign in with Google to get started in under a minute.
           </p>
         </div>
 
         <div className="space-y-3">
-          <Button variant="outline" className="w-full" onClick={handleGoogle} disabled={busy}>
+          <Button
+            className="w-full h-11 text-sm font-medium"
+            onClick={handleGoogle}
+            disabled={busy}
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
             Continue with Google
           </Button>
-          <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-            <Checkbox
-              checked={connectCalendar}
-              onCheckedChange={(v) => setConnectCalendar(v === true)}
-              className="mt-0.5"
-            />
-            <span>
-              Also connect Google Calendar so I can sync upcoming interviews. You'll be asked once after signing in.
-            </span>
-          </label>
+          <p className="text-xs text-muted-foreground text-center">
+            One sign-in covers your account, Calendar, and Gmail.
+          </p>
         </div>
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-border" />
+        {!showEmail ? (
+          <div className="text-center">
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground underline-offset-4 hover:underline"
+              onClick={() => setShowEmail(true)}
+            >
+              Use email instead
+            </button>
           </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-card px-2 text-muted-foreground">Or</span>
-          </div>
-        </div>
+        ) : (
+          <>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-card px-2 text-muted-foreground">Or</span>
+              </div>
+            </div>
 
-        <form onSubmit={handleEmail} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              autoComplete={mode === "signup" ? "new-password" : "current-password"}
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-          <Button type="submit" className="w-full" disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-            {mode === "signup" ? "Create account" : "Sign in"}
-          </Button>
-        </form>
+            <form onSubmit={handleEmail} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  required
+                  minLength={6}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              <Button type="submit" variant="outline" className="w-full" disabled={busy}>
+                {busy && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                {mode === "signup" ? "Create account" : "Sign in"}
+              </Button>
+            </form>
 
-        <p className="text-sm text-center text-muted-foreground">
-          {mode === "signin" ? "Don't have an account?" : "Already have an account?"}{" "}
-          <button
-            type="button"
-            className="text-primary hover:underline"
-            onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
-          >
-            {mode === "signin" ? "Sign up" : "Sign in"}
-          </button>
-        </p>
+            <p className="text-sm text-center text-muted-foreground">
+              {mode === "signin" ? "Don't have an account?" : "Already have an account?"}{" "}
+              <button
+                type="button"
+                className="text-primary hover:underline"
+                onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
+              >
+                {mode === "signin" ? "Sign up" : "Sign in"}
+              </button>
+            </p>
+          </>
+        )}
       </Card>
     </div>
   );

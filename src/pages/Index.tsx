@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { Candidate } from "@/data/candidates";
 import { CandidateTable } from "@/components/CandidateTable";
 import { DashboardStats } from "@/components/DashboardStats";
@@ -15,8 +16,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
 import { useSlackSubmissions } from "@/hooks/useSlackSubmissions";
+import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
 import { useAuth } from "@/contexts/AuthContext";
-import { Users, Loader2, Clock, LogOut } from "lucide-react";
+import { Users, Loader2, Clock, LogOut, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   candidateMatchKey,
@@ -24,10 +26,29 @@ import {
   slackStatusToPipelineStage,
 } from "@/lib/slackParse";
 
+const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
+const PENDING_ONBOARDING_KEY = "pendingOnboarding";
+
 const Index = () => {
   const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
+  const onboarding = useOnboardingStatus();
+
+  // First-run redirect: brand-new users land on /onboarding instead of an
+  // empty dashboard. Honors a "skip for now" dismissal.
+  useEffect(() => {
+    if (onboarding.loading) return;
+    const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
+    const pending = sessionStorage.getItem(PENDING_ONBOARDING_KEY) === "1";
+    const allConnected =
+      onboarding.googleConnected && onboarding.slackConnected && onboarding.ashbyConnected;
+    const isFirstRun =
+      pending ||
+      (!dismissed && !allConnected && !onboarding.hasCandidates);
+    if (isFirstRun) navigate("/onboarding", { replace: true });
+  }, [onboarding.loading, onboarding.googleConnected, onboarding.slackConnected, onboarding.ashbyConnected, onboarding.hasCandidates, navigate]);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
@@ -309,9 +330,15 @@ const Index = () => {
             </div>
             <h2 className="text-xl font-semibold text-foreground mb-2">No candidates yet</h2>
             <p className="text-muted-foreground mb-6 max-w-md">
-              Connect Ashby or Slack, or upload a CSV, to start populating your pipeline.
+              Finish connecting Ashby and Slack to start populating your pipeline — or upload a CSV.
             </p>
-            <CsvUpload onUpload={handleCsvUpload} />
+            <div className="flex items-center gap-3">
+              <Button onClick={() => navigate("/onboarding")} className="gap-2">
+                <Sparkles className="h-4 w-4" />
+                Finish setup
+              </Button>
+              <CsvUpload onUpload={handleCsvUpload} />
+            </div>
           </div>
         ) : (
           <>
