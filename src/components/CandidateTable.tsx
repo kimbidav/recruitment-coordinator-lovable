@@ -335,10 +335,51 @@ export function CandidateTable({
                       <span className="text-muted-foreground">—</span>
                     )}
                   </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2 text-sm">
+                      {candidate.slack_meta && onOpenSlackThread && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenSlackThread(candidate)}
+                          className="text-muted-foreground hover:text-primary transition-colors inline-flex items-center gap-1"
+                          title="Open Slack thread"
+                        >
+                          <MessagesSquare className="h-3.5 w-3.5" />
+                          Thread
+                        </button>
+                      )}
+                      {onOpenEmail && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenEmail(candidate)}
+                          className="text-foreground hover:text-primary transition-colors inline-flex items-center gap-1"
+                          title="Compose email"
+                        >
+                          <Mail className="h-3.5 w-3.5" />
+                          Email
+                        </button>
+                      )}
+                      {onCloseCandidate && !candidate.closed_locally && (
+                        <button
+                          type="button"
+                          onClick={() => onCloseCandidate(candidate)}
+                          className="text-muted-foreground hover:text-destructive transition-colors"
+                          title="Close out this candidate (adds ⛔ in Slack)"
+                        >
+                          <Ban className="h-4 w-4" />
+                        </button>
+                      )}
+                      {candidate.closed_locally && (
+                        <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+                          <Ban className="h-3.5 w-3.5" /> closed
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
                 </TableRow>
                 {isExpanded && (
                   <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
-                    <TableCell colSpan={11} className="p-4">
+                    <TableCell colSpan={12} className="p-4">
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-sm font-semibold text-foreground mb-2">
