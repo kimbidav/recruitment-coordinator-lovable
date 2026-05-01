@@ -255,9 +255,6 @@ export function CandidateTable({
                     <SourcePill source={candidate.source} hasSlack={!!candidate.slack_meta} />
                   </TableCell>
                   <TableCell>
-                    <span className="text-sm">{candidate.job_title}</span>
-                  </TableCell>
-                  <TableCell>
                     <StageBadge stage={candidate.pipeline_stage} />
                   </TableCell>
                   <TableCell>
