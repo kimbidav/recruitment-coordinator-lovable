@@ -5,10 +5,10 @@ import {
   RefreshCw,
   AlertTriangle,
   ExternalLink,
-  Copy,
   Check,
   Shield,
   ChevronDown,
+  PlayCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
