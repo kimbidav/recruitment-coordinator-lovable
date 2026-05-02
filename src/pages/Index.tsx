@@ -133,37 +133,53 @@ const Index = () => {
       ashbyByKey.set(candidateMatchKey(c.company_name, c.candidate_name), c);
     }
 
-    // Build a candidate-name-only index for fallback matching when the
-    // company/client name doesn't line up between Ashby and Slack (common
-    // when the Slack channel name differs from the Ashby company name).
-    const slackByCandidateName = new Map<string, typeof slackSubs[number]>();
+    // Lenient company key: lowercase, strip diacritics + non-alphanumerics,
+    // drop common corporate suffixes ("inc", "llc", "co", "labs", "ai", "io",
+    // "hq", "the"). This lets "Listen Labs" match Slack's "listen-labs" or
+    // "listenlabs" while still keeping different companies separate.
+    const COMPANY_NOISE = new Set([
+      "inc", "llc", "ltd", "co", "corp", "company",
+      "labs", "lab", "ai", "io", "hq", "the", "a",
+    ]);
+    const companyKey = (s: string): string => {
+      const tokens = (s || "")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean)
+        .filter((t) => !COMPANY_NOISE.has(t));
+      return tokens.join("");
+    };
+
+    // Build candidate-name -> [slack rows] index, then match Ashby rows that
+    // share both the candidate name AND a fuzzy company-key match. We do NOT
+    // attach Slack threads across companies — a candidate may be in multiple
+    // pipelines and each row should only show its own thread.
+    const slackByCandidateName = new Map<string, typeof slackSubs>();
     for (const s of slackSubs) {
       const nameKey = normalizeMatchKey(s.candidate_name || "");
       if (!nameKey) continue;
-      // Prefer the most recent submission per candidate name.
-      const existing = slackByCandidateName.get(nameKey);
-      if (
-        !existing ||
-        new Date(s.submitted_at).getTime() > new Date(existing.submitted_at).getTime()
-      ) {
-        slackByCandidateName.set(nameKey, s);
-      }
+      const arr = slackByCandidateName.get(nameKey) ?? [];
+      arr.push(s);
+      slackByCandidateName.set(nameKey, arr);
     }
 
-    const matchedSlackKeys = new Set<string>();
+    const matchedSlackIds = new Set<string>();
     const enriched: Candidate[] = candidates.map((c) => {
-      const key = candidateMatchKey(c.company_name, c.candidate_name);
-      let slack = slackSubs.find(
-        (s) => candidateMatchKey(s.client_name, s.candidate_name) === key,
-      );
-      // Fallback: match by candidate name only when company doesn't line up.
-      if (!slack) {
-        slack = slackByCandidateName.get(normalizeMatchKey(c.candidate_name));
-      }
-      if (slack) {
-        matchedSlackKeys.add(
-          candidateMatchKey(slack.client_name, slack.candidate_name),
+      const candidates_for_name =
+        slackByCandidateName.get(normalizeMatchKey(c.candidate_name)) ?? [];
+      const ashbyCompanyKey = companyKey(c.company_name);
+      // Pick the most recent Slack submission whose company key matches.
+      const matches = candidates_for_name
+        .filter((s) => companyKey(s.client_name) === ashbyCompanyKey)
+        .sort(
+          (a, b) =>
+            new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime(),
         );
+      const slack = matches[0];
+      if (slack) {
+        matchedSlackIds.add(slack.id);
         return {
           ...c,
           source: "both",
