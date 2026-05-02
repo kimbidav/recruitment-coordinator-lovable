@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Mail, Search, Send, Loader2 } from "lucide-react";
+import { Mail, Search, Send, Loader2, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Candidate } from "@/data/candidates";
@@ -68,6 +68,8 @@ export function EmailComposer({
   const [body, setBody] = useState(draft.body);
   const [sending, setSending] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [needsReconnect, setNeedsReconnect] = useState<null | "google_not_connected" | "gmail_scope_missing">(null);
   const [suggestions, setSuggestions] = useState<{ email: string; count: number }[]>([]);
 
   // Reset content when reopened for a different candidate.
@@ -77,8 +79,26 @@ export function EmailComposer({
       setSubject(draft.subject);
       setBody(draft.body);
       setSuggestions([]);
+      setNeedsReconnect(null);
     }
   }, [open, draft.subject, draft.body]);
+
+  const handleReconnectGoogle = async () => {
+    setReconnecting(true);
+    try {
+      const redirectUri = `${window.location.origin}/google-calendar/callback`;
+      const { data, error } = await supabase.functions.invoke("google-calendar-connect", {
+        body: { redirect_uri: redirectUri },
+      });
+      if (error || !data?.url) {
+        toast.error(`Failed to start Google reconnect: ${error?.message || data?.error || "no url"}`);
+        return;
+      }
+      window.location.href = data.url;
+    } finally {
+      setReconnecting(false);
+    }
+  };
 
   const parseFnError = async (
     error: unknown,
@@ -115,9 +135,13 @@ export function EmailComposer({
       });
       if (error || data?.error) {
         const { message, code } = await parseFnError(error, data ?? null);
+        if (code === "google_not_connected" || code === "gmail_scope_missing") {
+          setNeedsReconnect(code);
+        }
         toast.error(friendlyMessage(message, code));
         return;
       }
+      setNeedsReconnect(null);
       const results = (data.results ?? []) as { email: string; count: number }[];
       setSuggestions(results);
       if (results.length === 0) {
@@ -146,9 +170,13 @@ export function EmailComposer({
       });
       if (error || data?.error) {
         const { message, code } = await parseFnError(error, data ?? null);
+        if (code === "google_not_connected" || code === "gmail_scope_missing") {
+          setNeedsReconnect(code);
+        }
         toast.error(friendlyMessage(message, code));
         return;
       }
+      setNeedsReconnect(null);
       toast.success(`Email sent from ${data.from ?? "your Gmail"}`);
       onOpenChange(false);
     } catch (e) {
@@ -173,6 +201,32 @@ export function EmailComposer({
         </DialogHeader>
 
         <div className="space-y-4">
+          {needsReconnect && (
+            <div className="flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-2 min-w-0">
+                <p className="text-sm text-foreground">
+                  {needsReconnect === "google_not_connected"
+                    ? "Google isn't connected yet. Reconnect to enable Gmail lookup and sending."
+                    : "Gmail access is missing from your Google connection. Reconnect to grant Gmail permissions."}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleReconnectGoogle()}
+                  disabled={reconnecting}
+                  className="gap-2"
+                >
+                  {reconnecting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Mail className="h-3.5 w-3.5" />
+                  )}
+                  Reconnect Google
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="email-to">To</Label>
             <div className="flex gap-2">

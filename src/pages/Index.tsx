@@ -22,6 +22,7 @@ import { Users, Loader2, Clock, LogOut, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   candidateMatchKey,
+  normalizeMatchKey,
   slackStatusToDecision,
   slackStatusToPipelineStage,
 } from "@/lib/slackParse";
@@ -132,14 +133,37 @@ const Index = () => {
       ashbyByKey.set(candidateMatchKey(c.company_name, c.candidate_name), c);
     }
 
+    // Build a candidate-name-only index for fallback matching when the
+    // company/client name doesn't line up between Ashby and Slack (common
+    // when the Slack channel name differs from the Ashby company name).
+    const slackByCandidateName = new Map<string, typeof slackSubs[number]>();
+    for (const s of slackSubs) {
+      const nameKey = normalizeMatchKey(s.candidate_name || "");
+      if (!nameKey) continue;
+      // Prefer the most recent submission per candidate name.
+      const existing = slackByCandidateName.get(nameKey);
+      if (
+        !existing ||
+        new Date(s.submitted_at).getTime() > new Date(existing.submitted_at).getTime()
+      ) {
+        slackByCandidateName.set(nameKey, s);
+      }
+    }
+
     const matchedSlackKeys = new Set<string>();
     const enriched: Candidate[] = candidates.map((c) => {
       const key = candidateMatchKey(c.company_name, c.candidate_name);
-      const slack = slackSubs.find(
+      let slack = slackSubs.find(
         (s) => candidateMatchKey(s.client_name, s.candidate_name) === key,
       );
+      // Fallback: match by candidate name only when company doesn't line up.
+      if (!slack) {
+        slack = slackByCandidateName.get(normalizeMatchKey(c.candidate_name));
+      }
       if (slack) {
-        matchedSlackKeys.add(key);
+        matchedSlackKeys.add(
+          candidateMatchKey(slack.client_name, slack.candidate_name),
+        );
         return {
           ...c,
           source: "both",
@@ -413,12 +437,8 @@ const Index = () => {
             <CandidateTable
               candidates={filteredCandidates}
               onFilterByCandidate={(name) => {
+                // Preserve other filters; just narrow by candidate name.
                 setSearch(name);
-                setCompanyFilter([]);
-                setStageFilter([]);
-                setStatusFilter([]);
-                setSubmitterFilter([]);
-                setSourceFilter([]);
               }}
               onOpenSlackThread={(c) => setSlackThreadFor(c)}
               onOpenEmail={(c) => setEmailFor(c)}
