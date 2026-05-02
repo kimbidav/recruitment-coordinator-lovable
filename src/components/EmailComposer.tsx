@@ -68,6 +68,8 @@ export function EmailComposer({
   const [body, setBody] = useState(draft.body);
   const [sending, setSending] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [needsReconnect, setNeedsReconnect] = useState<null | "google_not_connected" | "gmail_scope_missing">(null);
   const [suggestions, setSuggestions] = useState<{ email: string; count: number }[]>([]);
 
   // Reset content when reopened for a different candidate.
@@ -77,8 +79,26 @@ export function EmailComposer({
       setSubject(draft.subject);
       setBody(draft.body);
       setSuggestions([]);
+      setNeedsReconnect(null);
     }
   }, [open, draft.subject, draft.body]);
+
+  const handleReconnectGoogle = async () => {
+    setReconnecting(true);
+    try {
+      const redirectUri = `${window.location.origin}/google-calendar/callback`;
+      const { data, error } = await supabase.functions.invoke("google-calendar-connect", {
+        body: { redirect_uri: redirectUri },
+      });
+      if (error || !data?.url) {
+        toast.error(`Failed to start Google reconnect: ${error?.message || data?.error || "no url"}`);
+        return;
+      }
+      window.location.href = data.url;
+    } finally {
+      setReconnecting(false);
+    }
+  };
 
   const parseFnError = async (
     error: unknown,
