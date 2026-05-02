@@ -413,12 +413,8 @@ const Index = () => {
             <CandidateTable
               candidates={filteredCandidates}
               onFilterByCandidate={(name) => {
+                // Preserve other filters; just narrow by candidate name.
                 setSearch(name);
-                setCompanyFilter([]);
-                setStageFilter([]);
-                setStatusFilter([]);
-                setSubmitterFilter([]);
-                setSourceFilter([]);
               }}
               onOpenSlackThread={(c) => setSlackThreadFor(c)}
               onOpenEmail={(c) => setEmailFor(c)}
