@@ -140,7 +140,7 @@ function validateToken(v: string): { valid: boolean; hint: string | null } {
   return { valid: true, hint: null };
 }
 
-const CONSOLE_SNIPPET = `copy(document.cookie.split('; ').find(r => r.startsWith('ashby_session_token='))?.split('=')[1])`;
+const LOOM_WALKTHROUGH_URL = "https://www.loom.com/share/3423bbe88fdd4ad4819ce24afda058b1";
 
 function detectOS(): "mac" | "win" {
   if (typeof navigator === "undefined") return "mac";
