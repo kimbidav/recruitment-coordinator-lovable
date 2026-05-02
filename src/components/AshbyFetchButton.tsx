@@ -5,10 +5,10 @@ import {
   RefreshCw,
   AlertTriangle,
   ExternalLink,
-  Copy,
   Check,
   Shield,
   ChevronDown,
+  PlayCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -140,7 +140,7 @@ function validateToken(v: string): { valid: boolean; hint: string | null } {
   return { valid: true, hint: null };
 }
 
-const CONSOLE_SNIPPET = `copy(document.cookie.split('; ').find(r => r.startsWith('ashby_session_token='))?.split('=')[1])`;
+const LOOM_WALKTHROUGH_URL = "https://www.loom.com/share/3423bbe88fdd4ad4819ce24afda058b1";
 
 function detectOS(): "mac" | "win" {
   if (typeof navigator === "undefined") return "mac";
@@ -154,8 +154,6 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
   const [staleJobNotified, setStaleJobNotified] = useState(false);
-  const [snippetCopied, setSnippetCopied] = useState(false);
-  const [activeStep, setActiveStep] = useState<"quick" | "manual">("quick");
   const { progress, label, complete } = useSimulatedProgress(loading);
   const os = useMemo(detectOS, []);
   const devtoolsKey = os === "mac" ? "⌘⌥I" : "F12";
@@ -308,15 +306,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
     setCookie(cleaned);
   };
 
-  const copySnippet = async () => {
-    try {
-      await navigator.clipboard.writeText(CONSOLE_SNIPPET);
-      setSnippetCopied(true);
-      setTimeout(() => setSnippetCopied(false), 2000);
-    } catch {
-      toast.error("Couldn't copy. Select and copy manually.");
-    }
-  };
+
 
   const hasStoredCookie = !!getStoredAshbyCookie();
 
@@ -343,121 +333,85 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           <DialogHeader>
             <DialogTitle>Connect your Ashby account</DialogTitle>
             <DialogDescription>
-              We need your Ashby session token to pull candidates. Pick the path that works for you — most people use the quick way.
+              We need your Ashby session token to pull candidates. Follow the steps
+              below — it takes about a minute. Watch the walkthrough if you get stuck.
             </DialogDescription>
           </DialogHeader>
 
-          {/* Method tabs */}
-          <div className="flex gap-1 rounded-lg bg-muted p-1">
-            <button
-              type="button"
-              onClick={() => setActiveStep("quick")}
-              className={cn(
-                "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                activeStep === "quick"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 h-8 text-xs"
+              onClick={() => window.open(LOOM_WALKTHROUGH_URL, "_blank", "noopener,noreferrer")}
             >
-              Quick way (recommended)
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveStep("manual")}
-              className={cn(
-                "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                activeStep === "manual"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              Manual (DevTools)
-            </button>
+              <PlayCircle className="h-3.5 w-3.5" />
+              Watch the 1-minute walkthrough
+              <ExternalLink className="h-3 w-3 opacity-60" />
+            </Button>
           </div>
 
-          {activeStep === "quick" ? (
-            <ol className="space-y-3 text-sm">
-              <li className="flex gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">1</span>
-                <div className="flex-1 space-y-2">
-                  <p>Open Ashby and make sure you're signed in.</p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 h-7 text-xs"
-                    onClick={() => window.open("https://app.ashbyhq.com/", "_blank", "noopener")}
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    Open Ashby
-                  </Button>
-                </div>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">2</span>
-                <div className="flex-1 space-y-2">
-                  <p>
-                    On the Ashby tab, open the browser Console:{" "}
-                    <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{devtoolsKey}</kbd>
-                    {os === "mac" ? "" : " then click the Console tab"}.
-                  </p>
-                </div>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">3</span>
-                <div className="flex-1 space-y-2">
-                  <p>Paste this snippet into the Console and press Enter — it copies your token to the clipboard:</p>
-                  <div className="relative">
-                    <pre className="overflow-x-auto rounded-md bg-muted p-2.5 pr-10 font-mono text-[11px] leading-relaxed">
-                      {CONSOLE_SNIPPET}
-                    </pre>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={copySnippet}
-                      className="absolute right-1 top-1 h-7 w-7 p-0"
-                      title="Copy snippet"
-                    >
-                      {snippetCopied ? (
-                        <Check className="h-3.5 w-3.5 text-emerald-600" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">4</span>
-                <div className="flex-1">
-                  <p>Come back here and paste the token below.</p>
-                </div>
-              </li>
-            </ol>
-          ) : (
-            <ol className="list-decimal list-outside ml-5 space-y-1.5 text-xs text-muted-foreground">
-              <li>
-                Open <span className="font-medium text-foreground">app.ashbyhq.com</span> and sign in.
-              </li>
-              <li>
-                Open DevTools: <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{devtoolsKey}</kbd>
-                {os === "mac" ? "" : " (or Ctrl+Shift+I)"}.
-              </li>
-              <li>
-                Go to the <span className="font-medium text-foreground">Application</span> tab
-                {" "}(in Firefox: <span className="font-medium text-foreground">Storage</span>).
-              </li>
-              <li>
-                In the left sidebar, expand <span className="font-medium text-foreground">Cookies</span> → click{" "}
-                <span className="font-medium text-foreground">https://app.ashbyhq.com</span>.
-              </li>
-              <li>
-                Find the row named{" "}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">ashby_session_token</code>,
-                double-click its <span className="font-medium text-foreground">Value</span>, and copy it.
-              </li>
-              <li>Paste below.</li>
-            </ol>
-          )}
+          <ol className="space-y-3 text-sm">
+            <li className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">1</span>
+              <div className="flex-1 space-y-2">
+                <p>Open Ashby and make sure you're signed in.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 h-7 text-xs"
+                  onClick={() => window.open("https://app.ashbyhq.com/", "_blank", "noopener")}
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Open Ashby
+                </Button>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">2</span>
+              <div className="flex-1">
+                <p>
+                  Open DevTools:{" "}
+                  <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{devtoolsKey}</kbd>
+                  {os === "mac" ? "" : " (or Ctrl+Shift+I)"}.
+                </p>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">3</span>
+              <div className="flex-1">
+                <p>
+                  Go to the <span className="font-medium">Application</span> tab
+                  {" "}(in Firefox: <span className="font-medium">Storage</span>).
+                </p>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">4</span>
+              <div className="flex-1">
+                <p>
+                  In the left sidebar, expand <span className="font-medium">Cookies</span> → select{" "}
+                  <span className="font-medium">https://app.ashbyhq.com</span>.
+                </p>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">5</span>
+              <div className="flex-1">
+                <p>
+                  Find the row{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">ashby_session_token</code>,
+                  double-click its <span className="font-medium">Value</span>, and copy it.
+                </p>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">6</span>
+              <div className="flex-1">
+                <p>Paste it into the field below.</p>
+              </div>
+            </li>
+          </ol>
 
           {/* Token input */}
           <div className="space-y-1.5">

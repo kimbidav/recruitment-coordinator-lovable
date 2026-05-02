@@ -1,50 +1,41 @@
 ## Goal
 
-Two-tap first-run onboarding: one Google sign-in grants app login + Gmail + Calendar in a single consent, then a guided screen walks the user through the unavoidable Slack + Ashby steps.
+Simplify the Ashby session token dialog (`src/components/AshbyFetchButton.tsx`) so users see one clear path — the DevTools / Application tab method — and link a Loom walkthrough for help.
 
 ## Changes
 
-### 1. Simplified Auth screen (`src/pages/Auth.tsx`)
-- Make **Continue with Google** the primary, full-width filled button.
-- Remove the "Also connect Google Calendar" checkbox — Calendar+Gmail scopes are always requested up-front during sign-in (single consent screen).
-- Demote email/password to a small "Use email instead" toggle below a divider.
-- Copy: "Welcome — sign in with Google to get started in under a minute."
+**File: `src/components/AshbyFetchButton.tsx`**
 
-### 2. Single-consent Google flow
-- After successful Google sign-in (in `Auth.tsx` and on the existing OAuth return path), automatically kick off the existing `google-calendar-connect` flow once, so the user gets a single Google consent screen that covers Calendar + Gmail. Skip if `google_calendar_tokens` already exists for that user.
-- The existing `google-calendar-connect` edge function already requests `calendar.events`, `gmail.send`, `gmail.readonly`, `userinfo.email`, `openid` — no scope changes needed.
+1. **Remove the "Quick way" tabbed UI**
+   - Delete the `activeStep` state and the tab toggle row (Quick / Manual buttons).
+   - Remove the conditional that switches between the quick console-snippet flow and the manual flow.
+   - Remove now-unused pieces tied to the quick path: `CONSOLE_SNIPPET` constant, `snippetCopied` state, `copySnippet` handler, and the `Copy` / `Check` icon imports if no longer used elsewhere in the file (the `Check` icon is still used for the valid-token indicator, so keep it; drop `Copy` only if unused).
 
-### 3. New onboarding screen (`src/pages/Onboarding.tsx`)
-A first-run checklist shown to any signed-in user who hasn't finished setup. Three numbered cards:
+2. **Promote the DevTools instructions to the primary (only) flow**
+   - Replace the previous "Manual (DevTools)" terse list with a clearer numbered list at body text size (not muted micro-text), keeping the same six steps:
+     1. Open `app.ashbyhq.com` and sign in (with an "Open Ashby" button as in the current quick flow).
+     2. Open DevTools (`⌘⌥I` on macOS / `F12` on Windows).
+     3. Go to the **Application** tab (Firefox: **Storage**).
+     4. Expand **Cookies** → select `https://app.ashbyhq.com`.
+     5. Find the row `ashby_session_token`, double-click its **Value**, and copy it.
+     6. Paste it into the field below.
 
-```text
-1. Google (Calendar + Gmail)   ✓ Connected as user@example.com
-2. Connect Slack               [Connect Slack]
-3. Connect Ashby               [Connect Ashby]
-                               [Continue to dashboard]
-```
+3. **Update the dialog header copy**
+   - Title stays "Connect your Ashby account".
+   - Description becomes something like: "We need your Ashby session token to pull candidates. Follow the steps below — it takes about a minute. Watch the walkthrough if you get stuck."
 
-- Step 1 is pre-checked because it was granted during sign-in.
-- Steps 2 and 3 reuse `SlackConnectButton` and `AshbyFetchButton` inline; each shows a one-line "why this matters" caption and a Pending/Connected pill.
-- Slack + Ashby are recommended but not blocking — **Continue to dashboard** is always enabled, with a subtle "you can finish this later from the header" note.
-- "Skip for now" link routes to `/` and sets a localStorage flag so we don't re-prompt.
+4. **Add a Loom walkthrough link**
+   - Just below the dialog description (above the numbered steps), add a small inline link/button:
+     - Label: "Watch the 1-minute walkthrough"
+     - Icon: `ExternalLink` (already imported)
+     - Opens `https://www.loom.com/share/3423bbe88fdd4ad4819ce24afda058b1` in a new tab (`target="_blank"`, `rel="noopener noreferrer"`).
+   - Style: subtle outline button (`size="sm"`), matching the existing "Open Ashby" button.
 
-### 4. Routing (`src/App.tsx`)
-- Add protected `/onboarding` route.
-- Add a small `useOnboardingStatus` hook that returns `{ googleConnected, slackConnected, ashbyConnected, hasCandidates, loading }` by checking `google_calendar_tokens`, `slack_tokens`, the local Ashby cookie, and the candidates count.
-- On `/`, if the user is signed in, has zero candidates, has not completed Slack/Ashby, and hasn't dismissed onboarding, redirect to `/onboarding`. Otherwise show the dashboard.
+5. **Leave untouched**
+   - Token input, validation, privacy disclosure (`Why do you need this?`), progress UI during fetch, footer "Fetch Candidates" button, and all fetch/run logic.
+   - The button itself on the dashboard / onboarding screen.
 
-### 5. Dashboard empty-state polish (`src/pages/Index.tsx`)
-- Replace the generic "Connect Ashby or Slack…" copy with a "Finish setup" button linking to `/onboarding`, plus the existing CSV upload as a secondary option.
+## Notes
 
-## Out of scope
-
-- No DB schema changes.
-- No changes to Slack or Ashby connect mechanics — those remain their own OAuth / cookie flows (technical Slack limitation: cannot be merged with Google consent).
-- Email/password sign-in stays available, just de-emphasized.
-
-## Technical notes
-
-- One shared `useOnboardingStatus` hook backs both the routing guard and the onboarding screen so they never disagree.
-- After each connect button completes, re-poll status (the components already expose `onConnected`/`onSynced` callbacks).
-- Onboarding screen uses the existing neutral palette + Inter font, numbered circle markers, generous spacing.
+- No changes to backend, edge functions, or other files.
+- No new dependencies.
