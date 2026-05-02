@@ -201,6 +201,32 @@ export function EmailComposer({
         </DialogHeader>
 
         <div className="space-y-4">
+          {needsReconnect && (
+            <div className="flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-2 min-w-0">
+                <p className="text-sm text-foreground">
+                  {needsReconnect === "google_not_connected"
+                    ? "Google isn't connected yet. Reconnect to enable Gmail lookup and sending."
+                    : "Gmail access is missing from your Google connection. Reconnect to grant Gmail permissions."}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleReconnectGoogle()}
+                  disabled={reconnecting}
+                  className="gap-2"
+                >
+                  {reconnecting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Mail className="h-3.5 w-3.5" />
+                  )}
+                  Reconnect Google
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="email-to">To</Label>
             <div className="flex gap-2">
