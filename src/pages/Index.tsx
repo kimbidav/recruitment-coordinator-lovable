@@ -197,10 +197,7 @@ const Index = () => {
     });
 
     const slackOnly: Candidate[] = slackSubs
-      .filter((s) => {
-        const k = candidateMatchKey(s.client_name, s.candidate_name);
-        return !matchedSlackKeys.has(k) && !ashbyByKey.has(k);
-      })
+      .filter((s) => !matchedSlackIds.has(s.id))
       .map((s) => ({
         company_name: s.client_name,
         job_title: "—",
