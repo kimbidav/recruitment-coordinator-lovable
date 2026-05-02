@@ -135,9 +135,13 @@ export function EmailComposer({
       });
       if (error || data?.error) {
         const { message, code } = await parseFnError(error, data ?? null);
+        if (code === "google_not_connected" || code === "gmail_scope_missing") {
+          setNeedsReconnect(code);
+        }
         toast.error(friendlyMessage(message, code));
         return;
       }
+      setNeedsReconnect(null);
       const results = (data.results ?? []) as { email: string; count: number }[];
       setSuggestions(results);
       if (results.length === 0) {
@@ -166,9 +170,13 @@ export function EmailComposer({
       });
       if (error || data?.error) {
         const { message, code } = await parseFnError(error, data ?? null);
+        if (code === "google_not_connected" || code === "gmail_scope_missing") {
+          setNeedsReconnect(code);
+        }
         toast.error(friendlyMessage(message, code));
         return;
       }
+      setNeedsReconnect(null);
       toast.success(`Email sent from ${data.from ?? "your Gmail"}`);
       onOpenChange(false);
     } catch (e) {
