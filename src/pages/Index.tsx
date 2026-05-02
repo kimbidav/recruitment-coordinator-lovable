@@ -22,6 +22,7 @@ import { Users, Loader2, Clock, LogOut, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   candidateMatchKey,
+  normalizeMatchKey,
   slackStatusToDecision,
   slackStatusToPipelineStage,
 } from "@/lib/slackParse";
