@@ -154,8 +154,6 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
   const [staleJobNotified, setStaleJobNotified] = useState(false);
-  const [snippetCopied, setSnippetCopied] = useState(false);
-  const [activeStep, setActiveStep] = useState<"quick" | "manual">("quick");
   const { progress, label, complete } = useSimulatedProgress(loading);
   const os = useMemo(detectOS, []);
   const devtoolsKey = os === "mac" ? "⌘⌥I" : "F12";
