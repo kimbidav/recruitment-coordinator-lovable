@@ -306,15 +306,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
     setCookie(cleaned);
   };
 
-  const copySnippet = async () => {
-    try {
-      await navigator.clipboard.writeText(CONSOLE_SNIPPET);
-      setSnippetCopied(true);
-      setTimeout(() => setSnippetCopied(false), 2000);
-    } catch {
-      toast.error("Couldn't copy. Select and copy manually.");
-    }
-  };
+
 
   const hasStoredCookie = !!getStoredAshbyCookie();
 
