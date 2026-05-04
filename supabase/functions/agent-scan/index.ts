@@ -471,6 +471,69 @@ Deno.serve(async (req) => {
           .filter((c) => !!c.at)
           .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] ?? null;
 
+        // Build a richer "signals timeline" — semantic milestones we can show
+        // as: "Introduced on …", "Scheduled <interview> on …", "Interviewed on …", etc.
+        type Signal = {
+          kind: "introduced" | "scheduled" | "interviewed" | "upcoming" | "last_reply" | "email";
+          label: string;
+          at: string;
+          source: string;
+        };
+        const signals: Signal[] = [];
+        signals.push({
+          kind: "introduced",
+          label: "Introduced in Slack",
+          at: new Date(subMs).toISOString(),
+          source: `#${sub.channel_name || "slack"}`,
+        });
+        if (signal.scheduled && signal.scheduled_time) {
+          const t = new Date(signal.scheduled_time).getTime();
+          if (!isNaN(t)) {
+            signals.push({
+              kind: "scheduled",
+              label: upcomingCal?.e.summary
+                ? `Scheduled: ${upcomingCal.e.summary}`
+                : (pastCals[0]?.e.summary ? `Scheduled: ${pastCals[0].e.summary}` : "Interview scheduled"),
+              at: new Date(t).toISOString(),
+              source: signal.source ? `Detected via ${signal.source}` : "Detected by AI",
+            });
+          }
+        }
+        if (upcomingCal) {
+          signals.push({
+            kind: "upcoming",
+            label: `Upcoming: ${upcomingCal.e.summary || "(untitled)"}`,
+            at: new Date(upcomingCal.ts).toISOString(),
+            source: "Google Calendar",
+          });
+        }
+        if (pastCals[0]) {
+          signals.push({
+            kind: "interviewed",
+            label: `Interviewed: ${pastCals[0].e.summary || "(untitled)"}`,
+            at: new Date(pastCals[0].ts).toISOString(),
+            source: "Google Calendar",
+          });
+        }
+        if (recentGmail) {
+          signals.push({
+            kind: "email",
+            label: `Email: ${(recentGmail.g.subject || "(no subject)").slice(0, 80)}`,
+            at: new Date(recentGmail.ts).toISOString(),
+            source: `Gmail · ${recentGmail.g.from || "unknown sender"}`,
+          });
+        }
+        if (lastThreadTs > subMs) {
+          signals.push({
+            kind: "last_reply",
+            label: "Last Slack reply",
+            at: new Date(lastThreadTs).toISOString(),
+            source: "Slack thread",
+          });
+        }
+        // Sort newest first
+        signals.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
         let kind: "intro_stall" | "post_interview_followup" | null = null;
         let payload: Record<string, unknown> = {};
 
