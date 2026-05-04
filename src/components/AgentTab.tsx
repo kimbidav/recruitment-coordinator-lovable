@@ -248,8 +248,14 @@ export function AgentTab() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => advance(1)}
-              disabled={queue.length <= 1}
+              onClick={() => {
+                if (!current) return;
+                const i = queue.findIndex((c) => c.id === current.id);
+                const nextCard = queue[i + 1] ?? queue[i - 1] ?? null;
+                setSkippedIds((s) => new Set(s).add(current.id));
+                setCursorId(nextCard?.id ?? null);
+              }}
+              disabled={!current}
               className="gap-1"
             >
               Skip <ChevronRight className="h-4 w-4" />
