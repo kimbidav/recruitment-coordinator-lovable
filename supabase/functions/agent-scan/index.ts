@@ -482,6 +482,7 @@ Deno.serve(async (req) => {
             suggested_followup_at: fridayFivePmAfter(sub.submitted_at, tz),
             slack_permalink: sub.permalink,
             thread_excerpt: threadExcerpt,
+            thread_messages: threadMessages,
             last_event: lastEvent,
           };
         } else {
