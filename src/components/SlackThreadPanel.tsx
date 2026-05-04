@@ -119,6 +119,7 @@ export function SlackThreadPanel({
   // Initial load + polling while open
   useEffect(() => {
     if (!open || !channelId || !messageTs) return;
+    if (initialReply !== undefined) setReply(initialReply);
     void load();
     const id = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(id);
