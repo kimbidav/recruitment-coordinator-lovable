@@ -12,6 +12,10 @@ import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt"
 import { SlackConnectButton } from "@/components/SlackConnectButton";
 import { SlackThreadPanel } from "@/components/SlackThreadPanel";
 import { EmailComposer } from "@/components/EmailComposer";
+import { AgentTab } from "@/components/AgentTab";
+import { useAgentCards, visibleCards } from "@/hooks/useAgentCards";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
