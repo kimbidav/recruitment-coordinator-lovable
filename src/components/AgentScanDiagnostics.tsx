@@ -48,7 +48,7 @@ export function AgentScanDiagnostics({ runId }: Props) {
     if (!open || !runId) return;
     setLoading(true);
     void (async () => {
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from("agent_scan_items")
         .select("*")
         .eq("scan_run_id", runId)
