@@ -484,7 +484,7 @@ Deno.serve(async (req) => {
           kind: "introduced",
           label: "Introduced in Slack",
           at: new Date(subMs).toISOString(),
-          source: `#${sub.channel_name || "slack"}`,
+          source: "Slack",
         });
         if (signal.scheduled && signal.scheduled_time) {
           const t = new Date(signal.scheduled_time).getTime();
