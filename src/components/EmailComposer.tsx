@@ -64,11 +64,14 @@ export function EmailComposer({
   onOpenChange,
   candidateName,
   opportunities,
+  initialSubject,
+  initialBody,
+  initialTo,
 }: EmailComposerProps) {
   const draft = useMemo(() => buildDraft(candidateName, opportunities), [candidateName, opportunities]);
   const [to, setTo] = useState("");
-  const [subject, setSubject] = useState(draft.subject);
-  const [body, setBody] = useState(draft.body);
+  const [subject, setSubject] = useState(initialSubject ?? draft.subject);
+  const [body, setBody] = useState(initialBody ?? draft.body);
   const [sending, setSending] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -78,13 +81,13 @@ export function EmailComposer({
   // Reset content when reopened for a different candidate.
   useEffect(() => {
     if (open) {
-      setTo("");
-      setSubject(draft.subject);
-      setBody(draft.body);
+      setTo(initialTo ?? "");
+      setSubject(initialSubject ?? draft.subject);
+      setBody(initialBody ?? draft.body);
       setSuggestions([]);
       setNeedsReconnect(null);
     }
-  }, [open, draft.subject, draft.body]);
+  }, [open, draft.subject, draft.body, initialSubject, initialBody, initialTo]);
 
   const handleReconnectGoogle = async () => {
     setReconnecting(true);
