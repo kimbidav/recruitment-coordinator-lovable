@@ -1,76 +1,37 @@
-# Agent reliability + signal coverage fixes
+## Goal
+Stop using the LLM for nudge drafts. Use simple, hard-coded templates based on card kind.
 
-The scan currently times out before reaching most submissions, Gmail returns 403 on every call (token predates the gmail.readonly scope being requested), and we can't tell why a given candidate did/didn't get a card. Five fixes:
+## Templates
 
-## 1. Detect & surface missing Gmail scope (fast + non-noisy)
+**1. `intro_stall` (checking if candidate scheduled)** — Slack message to client thread:
+- `"Hey — wanted to see if {firstName} got scheduled, or do I need to bump?"`
 
-The OAuth init already requests `gmail.readonly`, but the existing stored Google token only has Calendar scope, so every Gmail call 403s.
+**2. `post_interview_followup` (asking for feedback)** — Slack message to client thread:
+- `"Hey — any feedback on {firstName} from the interview? Happy to share notes from our side too."`
 
-- In `agent-scan`, **read `google_calendar_tokens.scope`** once at the top. If it doesn't include `gmail.readonly`, skip Gmail entirely (no 403 spam) and mark the run with `gmail_scope_missing: true`.
-- Return `gmail_scope_missing` in the scan response.
-- In `AgentTab.tsx`, when the response says scope is missing, show a small banner: **"Gmail signals are off — reconnect Google to enable email-based scheduling detection"** with a button that calls the existing `google-calendar-connect` init flow (forcing `prompt=consent` so Google re-prompts).
+`{firstName}` = first token of `payload.candidate_name`. Falls back to `"the candidate"` if missing.
 
-## 2. Make the scan resilient and resumable
+Email drafts: keep the existing simple non-LLM fallback strings already in `agent-draft/index.ts` (they're not LLM-generated either way and the user only flagged the Slack copy). No change needed there.
 
-Current loop dies on the first slow/failing iteration with no partial progress saved.
+## Changes
 
-- Wrap each per-submission block in `try/catch` so one failure can't abort the run; log the error to a new `agent_scan_items` row (see #5) and continue.
-- Process submissions **oldest-first within the eligibility window** (≥2 days old), and **persist after each card** (already happens, but ensure no batch buffering).
-- **Cap each invocation at 25 submissions**. Track which submissions were processed in this run; if more remain, return `{ has_more: true, next_cursor: <last_submitted_at> }`. The hook auto-invokes again until `has_more = false` (with a max of e.g. 4 chained calls = 100 submissions, safety bound).
-- Add an overall scan-level `try/finally` so `agent_scan_runs.finished_at`, `cards_created`, `cards_resolved`, and `error` always get written — even on partial failure.
+### `supabase/functions/agent-draft/index.ts`
+- Delete `llmDraft` and the `LOVABLE_AI_URL` constant.
+- Replace `fallback()` with a single `buildDrafts()` that returns:
+  - `slack_message`: from the templates above (per kind)
+  - `email_subject` / `email_body`: keep current short email fallback copy
+- In the handler: instead of calling `llmDraft`, call `buildDrafts`. Keep the cache-check + cache-write behavior so existing cards don't change unless re-scanned.
 
-## 3. Lazy LLM draft generation
+### `supabase/functions/agent-scan/index.ts`
+- Currently leaves drafts undefined (generated lazily). Optionally pre-fill `suggested_slack_message` directly in the payload at card creation using the same templates so cards show the line immediately without a round-trip. Low-risk one-liner: import/inline the same template helper.
 
-Today every candidate triggers two Gemini calls (signal + draft). Drafts are only needed when you click "Reply in Slack" or "Email candidate."
+### Re-priming existing cards
+Old cards already have LLM-cached `suggested_slack_message` strings. Two options:
+- **A. Leave them** — only new cards get the new templates. Simplest.
+- **B. One-time clear** — run a migration to null out `payload->>'suggested_slack_message'` on existing open cards so the next render uses the new template.
 
-- Remove the `llmDraft` call from the scan loop. Store only the signal-based payload.
-- Add a new edge function `agent-draft` that takes `{ card_id }`, looks up the card, generates the Slack/email drafts, and returns them (also caches them onto `payload.suggested_*`).
-- In `AgentActionCard.tsx`, when the user clicks Reply in Slack or Email candidate, call `agent-draft` first if the card has no cached draft, then open the existing dialog with `initialReply` / `initialBody`. Show a tiny spinner on the button while drafting (~1–2s).
+Recommend **B** so you see the new copy on current cards without re-scanning.
 
-This roughly halves per-scan LLM calls and dramatically reduces timeout risk.
-
-## 4. Widen calendar window to past 60 days
-
-`post_interview_followup` cards rely on knowing a meeting happened, but we only fetch the **next** 30 days from Calendar. Past interviews are invisible.
-
-- Change `listCalendarEvents` window to `[now - 60d, now + 30d]`.
-- Use this expanded set both for the substring pre-filter and the LLM prompt.
-- For post-interview detection, prefer matching a past calendar event over the LLM's `scheduled_time` from email (more reliable).
-
-## 5. Per-submission scan diagnostics
-
-Add a small audit table so we can answer "why didn't Minkai/Proximal get a card?"
-
-```sql
-create table public.agent_scan_items (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  scan_run_id uuid not null,
-  slack_submission_id uuid,
-  candidate_name text,
-  client_name text,
-  outcome text not null, -- 'card_created' | 'card_updated' | 'no_signal_needed' | 'too_recent' | 'error' | 'skipped_no_name'
-  reason text,           -- LLM reason or error message
-  signal jsonb,          -- raw signal output
-  created_at timestamptz not null default now()
-);
--- RLS: users can select their own rows (same pattern as agent_scan_runs).
-```
-
-For each submission processed, insert one row with the outcome and the LLM signal JSON (or error). Add a small **"Scan diagnostics"** collapsible at the bottom of the Agent tab listing the most recent run's items, filterable by outcome — so you can see exactly what the agent saw for each candidate.
-
-## Files
-
-**New**
-- `supabase/functions/agent-draft/index.ts`
-- `supabase/migrations/<ts>_agent_scan_items.sql`
-- `src/components/AgentScanDiagnostics.tsx`
-
-**Modified**
-- `supabase/functions/agent-scan/index.ts` — scope detection, resilient loop, batching, calendar window, no draft calls, scan_items inserts
-- `src/hooks/useAgentCards.ts` — chained re-invoke when `has_more`, expose `gmailScopeMissing`, `lastRunId`
-- `src/components/AgentTab.tsx` — Gmail-scope banner with "Reconnect Google", diagnostics panel
-- `src/components/AgentActionCard.tsx` — lazy draft fetch on action click
-
-## Open question
-For #1's "Reconnect Google" button — the existing `google-calendar-connect` init flow handles re-consent fine, but it currently redirects with `prompt=consent`? I'll verify and force it if not. Nothing for you to decide.
+## Out of scope
+- No UI changes — `AgentActionCard` already pipes `suggested_slack_message` into the inline composer.
+- No template variants/randomization — one canonical line per scenario.
