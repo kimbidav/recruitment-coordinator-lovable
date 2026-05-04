@@ -22,6 +22,9 @@ interface EmailComposerProps {
   candidateName: string;
   /** All candidate rows for this person across opportunities/companies. */
   opportunities: Candidate[];
+  initialSubject?: string;
+  initialBody?: string;
+  initialTo?: string;
 }
 
 function firstName(full: string): string {
