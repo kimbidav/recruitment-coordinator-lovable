@@ -39,6 +39,14 @@ interface SlackThreadPanelProps {
   initialReply?: string;
 }
 
+interface SlackThreadInlineProps {
+  channelId: string | null;
+  messageTs: string | null;
+  initialReply?: string;
+  /** Cap height of the messages list. Default 320px */
+  maxMessagesHeight?: number;
+}
+
 const POLL_MS = 10_000;
 
 export function SlackThreadPanel({
