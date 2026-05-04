@@ -84,13 +84,15 @@ export function SlackThreadPanel({
     return matches.slice(0, 8);
   }, [mentionOpen, mentionQuery, users]);
 
-  // Load workspace users (once per open) for @mentions
+  // Load workspace + channel users (once per open) for @mentions.
+  // Passing channel_id lets the backend include external/shared-channel guests
+  // (i.e., clients) who don't show up in the global users.list.
   useEffect(() => {
     if (!open || users.length > 0) return;
     (async () => {
       try {
         const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
-          body: { action: "users" },
+          body: { action: "users", channel_id: channelId },
         });
         if (invErr) throw invErr;
         if (data?.error) throw new Error(data.error);
@@ -99,7 +101,7 @@ export function SlackThreadPanel({
         // Non-fatal — autocomplete just won't appear.
       }
     })();
-  }, [open, users.length]);
+  }, [open, users.length, channelId]);
 
   const load = async () => {
     if (!channelId || !messageTs) return;
