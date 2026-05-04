@@ -379,6 +379,7 @@ Deno.serve(async (req) => {
         // Slack thread activity
         let lastThreadTs = parseFloat(sub.message_ts) * 1000;
         let threadExcerpt = "";
+        let threadMessages: { ts: string; user?: string; text: string; at: string }[] = [];
         if (slackTok?.access_token) {
           try {
             const t = await fetchSlackThread(slackTok.access_token, sub.channel_id, sub.message_ts);
@@ -387,6 +388,13 @@ Deno.serve(async (req) => {
               if (tsMs > lastThreadTs) lastThreadTs = tsMs;
             }
             threadExcerpt = (t.messages.slice(-2).map((m: any) => m.text).join(" • ") || "").slice(0, 400);
+            // Keep up to the last 8 messages for in-card preview
+            threadMessages = t.messages.slice(-8).map((m: any) => ({
+              ts: m.ts,
+              user: m.user || m.username || m.bot_id || undefined,
+              text: (m.text || "").slice(0, 1000),
+              at: new Date(parseFloat(m.ts) * 1000).toISOString(),
+            }));
           } catch (e) {
             console.error("slack thread", e);
           }
@@ -474,6 +482,7 @@ Deno.serve(async (req) => {
             suggested_followup_at: fridayFivePmAfter(sub.submitted_at, tz),
             slack_permalink: sub.permalink,
             thread_excerpt: threadExcerpt,
+            thread_messages: threadMessages,
             last_event: lastEvent,
           };
         } else {
@@ -493,6 +502,7 @@ Deno.serve(async (req) => {
                 meeting_time: new Date(meetingMs).toISOString(),
                 slack_permalink: sub.permalink,
                 thread_excerpt: threadExcerpt,
+                thread_messages: threadMessages,
                 last_event: lastEvent,
               };
             }
