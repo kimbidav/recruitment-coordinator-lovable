@@ -87,12 +87,11 @@ Deno.serve(async (req) => {
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    const drafts = await llmDraft({
+    const drafts = buildDrafts({
       kind: card.kind as "intro_stall" | "post_interview_followup",
       candidateName: p.candidate_name ?? "",
       company: p.company_name ?? "",
       recruiterName,
-      threadExcerpt: p.thread_excerpt ?? "",
     });
 
     // Cache onto the card
