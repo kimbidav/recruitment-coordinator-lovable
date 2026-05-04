@@ -91,7 +91,26 @@ Deno.serve(async (req) => {
 
     if (action === "users") {
       // List workspace users for @mention autocomplete.
+      // Optionally augment with members of a specific channel — this is how
+      // we surface CLIENTS who are external guests in shared (Slack Connect)
+      // channels and would otherwise not appear in users.list.
       const members: any[] = [];
+      const seen = new Set<string>();
+      const push = (m: any) => {
+        if (!m?.id || seen.has(m.id)) return;
+        if (m.deleted || m.is_bot || m.id === "USLACKBOT") return;
+        const p = m.profile ?? {};
+        seen.add(m.id);
+        members.push({
+          id: m.id,
+          name: p.display_name || p.real_name || m.name || m.id,
+          real_name: p.real_name || m.name || "",
+          image: p.image_48 ?? p.image_72 ?? null,
+          is_external: !!(m.is_stranger || m.is_restricted || m.is_ultra_restricted),
+        });
+      };
+
+      // 1) Workspace users
       let cursor = "";
       try {
         for (let i = 0; i < 10; i++) {
@@ -103,16 +122,7 @@ Deno.serve(async (req) => {
           );
           const j = await r.json();
           if (!j.ok) throw new Error(`users.list: ${j.error}`);
-          for (const m of j.members ?? []) {
-            if (m.deleted || m.is_bot || m.id === "USLACKBOT") continue;
-            const p = m.profile ?? {};
-            members.push({
-              id: m.id,
-              name: p.display_name || p.real_name || m.name || m.id,
-              real_name: p.real_name || m.name || "",
-              image: p.image_48 ?? p.image_72 ?? null,
-            });
-          }
+          for (const m of j.members ?? []) push(m);
           cursor = j.response_metadata?.next_cursor ?? "";
           if (!cursor) break;
         }
@@ -123,6 +133,48 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+
+      // 2) Channel members (catches external/shared-channel guests = clients)
+      const reqChannel: string | undefined = body.channel_id;
+      if (reqChannel) {
+        try {
+          const memberIds: string[] = [];
+          let mcur = "";
+          for (let i = 0; i < 5; i++) {
+            const params = new URLSearchParams({ channel: reqChannel, limit: "200" });
+            if (mcur) params.set("cursor", mcur);
+            const r = await fetch(
+              `https://slack.com/api/conversations.members?${params.toString()}`,
+              { headers: { Authorization: `Bearer ${token}` } },
+            );
+            const j = await r.json();
+            if (!j.ok) break;
+            for (const id of j.members ?? []) memberIds.push(id);
+            mcur = j.response_metadata?.next_cursor ?? "";
+            if (!mcur) break;
+          }
+          // Hydrate any unseen members via users.info
+          await Promise.all(
+            memberIds
+              .filter((id) => !seen.has(id))
+              .map(async (id) => {
+                try {
+                  const r = await fetch(
+                    `https://slack.com/api/users.info?user=${encodeURIComponent(id)}`,
+                    { headers: { Authorization: `Bearer ${token}` } },
+                  );
+                  const j = await r.json();
+                  if (j.ok && j.user) push(j.user);
+                } catch {
+                  /* ignore */
+                }
+              }),
+          );
+        } catch {
+          /* non-fatal */
+        }
+      }
+
       return new Response(JSON.stringify({ ok: true, users: members }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
