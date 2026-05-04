@@ -590,10 +590,10 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const fn = (candidateName || "").trim().split(/\s+/)[0] || "the candidate";
+        const firstNm = (candidateName || "").trim().split(/\s+/)[0] || "the candidate";
         const suggested_slack_message = kind === "intro_stall"
-          ? `Hey — wanted to see if ${fn} got scheduled, or do I need to bump?`
-          : `Hey — any feedback on ${fn} from the interview? Happy to share notes from our side too.`;
+          ? `Hey — wanted to see if ${firstNm} got scheduled, or do I need to bump?`
+          : `Hey — any feedback on ${firstNm} from the interview? Happy to share notes from our side too.`;
         payload = {
           ...payload,
           candidate_name: candidateName,
