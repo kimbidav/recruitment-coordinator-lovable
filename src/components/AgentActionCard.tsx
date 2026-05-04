@@ -5,6 +5,7 @@ import {
   AlarmClock,
   CalendarClock,
   ExternalLink,
+  Loader2,
   Mail,
   MessageSquare,
   X,
@@ -15,6 +16,7 @@ import type { AgentCard } from "@/hooks/useAgentCards";
 
 interface Props {
   card: AgentCard;
+  drafting?: boolean;
   onReplySlack: (card: AgentCard) => void;
   onEmail: (card: AgentCard) => void;
   onSnooze: (card: AgentCard) => void;
