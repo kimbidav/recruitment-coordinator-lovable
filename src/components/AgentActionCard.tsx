@@ -10,6 +10,10 @@ import {
   MessageSquare,
   X,
   Check,
+  Activity,
+  Calendar,
+  MessageCircle,
+  Send,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { AgentCard } from "@/hooks/useAgentCards";
@@ -64,7 +68,41 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
         <p className="text-sm text-muted-foreground">{p.signal_summary}</p>
       )}
 
-      {p.thread_excerpt && (
+      {p.last_event && (
+        <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            {p.last_event.kind.startsWith("calendar") ? (
+              <Calendar className="h-3.5 w-3.5" />
+            ) : p.last_event.kind === "gmail" ? (
+              <Mail className="h-3.5 w-3.5" />
+            ) : p.last_event.kind === "slack_reply" ? (
+              <MessageCircle className="h-3.5 w-3.5" />
+            ) : p.last_event.kind === "slack_submission" ? (
+              <Send className="h-3.5 w-3.5" />
+            ) : (
+              <Activity className="h-3.5 w-3.5" />
+            )}
+            <span className="truncate">{p.last_event.label}</span>
+          </div>
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground gap-2">
+            <span>
+              {formatDistanceToNow(new Date(p.last_event.at), { addSuffix: true })}
+              {" · "}
+              {format(new Date(p.last_event.at), "MMM d, h:mm a")}
+            </span>
+            <span className="truncate" title={`Source: ${p.last_event.source}`}>
+              via {p.last_event.source}
+            </span>
+          </div>
+          {p.last_event.detail && (
+            <div className="text-[11px] text-muted-foreground border-l-2 border-border pl-2 line-clamp-2">
+              {p.last_event.detail}
+            </div>
+          )}
+        </div>
+      )}
+
+      {p.thread_excerpt && !p.last_event?.detail && (
         <div className="text-xs text-muted-foreground border-l-2 border-border pl-2 line-clamp-2">
           {p.thread_excerpt}
         </div>

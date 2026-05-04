@@ -16,6 +16,13 @@ export interface AgentCardPayload {
   suggested_slack_message?: string;
   suggested_email_subject?: string;
   suggested_email_body?: string;
+  last_event?: {
+    kind: string;
+    label: string;
+    at: string;
+    source: string;
+    detail?: string;
+  } | null;
 }
 
 export interface AgentCard {
