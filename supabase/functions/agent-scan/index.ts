@@ -587,13 +587,17 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        const fn = (candidateName || "").trim().split(/\s+/)[0] || "the candidate";
+        const suggested_slack_message = kind === "intro_stall"
+          ? `Hey — wanted to see if ${fn} got scheduled, or do I need to bump?`
+          : `Hey — any feedback on ${fn} from the interview? Happy to share notes from our side too.`;
         payload = {
           ...payload,
           candidate_name: candidateName,
           company_name: company,
           channel_id: sub.channel_id,
           message_ts: sub.message_ts,
-          // drafts intentionally omitted — generated on demand by agent-draft
+          suggested_slack_message,
         };
 
         stillRelevant.add(`${sub.id}::${kind}`);
