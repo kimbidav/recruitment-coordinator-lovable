@@ -14,6 +14,78 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_action_cards: {
+        Row: {
+          candidate_row_id: string | null
+          created_at: string
+          id: string
+          kind: string
+          payload: Json
+          slack_submission_id: string | null
+          snooze_until: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          candidate_row_id?: string | null
+          created_at?: string
+          id?: string
+          kind: string
+          payload?: Json
+          slack_submission_id?: string | null
+          snooze_until?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          candidate_row_id?: string | null
+          created_at?: string
+          id?: string
+          kind?: string
+          payload?: Json
+          slack_submission_id?: string | null
+          snooze_until?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      agent_scan_runs: {
+        Row: {
+          cards_created: number
+          cards_resolved: number
+          created_at: string
+          error: string | null
+          finished_at: string | null
+          id: string
+          started_at: string
+          user_id: string
+        }
+        Insert: {
+          cards_created?: number
+          cards_resolved?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          started_at?: string
+          user_id: string
+        }
+        Update: {
+          cards_created?: number
+          cards_resolved?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          started_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       candidates: {
         Row: {
           ashby_candidate_id: string | null

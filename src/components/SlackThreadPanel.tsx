@@ -36,6 +36,7 @@ interface SlackThreadPanelProps {
   messageTs: string | null;
   candidateName: string;
   companyName: string;
+  initialReply?: string;
 }
 
 const POLL_MS = 10_000;
@@ -47,6 +48,7 @@ export function SlackThreadPanel({
   messageTs,
   candidateName,
   companyName,
+  initialReply,
 }: SlackThreadPanelProps) {
   const [messages, setMessages] = useState<SlackMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -117,6 +119,7 @@ export function SlackThreadPanel({
   // Initial load + polling while open
   useEffect(() => {
     if (!open || !channelId || !messageTs) return;
+    if (initialReply !== undefined) setReply(initialReply);
     void load();
     const id = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(id);

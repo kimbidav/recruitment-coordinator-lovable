@@ -12,6 +12,10 @@ import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt"
 import { SlackConnectButton } from "@/components/SlackConnectButton";
 import { SlackThreadPanel } from "@/components/SlackThreadPanel";
 import { EmailComposer } from "@/components/EmailComposer";
+import { AgentTab } from "@/components/AgentTab";
+import { useAgentCards, visibleCards } from "@/hooks/useAgentCards";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
@@ -36,6 +40,9 @@ const Index = () => {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const onboarding = useOnboardingStatus();
+  const { cards: agentCards } = useAgentCards();
+  const agentOpenCount = useMemo(() => visibleCards(agentCards).length, [agentCards]);
+  const [activeTab, setActiveTab] = useState<string>("pipeline");
 
   // First-run redirect: brand-new users land on /onboarding instead of an
   // empty dashboard. Honors a "skip for now" dismissal.
@@ -360,128 +367,145 @@ const Index = () => {
 
       {/* Main Content */}
       <main className="container py-6 space-y-6">
-        {mergedCandidates.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="p-4 bg-muted rounded-full mb-4">
-              <Users className="h-8 w-8 text-muted-foreground" />
-            </div>
-            <h2 className="text-xl font-semibold text-foreground mb-2">No candidates yet</h2>
-            <p className="text-muted-foreground mb-6 max-w-md">
-              Finish connecting Ashby and Slack to start populating your pipeline — or upload a CSV.
-            </p>
-            <div className="flex items-center gap-3">
-              <Button onClick={() => navigate("/onboarding")} className="gap-2">
-                <Sparkles className="h-4 w-4" />
-                Finish setup
-              </Button>
-              <CsvUpload onUpload={handleCsvUpload} />
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* Stats */}
-            <DashboardStats candidates={mergedCandidates} />
-
-            {/* Filters */}
-            <div className="flex flex-col sm:flex-row gap-3">
-              <SearchInput
-                value={search}
-                onChange={setSearch}
-                placeholder="Search candidates, companies, roles..."
-                className="flex-1 max-w-md"
-              />
-              <div className="flex gap-3 flex-wrap">
-                <MultiSelectDropdown
-                  values={companyFilter}
-                  onChange={setCompanyFilter}
-                  options={companies}
-                  placeholder="Company"
-                  allLabel="All Companies"
-                  className="w-[160px]"
-                />
-                <MultiSelectDropdown
-                  values={submitterFilter}
-                  onChange={setSubmitterFilter}
-                  options={submitters}
-                  placeholder="Submitted By"
-                  allLabel="All Submitters"
-                  className="w-[160px]"
-                />
-                <MultiSelectDropdown
-                  values={stageFilter}
-                  onChange={setStageFilter}
-                  options={stages}
-                  placeholder="Stage"
-                  allLabel="All Stages"
-                  className="w-[200px]"
-                />
-                <MultiSelectDropdown
-                  values={statusFilter}
-                  onChange={setStatusFilter}
-                  options={statuses}
-                  placeholder="Status"
-                  allLabel="All Statuses"
-                  className="w-[180px]"
-                />
-                {sources.length > 1 && (
-                  <MultiSelectDropdown
-                    values={sourceFilter}
-                    onChange={setSourceFilter}
-                    options={sources}
-                    placeholder="Source"
-                    allLabel="All Sources"
-                    className="w-[140px]"
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Results count */}
-            <p className="text-sm text-muted-foreground">
-              Showing {filteredCandidates.length} of {mergedCandidates.length} candidates
-              {slackSubs.length > 0 && (
-                <span className="ml-2">
-                  · {slackSubs.length} from Slack
-                </span>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
+            <TabsTrigger value="agent" className="gap-2">
+              Agent
+              {agentOpenCount > 0 && (
+                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                  {agentOpenCount}
+                </Badge>
               )}
-            </p>
+            </TabsTrigger>
+          </TabsList>
 
-            {/* Table */}
-            <CandidateTable
-              candidates={filteredCandidates}
-              onFilterByCandidate={(name) => {
-                // Preserve other filters; just narrow by candidate name.
-                setSearch(name);
-              }}
-              onOpenSlackThread={(c) => setSlackThreadFor(c)}
-              onOpenEmail={(c) => setEmailFor(c)}
-              onCloseCandidate={async (c) => {
-                // Always mark closed locally so next Ashby fetch respects it.
-                await markCandidateClosed(c.candidate_id, c.job_id, true);
-                // If Slack thread is known, also add a ⛔ reaction in Slack.
-                if (c.slack_meta?.channel_id && c.slack_meta?.message_ts) {
-                  try {
-                    const { data, error } = await supabase.functions.invoke("slack-thread", {
-                      body: {
-                        action: "close",
-                        channel_id: c.slack_meta.channel_id,
-                        message_ts: c.slack_meta.message_ts,
-                      },
-                    });
-                    if (error) throw error;
-                    if (data?.error) throw new Error(data.error);
-                    toast.success(`${c.candidate_name} closed · ⛔ added in Slack`);
-                  } catch (e) {
-                    const msg = e instanceof Error ? e.message : "Slack reaction failed";
-                    toast.error(`Closed locally, but Slack reaction failed: ${msg}`);
-                  }
-                } else {
-                  toast.success(`${c.candidate_name} closed`);
-                }
-              }}
-            />
-          </>
-        )}
+          <TabsContent value="pipeline" className="space-y-6 mt-0">
+            {mergedCandidates.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="p-4 bg-muted rounded-full mb-4">
+                  <Users className="h-8 w-8 text-muted-foreground" />
+                </div>
+                <h2 className="text-xl font-semibold text-foreground mb-2">No candidates yet</h2>
+                <p className="text-muted-foreground mb-6 max-w-md">
+                  Finish connecting Ashby and Slack to start populating your pipeline — or upload a CSV.
+                </p>
+                <div className="flex items-center gap-3">
+                  <Button onClick={() => navigate("/onboarding")} className="gap-2">
+                    <Sparkles className="h-4 w-4" />
+                    Finish setup
+                  </Button>
+                  <CsvUpload onUpload={handleCsvUpload} />
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Stats */}
+                <DashboardStats candidates={mergedCandidates} />
+
+                {/* Filters */}
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <SearchInput
+                    value={search}
+                    onChange={setSearch}
+                    placeholder="Search candidates, companies, roles..."
+                    className="flex-1 max-w-md"
+                  />
+                  <div className="flex gap-3 flex-wrap">
+                    <MultiSelectDropdown
+                      values={companyFilter}
+                      onChange={setCompanyFilter}
+                      options={companies}
+                      placeholder="Company"
+                      allLabel="All Companies"
+                      className="w-[160px]"
+                    />
+                    <MultiSelectDropdown
+                      values={submitterFilter}
+                      onChange={setSubmitterFilter}
+                      options={submitters}
+                      placeholder="Submitted By"
+                      allLabel="All Submitters"
+                      className="w-[160px]"
+                    />
+                    <MultiSelectDropdown
+                      values={stageFilter}
+                      onChange={setStageFilter}
+                      options={stages}
+                      placeholder="Stage"
+                      allLabel="All Stages"
+                      className="w-[200px]"
+                    />
+                    <MultiSelectDropdown
+                      values={statusFilter}
+                      onChange={setStatusFilter}
+                      options={statuses}
+                      placeholder="Status"
+                      allLabel="All Statuses"
+                      className="w-[180px]"
+                    />
+                    {sources.length > 1 && (
+                      <MultiSelectDropdown
+                        values={sourceFilter}
+                        onChange={setSourceFilter}
+                        options={sources}
+                        placeholder="Source"
+                        allLabel="All Sources"
+                        className="w-[140px]"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* Results count */}
+                <p className="text-sm text-muted-foreground">
+                  Showing {filteredCandidates.length} of {mergedCandidates.length} candidates
+                  {slackSubs.length > 0 && (
+                    <span className="ml-2">
+                      · {slackSubs.length} from Slack
+                    </span>
+                  )}
+                </p>
+
+                {/* Table */}
+                <CandidateTable
+                  candidates={filteredCandidates}
+                  onFilterByCandidate={(name) => {
+                    setSearch(name);
+                  }}
+                  onOpenSlackThread={(c) => setSlackThreadFor(c)}
+                  onOpenEmail={(c) => setEmailFor(c)}
+                  onCloseCandidate={async (c) => {
+                    await markCandidateClosed(c.candidate_id, c.job_id, true);
+                    if (c.slack_meta?.channel_id && c.slack_meta?.message_ts) {
+                      try {
+                        const { data, error } = await supabase.functions.invoke("slack-thread", {
+                          body: {
+                            action: "close",
+                            channel_id: c.slack_meta.channel_id,
+                            message_ts: c.slack_meta.message_ts,
+                          },
+                        });
+                        if (error) throw error;
+                        if (data?.error) throw new Error(data.error);
+                        toast.success(`${c.candidate_name} closed · ⛔ added in Slack`);
+                      } catch (e) {
+                        const msg = e instanceof Error ? e.message : "Slack reaction failed";
+                        toast.error(`Closed locally, but Slack reaction failed: ${msg}`);
+                      }
+                    } else {
+                      toast.success(`${c.candidate_name} closed`);
+                    }
+                  }}
+                />
+              </>
+            )}
+          </TabsContent>
+
+          <TabsContent value="agent" className="mt-0">
+            <AgentTab />
+          </TabsContent>
+        </Tabs>
       </main>
 
       <SlackThreadPanel
