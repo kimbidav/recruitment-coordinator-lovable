@@ -36,6 +36,7 @@ interface SlackThreadPanelProps {
   messageTs: string | null;
   candidateName: string;
   companyName: string;
+  initialReply?: string;
 }
 
 const POLL_MS = 10_000;
