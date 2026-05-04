@@ -537,7 +537,10 @@ Deno.serve(async (req) => {
         let kind: "intro_stall" | "post_interview_followup" | null = null;
         let payload: Record<string, unknown> = {};
 
-        if (!signal.scheduled && !pastCalMatch) {
+        const daysSinceThreadActivity = (Date.now() - lastThreadTs) / 86400000;
+        const threadActiveRecently = lastThreadTs > subMs && daysSinceThreadActivity < 3;
+
+        if (!signal.scheduled && !pastCalMatch && !threadActiveRecently) {
           kind = "intro_stall";
           payload = {
             signal_summary: signal.reason || "No scheduled meeting found in calendar or recent emails.",
