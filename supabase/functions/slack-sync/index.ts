@@ -214,10 +214,19 @@ Deno.serve(async (req) => {
       if (!cursor) break;
     }
 
+    // Channels to always exclude (internal review channels, not client submission channels)
+    const EXCLUDED_CHANNEL_PATTERNS: RegExp[] = [
+      /eng[-_]?candidate[-_]?review/i,
+      /candidate[-_]?review[-_]?eng/i,
+    ];
+    const isExcluded = (name: string) =>
+      EXCLUDED_CHANNEL_PATTERNS.some((re) => re.test(name ?? ""));
+
     // Filter: external/shared channels OR channels named candidatelabs-*
     const candidateChannels = channels.filter(
       (c) =>
         !c.is_archived &&
+        !isExcluded(c.name ?? "") &&
         (c.is_ext_shared ||
           c.is_shared ||
           c.is_org_shared ||
