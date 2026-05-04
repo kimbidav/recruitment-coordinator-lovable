@@ -6,8 +6,10 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 //   - intro_stall: accepted ≥ 2 days ago, no scheduling signal in calendar or Gmail
 //   - post_interview_followup: meeting happened, no Slack thread activity for 3+ days
 // Detection uses Lovable AI (google/gemini-3-flash-preview) for calendar + email scan.
+// Drafts (Slack/email) are generated lazily via the agent-draft function — not here.
 
 const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const BATCH_LIMIT = 25; // submissions processed per invocation
 
 const COMPANY_NOISE = new Set([
   "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a",
@@ -49,7 +51,7 @@ async function listCalendarEvents(token: string, fromIso: string, toIso: string)
     timeMin: fromIso,
     timeMax: toIso,
     singleEvents: "true",
-    maxResults: "250",
+    maxResults: "500",
     orderBy: "startTime",
   });
   const r = await fetch(
@@ -114,15 +116,15 @@ async function llmDetectSignal(args: {
 Candidate: ${args.candidateName}
 Company: ${args.company}
 
-Upcoming calendar events (next 30 days):
-${args.calendar.slice(0, 40).map((e, i) => `${i + 1}. "${e.summary}" @ ${e.start} attendees=${e.attendees.join(",")}`).join("\n") || "(none)"}
+Calendar events (past 60 days through next 30 days):
+${args.calendar.slice(0, 50).map((e, i) => `${i + 1}. "${e.summary}" @ ${e.start} attendees=${e.attendees.join(",")}`).join("\n") || "(none)"}
 
 Recent Gmail threads:
 ${args.gmail.slice(0, 20).map((h, i) => `${i + 1}. From:${h.from} To:${h.to} Subj:${h.subject} | ${h.snippet}`).join("\n") || "(none)"}
 
 Decide:
-- scheduled = true ONLY if there is a clear scheduled meeting between the candidate and someone at the company (calendar event matching candidate first name + company, OR an email confirming a specific date/time).
-- scheduled_time = ISO 8601 if known, else null.
+- scheduled = true ONLY if there is a clear scheduled meeting between the candidate and someone at the company (calendar event matching candidate first name + company, OR an email confirming a specific date/time). Past meetings count.
+- scheduled_time = ISO 8601 if known, else null. May be in the past.
 - candidate_email = best guess of the candidate's email from the From/To headers (not the recruiter), else null.`;
 
   const body = {
@@ -169,87 +171,13 @@ Decide:
   }
 }
 
-async function llmDraft(args: {
-  kind: "intro_stall" | "post_interview_followup";
-  candidateName: string;
-  company: string;
-  recruiterName: string;
-  threadExcerpt: string;
-}): Promise<{ slack_message: string; email_subject: string; email_body: string }> {
-  const apiKey = Deno.env.get("LOVABLE_API_KEY");
-  const fallback = {
-    slack_message: args.kind === "intro_stall"
-      ? `Following up on ${args.candidateName} — wanted to make sure they got connected. Let me know if you need anything from my side to get a call scheduled.`
-      : `Checking in on ${args.candidateName} — how did the conversation go? Happy to discuss next steps.`,
-    email_subject: args.kind === "intro_stall"
-      ? `Following up — ${args.company}`
-      : `How did your ${args.company} conversation go?`,
-    email_body: args.kind === "intro_stall"
-      ? `Hi ${firstName(args.candidateName)},\n\nJust checking in to make sure you've been able to connect with the team at ${args.company}. Let me know if there's anything I can help unblock on scheduling.\n\nBest,\n${args.recruiterName}`
-      : `Hi ${firstName(args.candidateName)},\n\nWanted to check in after your conversation with ${args.company}. How did it go? Happy to share feedback or talk through next steps.\n\nBest,\n${args.recruiterName}`,
-  };
-  if (!apiKey) return fallback;
-
-  const prompt = `Write a short, warm, professional Slack reply and a short follow-up email.
-Context:
-- Recruiter: ${args.recruiterName}
-- Candidate: ${args.candidateName}
-- Company: ${args.company}
-- Card type: ${args.kind === "intro_stall" ? "candidate was introduced but never scheduled a first call" : "interview happened, need to follow up for feedback"}
-- Recent Slack thread excerpt: ${args.threadExcerpt || "(none)"}
-
-Slack message: ≤2 sentences, addresses the company contact in the thread.
-Email: addressed to the candidate, ≤4 short sentences, signed by the recruiter.`;
-
-  const body = {
-    model: "google/gemini-3-flash-preview",
-    messages: [{ role: "user", content: prompt }],
-    tools: [{
-      type: "function",
-      function: {
-        name: "draft",
-        parameters: {
-          type: "object",
-          properties: {
-            slack_message: { type: "string" },
-            email_subject: { type: "string" },
-            email_body: { type: "string" },
-          },
-          required: ["slack_message", "email_subject", "email_body"],
-          additionalProperties: false,
-        },
-      },
-    }],
-    tool_choice: { type: "function", function: { name: "draft" } },
-  };
-  try {
-    const r = await fetch(LOVABLE_AI_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) return fallback;
-    const j = await r.json();
-    const tc = j.choices?.[0]?.message?.tool_calls?.[0];
-    if (!tc) return fallback;
-    return { ...fallback, ...JSON.parse(tc.function.arguments) };
-  } catch {
-    return fallback;
-  }
-}
-
-function fridayFivePmAfter(iso: string, tz: string): string {
-  // Compute Friday 5pm of the week AFTER `iso`, expressed in tz, returned as ISO UTC.
+function fridayFivePmAfter(iso: string, _tz: string): string {
   const d = new Date(iso);
-  // Move to next week's Friday 17:00 in tz. Approximation: use date math in UTC then return.
-  const day = d.getUTCDay(); // 0..6 (Sun..Sat)
-  const daysUntilNextFri = ((5 - day + 7) % 7) + 7; // at least next week
+  const day = d.getUTCDay();
+  const daysUntilNextFri = ((5 - day + 7) % 7) + 7;
   const target = new Date(Date.UTC(
     d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + daysUntilNextFri, 17 + 8, 0, 0,
   ));
-  // 17 + 8 = approx PT->UTC offset; we don't have a true tz lib, this is "good enough"
-  // for surfacing a recommended timestamp. Client renders with its own locale.
-  void tz;
   return target.toISOString();
 }
 
@@ -265,6 +193,21 @@ async function fetchSlackThread(token: string, channelId: string, ts: string) {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  const admin = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  let runId: string | undefined;
+  let userId: string | undefined;
+  let cardsCreated = 0;
+  let cardsResolved = 0;
+  let processed = 0;
+  let hasMore = false;
+  let nextCursor: string | null = null;
+  let gmailScopeMissing = false;
+  let scanError: string | null = null;
 
   try {
     const authHeader = req.headers.get("Authorization");
@@ -284,45 +227,36 @@ Deno.serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const userId = userData.user.id;
-    const recruiterEmail = userData.user.email ?? "";
-    const recruiterName = recruiterEmail.split("@")[0] || "Me";
+    userId = userData.user.id;
 
     const body = await req.json().catch(() => ({}));
     const tz: string = body.tz ?? "America/Los_Angeles";
+    const cursor: string | null = body.cursor ?? null; // ISO timestamp; process submissions submitted strictly AFTER this
+    const reuseRunId: string | undefined = body.run_id;
 
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
-
-    // Start scan run
-    const { data: runRow } = await admin
-      .from("agent_scan_runs")
-      .insert({ user_id: userId, started_at: new Date().toISOString() })
-      .select("id")
-      .single();
-    const runId = runRow?.id;
-
-    // Load accepted Slack submissions
-    const { data: subs } = await admin
-      .from("slack_submissions")
-      .select("id, channel_id, message_ts, client_name, candidate_name, status, submitted_at, permalink, linkedin_url")
-      .eq("user_id", userId)
-      .eq("status", "accepted")
-      .order("submitted_at", { ascending: false })
-      .limit(80);
+    // Start (or reuse) scan run
+    if (reuseRunId) {
+      runId = reuseRunId;
+    } else {
+      const { data: runRow } = await admin
+        .from("agent_scan_runs")
+        .insert({ user_id: userId, started_at: new Date().toISOString() })
+        .select("id")
+        .single();
+      runId = runRow?.id;
+    }
 
     // Load slack token
     const { data: slackTok } = await admin
       .from("slack_tokens").select("access_token").eq("user_id", userId).maybeSingle();
 
-    // Load google token + refresh if needed
+    // Load google token + refresh; check Gmail scope
     const { data: gTok } = await admin
       .from("google_calendar_tokens").select("*").eq("user_id", userId).maybeSingle();
 
     let googleAccess: string | null = gTok?.access_token ?? null;
     if (gTok) {
+      gmailScopeMissing = !((gTok.scope ?? "") as string).includes("gmail.readonly");
       const exp = gTok.expires_at ? new Date(gTok.expires_at).getTime() : 0;
       if (!googleAccess || Date.now() > exp - 60_000) {
         try {
@@ -337,178 +271,294 @@ Deno.serve(async (req) => {
           console.error("google refresh failed", e);
         }
       }
+    } else {
+      gmailScopeMissing = true;
     }
 
-    // Pre-fetch calendar window
+    // Calendar window: past 60d → next 30d
     let calendar: CalEvent[] = [];
     if (googleAccess) {
       const now = new Date();
+      const from = new Date(now.getTime() - 60 * 86400000);
       const to = new Date(now.getTime() + 30 * 86400000);
       try {
-        calendar = await listCalendarEvents(googleAccess, now.toISOString(), to.toISOString());
+        calendar = await listCalendarEvents(googleAccess, from.toISOString(), to.toISOString());
       } catch (e) {
         console.error("calendar fetch", e);
       }
     }
 
-    let cardsCreated = 0;
-    let cardsResolved = 0;
-
-    // Load existing open cards for this user to detect resolutions
-    const { data: existingCards } = await admin
-      .from("agent_action_cards")
-      .select("id, slack_submission_id, kind, status")
+    // Load accepted Slack submissions (oldest-first within window), paginated by cursor
+    const eligibilityCutoff = new Date(Date.now() - 2 * 86400000).toISOString();
+    let q = admin
+      .from("slack_submissions")
+      .select("id, channel_id, message_ts, client_name, candidate_name, status, submitted_at, permalink, linkedin_url")
       .eq("user_id", userId)
-      .in("status", ["open", "snoozed"]);
+      .eq("status", "accepted")
+      .lte("submitted_at", eligibilityCutoff)
+      .order("submitted_at", { ascending: true })
+      .limit(BATCH_LIMIT + 1); // +1 to detect has_more
+    if (cursor) q = q.gt("submitted_at", cursor);
+    const { data: subsRaw } = await q;
+    const subs = subsRaw ?? [];
+    hasMore = subs.length > BATCH_LIMIT;
+    const batch = hasMore ? subs.slice(0, BATCH_LIMIT) : subs;
+
+    // Existing open/snoozed cards (only relevant if first invocation; resolution is done at end of full run)
+    const isFirstInvocation = !cursor;
     const existingByKey = new Map<string, { id: string; status: string }>();
-    for (const c of existingCards ?? []) {
-      existingByKey.set(`${c.slack_submission_id}::${c.kind}`, { id: c.id, status: c.status });
+    if (isFirstInvocation) {
+      const { data: existingCards } = await admin
+        .from("agent_action_cards")
+        .select("id, slack_submission_id, kind, status")
+        .eq("user_id", userId)
+        .in("status", ["open", "snoozed"]);
+      for (const c of existingCards ?? []) {
+        existingByKey.set(`${c.slack_submission_id}::${c.kind}`, { id: c.id, status: c.status });
+      }
+    } else {
+      // For continuation calls, only load existing cards for this batch's submissions
+      const ids = batch.map((s) => s.id);
+      if (ids.length) {
+        const { data: existingCards } = await admin
+          .from("agent_action_cards")
+          .select("id, slack_submission_id, kind, status")
+          .eq("user_id", userId)
+          .in("slack_submission_id", ids)
+          .in("status", ["open", "snoozed"]);
+        for (const c of existingCards ?? []) {
+          existingByKey.set(`${c.slack_submission_id}::${c.kind}`, { id: c.id, status: c.status });
+        }
+      }
     }
     const stillRelevant = new Set<string>();
 
-    for (const sub of subs ?? []) {
-      const ageMs = Date.now() - new Date(sub.submitted_at).getTime();
-      const ageDays = ageMs / 86400000;
-      if (ageDays < 2) continue;
-
+    for (const sub of batch) {
+      processed++;
+      nextCursor = sub.submitted_at;
       const candidateName = sub.candidate_name || "";
       const company = sub.client_name || "";
-      if (!candidateName) continue;
 
-      // Filter calendar events by simple substring match before LLM
-      const fn = firstName(candidateName).toLowerCase();
-      const cKey = companyKey(company);
-      const calMatches = calendar.filter((e) => {
-        const t = (e.summary || "").toLowerCase();
-        const att = e.attendees.join(" ").toLowerCase();
-        return t.includes(fn) || (cKey && (companyKey(t) === cKey || companyKey(att) === cKey));
-      });
-
-      // Gmail search
-      let gmailHits: GmailHit[] = [];
-      if (googleAccess) {
-        try {
-          const q = `"${candidateName.replace(/"/g, "")}" "${company.replace(/"/g, "")}" newer_than:90d`;
-          gmailHits = await searchGmail(googleAccess, q, 8);
-        } catch (e) {
-          console.error("gmail search", e);
+      try {
+        if (!candidateName) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "skipped_no_name", reason: "no candidate_name",
+          });
+          continue;
         }
-      }
 
-      // LLM signal detection
-      const signal = await llmDetectSignal({
-        candidateName, company, calendar: calMatches.length ? calMatches : calendar.slice(0, 30), gmail: gmailHits,
-      });
-
-      // Slack thread activity
-      let lastThreadTs = parseFloat(sub.message_ts) * 1000;
-      let threadExcerpt = "";
-      if (slackTok?.access_token) {
-        try {
-          const t = await fetchSlackThread(slackTok.access_token, sub.channel_id, sub.message_ts);
-          for (const m of t.messages) {
-            const tsMs = parseFloat(m.ts) * 1000;
-            if (tsMs > lastThreadTs) lastThreadTs = tsMs;
-          }
-          threadExcerpt = (t.messages.slice(-2).map((m: any) => m.text).join(" • ") || "").slice(0, 400);
-        } catch (e) {
-          console.error("slack thread", e);
-        }
-      }
-
-      // Decide card kind
-      let kind: "intro_stall" | "post_interview_followup" | null = null;
-      let payload: Record<string, unknown> = {};
-
-      if (!signal.scheduled) {
-        kind = "intro_stall";
-        payload = {
-          signal_summary: signal.reason || "No scheduled meeting found in calendar or recent emails.",
-          candidate_email: signal.candidate_email,
-          suggested_followup_at: fridayFivePmAfter(sub.submitted_at, tz),
-          slack_permalink: sub.permalink,
-          thread_excerpt: threadExcerpt,
-        };
-      } else if (signal.scheduled_time) {
-        const meetingMs = new Date(signal.scheduled_time).getTime();
-        if (!isNaN(meetingMs) && meetingMs < Date.now()) {
-          const daysSinceThread = (Date.now() - lastThreadTs) / 86400000;
-          if (daysSinceThread >= 3) {
-            kind = "post_interview_followup";
-            payload = {
-              signal_summary: `Interview took place ${new Date(meetingMs).toLocaleDateString()}; no Slack activity for ${Math.round(daysSinceThread)} days.`,
-              candidate_email: signal.candidate_email,
-              meeting_time: signal.scheduled_time,
-              slack_permalink: sub.permalink,
-              thread_excerpt: threadExcerpt,
-            };
-          }
-        }
-      }
-
-      if (!kind) continue;
-
-      const draft = await llmDraft({
-        kind, candidateName, company, recruiterName, threadExcerpt,
-      });
-      payload = {
-        ...payload,
-        candidate_name: candidateName,
-        company_name: company,
-        channel_id: sub.channel_id,
-        message_ts: sub.message_ts,
-        suggested_slack_message: draft.slack_message,
-        suggested_email_subject: draft.email_subject,
-        suggested_email_body: draft.email_body,
-      };
-
-      stillRelevant.add(`${sub.id}::${kind}`);
-      const existing = existingByKey.get(`${sub.id}::${kind}`);
-      if (existing) {
-        await admin.from("agent_action_cards").update({
-          payload, updated_at: new Date().toISOString(),
-        }).eq("id", existing.id);
-      } else {
-        await admin.from("agent_action_cards").insert({
-          user_id: userId,
-          slack_submission_id: sub.id,
-          kind,
-          status: "open",
-          payload,
+        // Pre-filter calendar events by candidate first name OR normalized company
+        const fn = firstName(candidateName).toLowerCase();
+        const cKey = companyKey(company);
+        const calMatches = calendar.filter((e) => {
+          const t = (e.summary || "").toLowerCase();
+          const att = e.attendees.join(" ").toLowerCase();
+          return t.includes(fn) || (cKey && (companyKey(t) === cKey || companyKey(att).includes(cKey)));
         });
-        cardsCreated++;
+
+        // Gmail search: candidate-name only (companies vary; company added as soft hint)
+        let gmailHits: GmailHit[] = [];
+        if (googleAccess && !gmailScopeMissing) {
+          try {
+            const q = `"${candidateName.replace(/"/g, "")}" newer_than:120d`;
+            gmailHits = await searchGmail(googleAccess, q, 10);
+          } catch (e) {
+            console.error("gmail search", e);
+          }
+        }
+
+        // LLM signal detection
+        const signal = await llmDetectSignal({
+          candidateName, company,
+          calendar: calMatches.length ? calMatches : calendar.slice(0, 30),
+          gmail: gmailHits,
+        });
+
+        // Slack thread activity
+        let lastThreadTs = parseFloat(sub.message_ts) * 1000;
+        let threadExcerpt = "";
+        if (slackTok?.access_token) {
+          try {
+            const t = await fetchSlackThread(slackTok.access_token, sub.channel_id, sub.message_ts);
+            for (const m of t.messages) {
+              const tsMs = parseFloat(m.ts) * 1000;
+              if (tsMs > lastThreadTs) lastThreadTs = tsMs;
+            }
+            threadExcerpt = (t.messages.slice(-2).map((m: any) => m.text).join(" • ") || "").slice(0, 400);
+          } catch (e) {
+            console.error("slack thread", e);
+          }
+        }
+
+        // Prefer past calendar event for "meeting happened" detection
+        const pastCalMatch = calMatches.find((e) => {
+          const ts = e.start ? new Date(e.start).getTime() : NaN;
+          return !isNaN(ts) && ts < Date.now();
+        });
+
+        let kind: "intro_stall" | "post_interview_followup" | null = null;
+        let payload: Record<string, unknown> = {};
+
+        if (!signal.scheduled && !pastCalMatch) {
+          kind = "intro_stall";
+          payload = {
+            signal_summary: signal.reason || "No scheduled meeting found in calendar or recent emails.",
+            candidate_email: signal.candidate_email,
+            suggested_followup_at: fridayFivePmAfter(sub.submitted_at, tz),
+            slack_permalink: sub.permalink,
+            thread_excerpt: threadExcerpt,
+          };
+        } else {
+          // Determine meeting time: past calendar match wins; else parse signal
+          let meetingMs = pastCalMatch?.start ? new Date(pastCalMatch.start).getTime() : NaN;
+          if (isNaN(meetingMs) && signal.scheduled_time) {
+            const t = new Date(signal.scheduled_time).getTime();
+            if (!isNaN(t)) meetingMs = t;
+          }
+          if (!isNaN(meetingMs) && meetingMs < Date.now()) {
+            const daysSinceThread = (Date.now() - lastThreadTs) / 86400000;
+            if (daysSinceThread >= 3) {
+              kind = "post_interview_followup";
+              payload = {
+                signal_summary: `Interview took place ${new Date(meetingMs).toLocaleDateString()}; no Slack activity for ${Math.round(daysSinceThread)} days.`,
+                candidate_email: signal.candidate_email,
+                meeting_time: new Date(meetingMs).toISOString(),
+                slack_permalink: sub.permalink,
+                thread_excerpt: threadExcerpt,
+              };
+            }
+          }
+        }
+
+        if (!kind) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "no_signal_needed",
+            reason: signal.scheduled
+              ? "scheduled — no follow-up needed yet"
+              : (pastCalMatch ? "past meeting found, thread still active" : "no card needed"),
+            signal,
+          });
+          continue;
+        }
+
+        payload = {
+          ...payload,
+          candidate_name: candidateName,
+          company_name: company,
+          channel_id: sub.channel_id,
+          message_ts: sub.message_ts,
+          // drafts intentionally omitted — generated on demand by agent-draft
+        };
+
+        stillRelevant.add(`${sub.id}::${kind}`);
+        const existing = existingByKey.get(`${sub.id}::${kind}`);
+        let outcome: string;
+        if (existing) {
+          await admin.from("agent_action_cards").update({
+            payload, updated_at: new Date().toISOString(),
+          }).eq("id", existing.id);
+          outcome = "card_updated";
+        } else {
+          await admin.from("agent_action_cards").insert({
+            user_id: userId,
+            slack_submission_id: sub.id,
+            kind,
+            status: "open",
+            payload,
+          });
+          cardsCreated++;
+          outcome = "card_created";
+        }
+
+        await admin.from("agent_scan_items").insert({
+          user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+          candidate_name: candidateName, client_name: company,
+          outcome, reason: kind, signal,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("agent-scan iteration error", sub.id, msg);
+        await admin.from("agent_scan_items").insert({
+          user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+          candidate_name: candidateName, client_name: company,
+          outcome: "error", reason: msg,
+        });
       }
     }
 
-    // Auto-resolve cards no longer relevant
-    for (const [key, c] of existingByKey) {
-      if (!stillRelevant.has(key)) {
-        await admin.from("agent_action_cards").update({
-          status: "resolved", updated_at: new Date().toISOString(),
-        }).eq("id", c.id);
-        cardsResolved++;
+    // Auto-resolve only on the FINAL invocation of a run (no more pages).
+    // To avoid resolving cards we haven't yet re-scanned, we do this only when !hasMore AND first invocation
+    // OR when it's the last continuation — caller decides by stopping. Safest: resolve when !hasMore.
+    if (!hasMore && isFirstInvocation) {
+      // Resolve cards whose submissions weren't marked relevant in this single-batch run
+      for (const [key, c] of existingByKey) {
+        if (!stillRelevant.has(key)) {
+          await admin.from("agent_action_cards").update({
+            status: "resolved", updated_at: new Date().toISOString(),
+          }).eq("id", c.id);
+          cardsResolved++;
+        }
       }
     }
-
+    // Note: for multi-page runs, resolution is best handled by a separate sweeper or on the final page
+    // by re-loading all open cards and comparing against agent_scan_items for this run_id.
+    if (!hasMore && !isFirstInvocation && runId && userId) {
+      const { data: openCards } = await admin
+        .from("agent_action_cards")
+        .select("id, slack_submission_id, kind")
+        .eq("user_id", userId)
+        .in("status", ["open", "snoozed"]);
+      const { data: items } = await admin
+        .from("agent_scan_items")
+        .select("slack_submission_id, outcome, reason")
+        .eq("scan_run_id", runId);
+      const seenAsRelevant = new Set<string>();
+      for (const it of items ?? []) {
+        if (it.outcome === "card_created" || it.outcome === "card_updated") {
+          seenAsRelevant.add(`${it.slack_submission_id}::${it.reason}`);
+        }
+      }
+      for (const c of openCards ?? []) {
+        if (!seenAsRelevant.has(`${c.slack_submission_id}::${c.kind}`)) {
+          await admin.from("agent_action_cards").update({
+            status: "resolved", updated_at: new Date().toISOString(),
+          }).eq("id", c.id);
+          cardsResolved++;
+        }
+      }
+    }
+  } catch (e) {
+    scanError = e instanceof Error ? e.message : "Unknown error";
+    console.error("agent-scan fatal", scanError);
+  } finally {
     if (runId) {
-      await admin.from("agent_scan_runs").update({
-        finished_at: new Date().toISOString(),
+      // Only finalize the run when there are no more pages
+      const finishPatch: Record<string, unknown> = {
         cards_created: cardsCreated,
         cards_resolved: cardsResolved,
-      }).eq("id", runId);
+      };
+      if (!hasMore) finishPatch.finished_at = new Date().toISOString();
+      if (scanError) finishPatch.error = scanError;
+      await admin.from("agent_scan_runs").update(finishPatch).eq("id", runId);
     }
-
-    return new Response(JSON.stringify({
-      ok: true,
-      scanned: subs?.length ?? 0,
-      cards_created: cardsCreated,
-      cards_resolved: cardsResolved,
-    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Unknown error";
-    console.error("agent-scan error", msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   }
+
+  return new Response(JSON.stringify({
+    ok: !scanError,
+    error: scanError,
+    run_id: runId,
+    processed,
+    cards_created: cardsCreated,
+    cards_resolved: cardsResolved,
+    has_more: hasMore,
+    next_cursor: hasMore ? nextCursor : null,
+    gmail_scope_missing: gmailScopeMissing,
+  }), {
+    status: scanError ? 500 : 200,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
 });
