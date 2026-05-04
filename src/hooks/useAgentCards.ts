@@ -10,6 +10,7 @@ export interface AgentCardPayload {
   candidate_email?: string | null;
   signal_summary?: string;
   thread_excerpt?: string;
+  thread_messages?: Array<{ ts: string; user?: string; text: string; at: string }>;
   slack_permalink?: string | null;
   suggested_followup_at?: string;
   meeting_time?: string;
