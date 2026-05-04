@@ -48,6 +48,7 @@ export function SlackThreadPanel({
   messageTs,
   candidateName,
   companyName,
+  initialReply,
 }: SlackThreadPanelProps) {
   const [messages, setMessages] = useState<SlackMessage[]>([]);
   const [loading, setLoading] = useState(false);
