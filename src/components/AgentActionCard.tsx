@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { AgentCard } from "@/hooks/useAgentCards";
+import { SlackThreadInline } from "./SlackThreadPanel";
 
 interface Props {
   card: AgentCard;
@@ -118,38 +119,13 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
         </div>
       ) : null}
 
-      {p.thread_messages && p.thread_messages.length > 0 ? (
-        <div className="rounded-md border border-border bg-background">
-          <div className="px-2.5 py-1.5 border-b border-border flex items-center justify-between text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <MessageCircle className="h-3 w-3" />
-              Slack thread · last {p.thread_messages.length} message{p.thread_messages.length === 1 ? "" : "s"}
-            </span>
-            {p.slack_permalink && (
-              <a
-                href={p.slack_permalink}
-                target="_blank"
-                rel="noreferrer"
-                className="hover:text-foreground inline-flex items-center gap-1"
-              >
-                Open <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-          </div>
-          <div className="max-h-48 overflow-y-auto divide-y divide-border">
-            {p.thread_messages.map((m, i) => (
-              <div key={`${m.ts}-${i}`} className="px-2.5 py-2 text-xs space-y-0.5">
-                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                  <span className="font-medium text-foreground/80 truncate">
-                    {m.user ? `@${m.user}` : "Slack"}
-                  </span>
-                  <span>{formatDistanceToNow(new Date(m.at), { addSuffix: true })}</span>
-                </div>
-                <p className="text-foreground whitespace-pre-wrap break-words">{m.text}</p>
-              </div>
-            ))}
-          </div>
-        </div>
+      {p.channel_id && p.message_ts ? (
+        <SlackThreadInline
+          channelId={p.channel_id}
+          messageTs={p.message_ts}
+          initialReply={p.suggested_slack_message}
+          maxMessagesHeight={260}
+        />
       ) : p.thread_excerpt && !p.last_event?.detail ? (
         <div className="text-xs text-muted-foreground border-l-2 border-border pl-2 line-clamp-2">
           {p.thread_excerpt}
@@ -164,10 +140,6 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
       )}
 
       <div className="flex items-center gap-2 flex-wrap pt-1">
-        <Button size="sm" variant="default" disabled={drafting} onClick={() => onReplySlack(card)} className="gap-1.5">
-          {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
-          Reply in Slack
-        </Button>
         <Button size="sm" variant="outline" disabled={drafting} onClick={() => onEmail(card)} className="gap-1.5">
           {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
           Email candidate
@@ -180,7 +152,7 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
             <ExternalLink className="h-3 w-3" />
-            Open thread
+            Open in Slack
           </a>
         )}
       </div>

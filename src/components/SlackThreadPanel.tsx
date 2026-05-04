@@ -39,6 +39,14 @@ interface SlackThreadPanelProps {
   initialReply?: string;
 }
 
+interface SlackThreadInlineProps {
+  channelId: string | null;
+  messageTs: string | null;
+  initialReply?: string;
+  /** Cap height of the messages list. Default 320px */
+  maxMessagesHeight?: number;
+}
+
 const POLL_MS = 10_000;
 
 export function SlackThreadPanel({
@@ -76,13 +84,15 @@ export function SlackThreadPanel({
     return matches.slice(0, 8);
   }, [mentionOpen, mentionQuery, users]);
 
-  // Load workspace users (once per open) for @mentions
+  // Load workspace + channel users (once per open) for @mentions.
+  // Passing channel_id lets the backend include external/shared-channel guests
+  // (i.e., clients) who don't show up in the global users.list.
   useEffect(() => {
     if (!open || users.length > 0) return;
     (async () => {
       try {
         const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
-          body: { action: "users" },
+          body: { action: "users", channel_id: channelId },
         });
         if (invErr) throw invErr;
         if (data?.error) throw new Error(data.error);
@@ -91,7 +101,7 @@ export function SlackThreadPanel({
         // Non-fatal — autocomplete just won't appear.
       }
     })();
-  }, [open, users.length]);
+  }, [open, users.length, channelId]);
 
   const load = async () => {
     if (!channelId || !messageTs) return;
@@ -378,5 +388,326 @@ export function SlackThreadPanel({
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+// =============================================================================
+// SlackThreadInline — same thread + composer UX as the side panel, but
+// rendered inline (e.g. embedded inside an Action card / tasker view).
+// =============================================================================
+
+export function SlackThreadInline({
+  channelId,
+  messageTs,
+  initialReply,
+  maxMessagesHeight = 320,
+}: SlackThreadInlineProps) {
+  const [messages, setMessages] = useState<SlackMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [reply, setReply] = useState(initialReply ?? "");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const [users, setUsers] = useState<SlackUser[]>([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionStart, setMentionStart] = useState<number | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  const filteredUsers = useMemo(() => {
+    if (!mentionOpen) return [];
+    const q = mentionQuery.toLowerCase();
+    const matches = users.filter(
+      (u) =>
+        u.name.toLowerCase().includes(q) ||
+        u.real_name.toLowerCase().includes(q),
+    );
+    return matches.slice(0, 8);
+  }, [mentionOpen, mentionQuery, users]);
+
+  // Reset state when the target thread changes (different card)
+  useEffect(() => {
+    setMessages([]);
+    setReply(initialReply ?? "");
+    setError(null);
+    setUsers([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId, messageTs]);
+
+  useEffect(() => {
+    if (!channelId || users.length > 0) return;
+    (async () => {
+      try {
+        const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
+          body: { action: "users", channel_id: channelId },
+        });
+        if (invErr) throw invErr;
+        if (data?.error) throw new Error(data.error);
+        setUsers(data.users ?? []);
+      } catch {
+        /* non-fatal */
+      }
+    })();
+  }, [channelId, users.length]);
+
+  const load = async () => {
+    if (!channelId || !messageTs) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
+        body: { action: "fetch", channel_id: channelId, message_ts: messageTs },
+      });
+      if (invErr) throw invErr;
+      if (data?.error) throw new Error(data.error);
+      setMessages(data.messages ?? []);
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load thread");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!channelId || !messageTs) return;
+    void load();
+    const id = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId, messageTs]);
+
+  const encodeMentions = (raw: string): string => {
+    if (users.length === 0) return raw;
+    const sorted = [...users].sort((a, b) => b.name.length - a.name.length);
+    let out = raw;
+    for (const u of sorted) {
+      const escaped = u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`@${escaped}\\b`, "gi");
+      out = out.replace(re, `<@${u.id}>`);
+    }
+    return out;
+  };
+
+  const handleSend = async () => {
+    const text = reply.trim();
+    if (!text || !channelId || !messageTs) return;
+    setSending(true);
+    try {
+      const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
+        body: {
+          action: "reply",
+          channel_id: channelId,
+          message_ts: messageTs,
+          text: encodeMentions(text),
+        },
+      });
+      if (invErr) throw invErr;
+      if (data?.error) throw new Error(data.error);
+      setReply("");
+      setMentionOpen(false);
+      await load();
+      toast.success("Reply sent to Slack");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to send reply");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleReplyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setReply(value);
+    const caret = e.target.selectionStart ?? value.length;
+    const upToCaret = value.slice(0, caret);
+    const match = upToCaret.match(/(?:^|\s)@([\w.\-]*)$/);
+    if (match) {
+      setMentionOpen(true);
+      setMentionQuery(match[1] ?? "");
+      setMentionStart(caret - (match[1]?.length ?? 0) - 1);
+      setMentionIndex(0);
+    } else {
+      setMentionOpen(false);
+    }
+  };
+
+  const insertMention = (u: SlackUser) => {
+    if (mentionStart === null) return;
+    const before = reply.slice(0, mentionStart);
+    const caret = textareaRef.current?.selectionStart ?? reply.length;
+    const after = reply.slice(caret);
+    const inserted = `@${u.name} `;
+    const next = before + inserted + after;
+    setReply(next);
+    setMentionOpen(false);
+    setMentionQuery("");
+    setMentionStart(null);
+    requestAnimationFrame(() => {
+      const pos = (before + inserted).length;
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(pos, pos);
+    });
+  };
+
+  const formatTs = (ts: string) => {
+    try {
+      return format(new Date(parseFloat(ts) * 1000), "MMM d, h:mm a");
+    } catch {
+      return ts;
+    }
+  };
+
+  if (!channelId || !messageTs) {
+    return (
+      <div className="text-xs text-muted-foreground italic">
+        No Slack thread linked to this card.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-border overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-border flex items-center justify-between text-[11px] text-muted-foreground bg-muted/30">
+        <span className="flex items-center gap-1.5">
+          <MessagesSquare className="h-3 w-3" />
+          Slack thread
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void load()}
+          disabled={loading}
+          className="h-6 px-1.5"
+          title="Refresh"
+        >
+          <RefreshCw className={loading ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
+        </Button>
+      </div>
+
+      <div
+        ref={scrollRef}
+        className="overflow-y-auto px-3 py-2 space-y-3"
+        style={{ maxHeight: maxMessagesHeight }}
+      >
+        {error ? (
+          <div className="text-xs text-destructive">{error}</div>
+        ) : messages.length === 0 && !loading ? (
+          <div className="text-xs text-muted-foreground">No messages found.</div>
+        ) : (
+          messages.map((m, idx) => (
+            <div key={m.ts} className="flex gap-2">
+              {m.user_image ? (
+                <img src={m.user_image} alt={m.user_name} className="h-6 w-6 rounded shrink-0" />
+              ) : (
+                <div className="h-6 w-6 rounded bg-muted shrink-0 flex items-center justify-center text-[10px] font-medium">
+                  {m.user_name.slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-xs font-medium text-foreground truncate">{m.user_name}</span>
+                  <span className="text-[10px] text-muted-foreground">{formatTs(m.ts)}</span>
+                  {idx === 0 && (
+                    <span className="text-[9px] uppercase tracking-wide text-muted-foreground">parent</span>
+                  )}
+                </div>
+                <div className="text-xs text-foreground whitespace-pre-wrap break-words mt-0.5">
+                  {m.text
+                    ? m.text.replace(/<@([A-Z0-9]+)>/g, (_, id) => {
+                        const u = users.find((x) => x.id === id);
+                        return `@${u?.name ?? id}`;
+                      })
+                    : <span className="text-muted-foreground italic">(no text)</span>}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="border-t border-border p-2 space-y-1.5 relative bg-background">
+        {mentionOpen && filteredUsers.length > 0 && (
+          <div className="absolute bottom-full left-2 right-2 mb-1 z-50 max-h-48 overflow-y-auto rounded-md border border-border bg-popover shadow-md">
+            {filteredUsers.map((u, i) => (
+              <button
+                key={u.id}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertMention(u);
+                }}
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-accent ${
+                  i === mentionIndex ? "bg-accent" : ""
+                }`}
+              >
+                {u.image ? (
+                  <img src={u.image} alt={u.name} className="h-5 w-5 rounded" />
+                ) : (
+                  <div className="h-5 w-5 rounded bg-muted flex items-center justify-center text-[9px] font-medium">
+                    {u.name.slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+                <span className="font-medium text-foreground">@{u.name}</span>
+                {u.real_name && u.real_name !== u.name && (
+                  <span className="text-muted-foreground text-[10px] truncate">{u.real_name}</span>
+                )}
+                {(u as any).is_external && (
+                  <span className="ml-auto text-[9px] uppercase tracking-wide text-muted-foreground">guest</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+        <Textarea
+          ref={textareaRef}
+          value={reply}
+          onChange={handleReplyChange}
+          placeholder="Reply in this Slack thread... (use @ to mention — clients included)"
+          rows={2}
+          className="resize-none text-sm"
+          onKeyDown={(e) => {
+            if (mentionOpen && filteredUsers.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setMentionIndex((i) => (i + 1) % filteredUsers.length);
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setMentionIndex((i) => (i - 1 + filteredUsers.length) % filteredUsers.length);
+                return;
+              }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                insertMention(filteredUsers[mentionIndex]);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setMentionOpen(false);
+                return;
+              }
+            }
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              void handleSend();
+            }
+          }}
+        />
+        <div className="flex justify-between items-center">
+          <span className="text-[10px] text-muted-foreground">
+            @ to mention · ⌘+Enter to send
+          </span>
+          <Button onClick={() => void handleSend()} disabled={sending || !reply.trim()} size="sm" className="h-7">
+            {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+            Send
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
