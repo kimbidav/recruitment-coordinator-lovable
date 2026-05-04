@@ -140,10 +140,6 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
       )}
 
       <div className="flex items-center gap-2 flex-wrap pt-1">
-        <Button size="sm" variant="default" disabled={drafting} onClick={() => onReplySlack(card)} className="gap-1.5">
-          {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
-          Reply in Slack
-        </Button>
         <Button size="sm" variant="outline" disabled={drafting} onClick={() => onEmail(card)} className="gap-1.5">
           {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
           Email candidate
@@ -156,7 +152,7 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
             <ExternalLink className="h-3 w-3" />
-            Open thread
+            Open in Slack
           </a>
         )}
       </div>
