@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { AgentCard } from "@/hooks/useAgentCards";
+import { SlackThreadInline } from "./SlackThreadPanel";
 
 interface Props {
   card: AgentCard;
