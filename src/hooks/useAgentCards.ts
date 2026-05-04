@@ -24,6 +24,12 @@ export interface AgentCardPayload {
     source: string;
     detail?: string;
   } | null;
+  signals?: Array<{
+    kind: "introduced" | "scheduled" | "interviewed" | "upcoming" | "last_reply" | "email";
+    label: string;
+    at: string;
+    source: string;
+  }>;
 }
 
 export interface AgentCard {
