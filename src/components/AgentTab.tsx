@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Sparkles, AlertCircle } from "lucide-react";
+import { Loader2, RefreshCw, Sparkles, AlertCircle, ChevronLeft, ChevronRight, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,6 +9,7 @@ import { AgentActionCard } from "./AgentActionCard";
 import { SlackThreadPanel } from "./SlackThreadPanel";
 import { EmailComposer } from "./EmailComposer";
 import { AgentScanDiagnostics } from "./AgentScanDiagnostics";
+import { Progress } from "@/components/ui/progress";
 
 export function AgentTab() {
   const {
@@ -21,12 +22,57 @@ export function AgentTab() {
   const [reconnecting, setReconnecting] = useState(false);
 
   const open = useMemo(() => visibleCards(cards), [cards]);
-  const stalls = open.filter((c) => c.kind === "intro_stall");
-  const followups = open.filter((c) => c.kind === "post_interview_followup");
+  // Stable queue order: stalls first, then follow-ups, oldest first within each kind
+  const queue = useMemo(() => {
+    const ord = (k: AgentCard["kind"]) => (k === "intro_stall" ? 0 : 1);
+    return [...open].sort((a, b) => {
+      const k = ord(a.kind) - ord(b.kind);
+      if (k !== 0) return k;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+  }, [open]);
+
+  const [cursorId, setCursorId] = useState<string | null>(null);
+  const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
+  const [sessionTotal, setSessionTotal] = useState<number>(0);
+
+  // Initialize / maintain the cursor as the queue changes
+  useEffect(() => {
+    if (queue.length === 0) {
+      setCursorId(null);
+      return;
+    }
+    if (sessionTotal === 0) setSessionTotal(queue.length);
+    if (!cursorId || !queue.find((c) => c.id === cursorId)) {
+      setCursorId(queue[0].id);
+    }
+  }, [queue, cursorId, sessionTotal]);
+
+  const currentIndex = cursorId ? queue.findIndex((c) => c.id === cursorId) : -1;
+  const current = currentIndex >= 0 ? queue[currentIndex] : null;
+  const completedCount = completedIds.size;
+  const totalForProgress = Math.max(sessionTotal, completedCount + queue.length);
+
+  const advance = (delta: number) => {
+    if (queue.length === 0) return;
+    const i = currentIndex < 0 ? 0 : currentIndex;
+    const next = (i + delta + queue.length) % queue.length;
+    setCursorId(queue[next].id);
+  };
+
+  const markCompletedAndAdvance = (id: string) => {
+    setCompletedIds((s) => new Set(s).add(id));
+    // After update, the card will leave `queue`; pick the next neighbor
+    const i = queue.findIndex((c) => c.id === id);
+    const nextCard = queue[i + 1] ?? queue[i - 1] ?? null;
+    setCursorId(nextCard?.id ?? null);
+  };
 
   const handleScan = async () => {
     try {
       const data = await runScan();
+      setCompletedIds(new Set());
+      setSessionTotal(0);
       toast.success(
         `Scan complete · ${data?.cards_created ?? 0} new, ${data?.cards_resolved ?? 0} resolved (${data?.processed ?? 0} candidates checked)`,
       );
@@ -37,12 +83,19 @@ export function AgentTab() {
 
   const handleSnooze = async (c: AgentCard) => {
     const until = new Date(Date.now() + 3 * 86400000).toISOString();
+    markCompletedAndAdvance(c.id);
     await updateStatus(c.id, "snoozed", until);
     toast.success("Snoozed for 3 days");
   };
   const handleDismiss = async (c: AgentCard) => {
+    markCompletedAndAdvance(c.id);
     await updateStatus(c.id, "dismissed");
     toast.success("Dismissed");
+  };
+  const handleResolve = async (c: AgentCard) => {
+    markCompletedAndAdvance(c.id);
+    await updateStatus(c.id, "resolved");
+    toast.success("Marked done");
   };
 
   const ensureDrafts = async (c: AgentCard): Promise<AgentCard> => {
@@ -95,6 +148,10 @@ export function AgentTab() {
     }
   };
 
+  const progressPct = totalForProgress > 0
+    ? Math.round((completedCount / totalForProgress) * 100)
+    : 0;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -135,55 +192,73 @@ export function AgentTab() {
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading...
         </div>
-      ) : open.length === 0 ? (
+      ) : current ? (
+        <div className="space-y-4">
+          {/* Tasker header: progress + position */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="uppercase tracking-wide font-medium">
+                {current.kind === "intro_stall" ? "Intro stall" : "Post-interview follow-up"}
+                {" · "}
+                Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
+              </span>
+              <span>
+                {completedCount} done · {queue.length} left
+              </span>
+            </div>
+            <Progress value={progressPct} className="h-1.5" />
+          </div>
+
+          {/* Single focused card */}
+          <div className="max-w-2xl mx-auto w-full">
+            <AgentActionCard
+              card={current}
+              drafting={draftingId === current.id}
+              onReplySlack={handleReplySlack}
+              onEmail={handleEmail}
+              onSnooze={handleSnooze}
+              onDismiss={handleDismiss}
+            />
+          </div>
+
+          {/* Tasker controls */}
+          <div className="flex items-center justify-between max-w-2xl mx-auto w-full">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => advance(-1)}
+              disabled={queue.length <= 1}
+              className="gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" /> Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleResolve(current)}
+              className="gap-1"
+            >
+              <CheckCircle2 className="h-4 w-4" /> Mark done
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => advance(1)}
+              disabled={queue.length <= 1}
+              className="gap-1"
+            >
+              Skip <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      ) : (
         <div className="border border-dashed border-border rounded-lg p-10 text-center">
           <p className="text-foreground font-medium mb-1">All caught up</p>
           <p className="text-sm text-muted-foreground">
-            No follow-ups need your attention right now.
+            {completedCount > 0
+              ? `You worked through ${completedCount} item${completedCount === 1 ? "" : "s"} — nice.`
+              : "No follow-ups need your attention right now."}
           </p>
-        </div>
-      ) : (
-        <div className="space-y-8">
-          {stalls.length > 0 && (
-            <section className="space-y-3">
-              <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-                Intro stalls ({stalls.length})
-              </h3>
-              <div className="grid gap-3 md:grid-cols-2">
-                {stalls.map((c) => (
-                  <AgentActionCard
-                    key={c.id}
-                    card={c}
-                    drafting={draftingId === c.id}
-                    onReplySlack={handleReplySlack}
-                    onEmail={handleEmail}
-                    onSnooze={handleSnooze}
-                    onDismiss={handleDismiss}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-          {followups.length > 0 && (
-            <section className="space-y-3">
-              <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-                Post-interview follow-ups ({followups.length})
-              </h3>
-              <div className="grid gap-3 md:grid-cols-2">
-                {followups.map((c) => (
-                  <AgentActionCard
-                    key={c.id}
-                    card={c}
-                    drafting={draftingId === c.id}
-                    onReplySlack={handleReplySlack}
-                    onEmail={handleEmail}
-                    onSnooze={handleSnooze}
-                    onDismiss={handleDismiss}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
         </div>
       )}
 
