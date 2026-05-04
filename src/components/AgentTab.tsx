@@ -21,16 +21,20 @@ export function AgentTab() {
   const [draftingId, setDraftingId] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
 
+  const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+
   const open = useMemo(() => visibleCards(cards), [cards]);
   // Stable queue order: stalls first, then follow-ups, oldest first within each kind
   const queue = useMemo(() => {
     const ord = (k: AgentCard["kind"]) => (k === "intro_stall" ? 0 : 1);
-    return [...open].sort((a, b) => {
-      const k = ord(a.kind) - ord(b.kind);
-      if (k !== 0) return k;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-  }, [open]);
+    return [...open]
+      .filter((c) => !skippedIds.has(c.id))
+      .sort((a, b) => {
+        const k = ord(a.kind) - ord(b.kind);
+        if (k !== 0) return k;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+  }, [open, skippedIds]);
 
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
@@ -72,6 +76,7 @@ export function AgentTab() {
     try {
       const data = await runScan();
       setCompletedIds(new Set());
+      setSkippedIds(new Set());
       setSessionTotal(0);
       toast.success(
         `Scan complete · ${data?.cards_created ?? 0} new, ${data?.cards_resolved ?? 0} resolved (${data?.processed ?? 0} candidates checked)`,
@@ -243,8 +248,14 @@ export function AgentTab() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => advance(1)}
-              disabled={queue.length <= 1}
+              onClick={() => {
+                if (!current) return;
+                const i = queue.findIndex((c) => c.id === current.id);
+                const nextCard = queue[i + 1] ?? queue[i - 1] ?? null;
+                setSkippedIds((s) => new Set(s).add(current.id));
+                setCursorId(nextCard?.id ?? null);
+              }}
+              disabled={!current}
               className="gap-1"
             >
               Skip <ChevronRight className="h-4 w-4" />
