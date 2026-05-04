@@ -5,6 +5,7 @@ import {
   AlarmClock,
   CalendarClock,
   ExternalLink,
+  Loader2,
   Mail,
   MessageSquare,
   X,
@@ -15,13 +16,14 @@ import type { AgentCard } from "@/hooks/useAgentCards";
 
 interface Props {
   card: AgentCard;
+  drafting?: boolean;
   onReplySlack: (card: AgentCard) => void;
   onEmail: (card: AgentCard) => void;
   onSnooze: (card: AgentCard) => void;
   onDismiss: (card: AgentCard) => void;
 }
 
-export function AgentActionCard({ card, onReplySlack, onEmail, onSnooze, onDismiss }: Props) {
+export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooze, onDismiss }: Props) {
   const p = card.payload || {};
   const isStall = card.kind === "intro_stall";
   return (
@@ -76,12 +78,12 @@ export function AgentActionCard({ card, onReplySlack, onEmail, onSnooze, onDismi
       )}
 
       <div className="flex items-center gap-2 flex-wrap pt-1">
-        <Button size="sm" variant="default" onClick={() => onReplySlack(card)} className="gap-1.5">
-          <MessageSquare className="h-3.5 w-3.5" />
+        <Button size="sm" variant="default" disabled={drafting} onClick={() => onReplySlack(card)} className="gap-1.5">
+          {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
           Reply in Slack
         </Button>
-        <Button size="sm" variant="outline" onClick={() => onEmail(card)} className="gap-1.5">
-          <Mail className="h-3.5 w-3.5" />
+        <Button size="sm" variant="outline" disabled={drafting} onClick={() => onEmail(card)} className="gap-1.5">
+          {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
           Email candidate
         </Button>
         {p.slack_permalink && (
