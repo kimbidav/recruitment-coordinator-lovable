@@ -548,6 +548,8 @@ Deno.serve(async (req) => {
             thread_messages: threadMessages,
             last_event: lastEvent,
             signals,
+          };
+        } else {
           // Determine meeting time: past calendar match wins; else parse signal
           let meetingMs = pastCalMatch?.start ? new Date(pastCalMatch.start).getTime() : NaN;
           if (isNaN(meetingMs) && signal.scheduled_time) {
