@@ -495,7 +495,7 @@ Deno.serve(async (req) => {
                 ? `Scheduled: ${upcomingCal.e.summary}`
                 : (pastCals[0]?.e.summary ? `Scheduled: ${pastCals[0].e.summary}` : "Interview scheduled"),
               at: new Date(t).toISOString(),
-              source: signal.source ? `Detected via ${signal.source}` : "Detected by AI",
+              source: "Detected by agent",
             });
           }
         }
