@@ -398,6 +398,71 @@ Deno.serve(async (req) => {
           return !isNaN(ts) && ts < Date.now();
         });
 
+        // Build a "last known event" we can display on the card so the user
+        // can see what we observed and where we got it from.
+        type LastEvent = { kind: string; label: string; at: string; source: string; detail?: string };
+        const candidates: LastEvent[] = [];
+        // Slack: last reply in thread (if any newer than the original submission)
+        const subMs = parseFloat(sub.message_ts) * 1000;
+        if (lastThreadTs > subMs) {
+          candidates.push({
+            kind: "slack_reply",
+            label: "Last Slack reply in thread",
+            at: new Date(lastThreadTs).toISOString(),
+            source: "Slack thread",
+            detail: threadExcerpt ? threadExcerpt.slice(0, 160) : undefined,
+          });
+        }
+        // Slack: original submission
+        candidates.push({
+          kind: "slack_submission",
+          label: "Submitted in Slack",
+          at: new Date(subMs).toISOString(),
+          source: "Slack channel",
+        });
+        // Calendar: most recent past meeting
+        const pastCals = calMatches
+          .map((e) => ({ e, ts: e.start ? new Date(e.start).getTime() : NaN }))
+          .filter((x) => !isNaN(x.ts) && x.ts < Date.now())
+          .sort((a, b) => b.ts - a.ts);
+        if (pastCals[0]) {
+          candidates.push({
+            kind: "calendar_past",
+            label: `Interview held: ${pastCals[0].e.summary || "(untitled)"}`,
+            at: new Date(pastCals[0].ts).toISOString(),
+            source: "Google Calendar",
+          });
+        }
+        // Calendar: next upcoming meeting
+        const upcomingCal = calMatches
+          .map((e) => ({ e, ts: e.start ? new Date(e.start).getTime() : NaN }))
+          .filter((x) => !isNaN(x.ts) && x.ts >= Date.now())
+          .sort((a, b) => a.ts - b.ts)[0];
+        if (upcomingCal) {
+          candidates.push({
+            kind: "calendar_upcoming",
+            label: `Upcoming interview: ${upcomingCal.e.summary || "(untitled)"}`,
+            at: new Date(upcomingCal.ts).toISOString(),
+            source: "Google Calendar",
+          });
+        }
+        // Gmail: most recent matching email
+        const recentGmail = (gmailHits || [])
+          .map((g: any) => ({ g, ts: g.date ? new Date(g.date).getTime() : NaN }))
+          .filter((x) => !isNaN(x.ts))
+          .sort((a, b) => b.ts - a.ts)[0];
+        if (recentGmail) {
+          candidates.push({
+            kind: "gmail",
+            label: `Email: ${(recentGmail.g.subject || "(no subject)").slice(0, 80)}`,
+            at: new Date(recentGmail.ts).toISOString(),
+            source: `Gmail · ${recentGmail.g.from || "unknown sender"}`,
+          });
+        }
+        const lastEvent = candidates
+          .filter((c) => !!c.at)
+          .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] ?? null;
+
         let kind: "intro_stall" | "post_interview_followup" | null = null;
         let payload: Record<string, unknown> = {};
 
@@ -409,6 +474,7 @@ Deno.serve(async (req) => {
             suggested_followup_at: fridayFivePmAfter(sub.submitted_at, tz),
             slack_permalink: sub.permalink,
             thread_excerpt: threadExcerpt,
+            last_event: lastEvent,
           };
         } else {
           // Determine meeting time: past calendar match wins; else parse signal
