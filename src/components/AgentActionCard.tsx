@@ -10,6 +10,10 @@ import {
   MessageSquare,
   X,
   Check,
+  Activity,
+  Calendar,
+  MessageCircle,
+  Send,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { AgentCard } from "@/hooks/useAgentCards";
