@@ -68,20 +68,41 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
         <p className="text-sm text-muted-foreground">{p.signal_summary}</p>
       )}
 
-      {p.last_event && (
+      {(p.signals && p.signals.length > 0) ? (
+        <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+            Signals
+          </div>
+          <ul className="space-y-1">
+            {p.signals.slice(0, 5).map((s, i) => {
+              const Icon =
+                s.kind === "introduced" ? Send :
+                s.kind === "scheduled" ? CalendarClock :
+                s.kind === "upcoming" ? Calendar :
+                s.kind === "interviewed" ? Calendar :
+                s.kind === "email" ? Mail :
+                MessageCircle;
+              return (
+                <li key={`${s.kind}-${i}`} className="flex items-start gap-2 text-xs">
+                  <Icon className="h-3.5 w-3.5 mt-0.5 text-muted-foreground shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-foreground truncate">
+                      <span className="font-medium">{s.label}</span>
+                      <span className="text-muted-foreground"> · {format(new Date(s.at), "MMM d, yyyy")}</span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground truncate">
+                      {formatDistanceToNow(new Date(s.at), { addSuffix: true })} · via {s.source}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : p.last_event ? (
         <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1">
           <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            {p.last_event.kind.startsWith("calendar") ? (
-              <Calendar className="h-3.5 w-3.5" />
-            ) : p.last_event.kind === "gmail" ? (
-              <Mail className="h-3.5 w-3.5" />
-            ) : p.last_event.kind === "slack_reply" ? (
-              <MessageCircle className="h-3.5 w-3.5" />
-            ) : p.last_event.kind === "slack_submission" ? (
-              <Send className="h-3.5 w-3.5" />
-            ) : (
-              <Activity className="h-3.5 w-3.5" />
-            )}
+            <Activity className="h-3.5 w-3.5" />
             <span className="truncate">{p.last_event.label}</span>
           </div>
           <div className="flex items-center justify-between text-[11px] text-muted-foreground gap-2">
@@ -94,13 +115,8 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
               via {p.last_event.source}
             </span>
           </div>
-          {p.last_event.detail && (
-            <div className="text-[11px] text-muted-foreground border-l-2 border-border pl-2 line-clamp-2">
-              {p.last_event.detail}
-            </div>
-          )}
         </div>
-      )}
+      ) : null}
 
       {p.thread_messages && p.thread_messages.length > 0 ? (
         <div className="rounded-md border border-border bg-background">
