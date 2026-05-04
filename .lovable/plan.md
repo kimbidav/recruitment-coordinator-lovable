@@ -1,41 +1,75 @@
-## Goal
 
-Simplify the Ashby session token dialog (`src/components/AshbyFetchButton.tsx`) so users see one clear path — the DevTools / Application tab method — and link a Loom walkthrough for help.
+# Agent Tab — Action Cards
 
-## Changes
+A new "Agent" tab next to the candidate pipeline. The agent scans accepted Slack submissions for two kinds of dropped balls and produces action cards you can act on inline (reply in Slack, email the candidate, dismiss).
 
-**File: `src/components/AshbyFetchButton.tsx`**
+## What the agent looks for
 
-1. **Remove the "Quick way" tabbed UI**
-   - Delete the `activeStep` state and the tab toggle row (Quick / Manual buttons).
-   - Remove the conditional that switches between the quick console-snippet flow and the manual flow.
-   - Remove now-unused pieces tied to the quick path: `CONSOLE_SNIPPET` constant, `snippetCopied` state, `copySnippet` handler, and the `Copy` / `Check` icon imports if no longer used elsewhere in the file (the `Check` icon is still used for the valid-token indicator, so keep it; drop `Copy` only if unused).
+**Card type A — "No scheduling signal yet"** (intro stall)
+- Trigger: Slack submission has the green ✅ accepted reaction (already tracked as `status='accepted'`), submitted ≥ 2 days ago, and no scheduled call detected.
+- Detection (in priority order, via an LLM pass per candidate):
+  1. Scan Google Calendar events in the next 30 days for the candidate's first name + company name.
+  2. If nothing found, scan Gmail for threads involving the candidate (we infer the candidate's email from past intro emails matching candidate name + company) and look for a confirmed time/date for a meeting.
+- If neither signal exists, create a follow-up card. Suggested follow-up timing: Friday 5pm local of the week following the intro email — surfaced as a recommended nudge timestamp on the card (no calendar event is created automatically; user can act on it).
 
-2. **Promote the DevTools instructions to the primary (only) flow**
-   - Replace the previous "Manual (DevTools)" terse list with a clearer numbered list at body text size (not muted micro-text), keeping the same six steps:
-     1. Open `app.ashbyhq.com` and sign in (with an "Open Ashby" button as in the current quick flow).
-     2. Open DevTools (`⌘⌥I` on macOS / `F12` on Windows).
-     3. Go to the **Application** tab (Firefox: **Storage**).
-     4. Expand **Cookies** → select `https://app.ashbyhq.com`.
-     5. Find the row `ashby_session_token`, double-click its **Value**, and copy it.
-     6. Paste it into the field below.
+**Card type B — "Post-interview follow-up"**
+- Trigger: A scheduling signal exists (calendar event or confirmed email time) AND the meeting time has passed AND no new Slack thread activity for ≥ 3 days since the meeting.
+- Action: prompt to follow up in the Slack thread for feedback.
 
-3. **Update the dialog header copy**
-   - Title stays "Connect your Ashby account".
-   - Description becomes something like: "We need your Ashby session token to pull candidates. Follow the steps below — it takes about a minute. Watch the walkthrough if you get stuck."
+## UI
 
-4. **Add a Loom walkthrough link**
-   - Just below the dialog description (above the numbered steps), add a small inline link/button:
-     - Label: "Watch the 1-minute walkthrough"
-     - Icon: `ExternalLink` (already imported)
-     - Opens `https://www.loom.com/share/3423bbe88fdd4ad4819ce24afda058b1` in a new tab (`target="_blank"`, `rel="noopener noreferrer"`).
-   - Style: subtle outline button (`size="sm"`), matching the existing "Open Ashby" button.
+- Top-level tabs in `Index.tsx`: **Pipeline** (current view) | **Agent** `[N]` badge with open card count.
+- Agent view: header with "Refresh" (re-runs detection) and a "Last scan" timestamp; grid of cards grouped by type (Intro Stalls / Post-Interview Follow-ups), then by priority (oldest first).
+- Each card shows: candidate name, company, submitter, days since intro (or days since interview), status pill (`No scheduling signal` / `Awaiting feedback`), the original Slack permalink, and a 2-line excerpt of the most recent thread message.
+- Card actions:
+  - **Reply in Slack** — opens existing `SlackThreadPanel` prefilled with a suggested message (LLM-drafted, editable).
+  - **Email candidate** — opens existing `EmailComposer` prefilled with subject + body.
+  - **Snooze 3 days** — hides the card until then.
+  - **Dismiss** — marks resolved.
+- Cards auto-resolve when: (A) a scheduling signal appears, or (B) new thread activity appears after the card was created.
 
-5. **Leave untouched**
-   - Token input, validation, privacy disclosure (`Why do you need this?`), progress UI during fetch, footer "Fetch Candidates" button, and all fetch/run logic.
-   - The button itself on the dashboard / onboarding screen.
+## Backend
 
-## Notes
+New tables (migration):
+- `agent_action_cards` — `id, user_id, candidate_row_id (nullable), slack_submission_id, kind ('intro_stall'|'post_interview_followup'), status ('open'|'snoozed'|'dismissed'|'resolved'), snooze_until, payload jsonb (suggested_message, suggested_email_subject, suggested_email_body, suggested_followup_at, signal_summary), created_at, updated_at`. RLS: owner-only (mirrors existing pattern).
+- `agent_scan_runs` — `id, user_id, started_at, finished_at, cards_created, error`. RLS: owner-only.
 
-- No changes to backend, edge functions, or other files.
-- No new dependencies.
+New edge function: `agent-scan` (verify_jwt validated in code, like the others).
+1. Loads accepted Slack submissions for the user (`status='accepted'`, not yet resolved).
+2. For each, locate the matching Ashby candidate via the same `companyKey` + name match used in `Index.tsx`. Pull recent thread messages via `slack-thread fetch`.
+3. Calendar pass: list events from `google_calendar_tokens` user (next 30 days) and pass titles + attendees to Lovable AI (`google/gemini-3-flash-preview`, structured output) along with `{candidate_first_name, company}` → `{matched: bool, event_time?: iso}`.
+4. If unmatched, Gmail pass: query Gmail (extend `gmail-helper` with `action='thread_scan'`) for `from:OR to: candidate-name OR company` in the last 60 days; LLM extracts `{candidate_email?, scheduled_time?: iso, confidence}`.
+5. Decide card kind:
+   - No signal → create `intro_stall` card with `suggested_followup_at` = Friday 5pm local of week after the intro Slack message.
+   - Signal + meeting passed + Slack thread silent ≥ 3 days → create `post_interview_followup` card.
+6. Generate suggested Slack reply + suggested email (subject/body) with a single LLM call per card.
+7. Upsert by `(user_id, slack_submission_id, kind)`; auto-resolve cards whose conditions no longer hold.
+
+Extend `gmail-helper` with `action='thread_scan'` returning normalized message snippets (subject, from, to, snippet, internalDate) for a query string. Extend `google-calendar-sync` (or add small `agent-scan` internal helper) to list events in a date window.
+
+Trigger: client calls `agent-scan` on Agent-tab open and on "Refresh". (Optional later: pg_cron daily run — not in this plan.)
+
+## Frontend changes
+
+- `src/components/AgentTab.tsx` — fetches `agent_action_cards`, renders grouped cards, handles snooze/dismiss/refresh.
+- `src/components/AgentActionCard.tsx` — single card with action buttons; opens existing `SlackThreadPanel` and `EmailComposer` with prefilled content.
+- `src/pages/Index.tsx` — wrap pipeline content + agent in shadcn `Tabs` (`Pipeline` / `Agent`). Agent tab shows unresolved card count badge from a lightweight count query.
+- `src/hooks/useAgentCards.ts` — list cards, mutate (snooze/dismiss), trigger scan.
+
+## Files
+
+Created:
+- `supabase/functions/agent-scan/index.ts`
+- `src/components/AgentTab.tsx`
+- `src/components/AgentActionCard.tsx`
+- `src/hooks/useAgentCards.ts`
+- migration: `agent_action_cards`, `agent_scan_runs` + RLS
+
+Edited:
+- `src/pages/Index.tsx` (add Tabs)
+- `supabase/functions/gmail-helper/index.ts` (add `thread_scan` action)
+- `src/components/EmailComposer.tsx` and `src/components/SlackThreadPanel.tsx` (accept optional `initialMessage` / `initialSubject` + `initialBody` props for prefill)
+
+## Open question
+
+The "Friday 5pm local" recommendation needs a timezone. I'll default to the browser timezone (sent from client when invoking `agent-scan`); if you'd prefer a fixed timezone (e.g., America/Los_Angeles), say the word and I'll hardcode it.
