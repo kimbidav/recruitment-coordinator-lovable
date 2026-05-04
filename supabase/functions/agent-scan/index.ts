@@ -502,6 +502,7 @@ Deno.serve(async (req) => {
                 meeting_time: new Date(meetingMs).toISOString(),
                 slack_permalink: sub.permalink,
                 thread_excerpt: threadExcerpt,
+                thread_messages: threadMessages,
                 last_event: lastEvent,
               };
             }
