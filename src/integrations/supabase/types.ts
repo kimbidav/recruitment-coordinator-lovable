@@ -53,6 +53,45 @@ export type Database = {
         }
         Relationships: []
       }
+      agent_scan_items: {
+        Row: {
+          candidate_name: string | null
+          client_name: string | null
+          created_at: string
+          id: string
+          outcome: string
+          reason: string | null
+          scan_run_id: string
+          signal: Json | null
+          slack_submission_id: string | null
+          user_id: string
+        }
+        Insert: {
+          candidate_name?: string | null
+          client_name?: string | null
+          created_at?: string
+          id?: string
+          outcome: string
+          reason?: string | null
+          scan_run_id: string
+          signal?: Json | null
+          slack_submission_id?: string | null
+          user_id: string
+        }
+        Update: {
+          candidate_name?: string | null
+          client_name?: string | null
+          created_at?: string
+          id?: string
+          outcome?: string
+          reason?: string | null
+          scan_run_id?: string
+          signal?: Json | null
+          slack_submission_id?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       agent_scan_runs: {
         Row: {
           cards_created: number
