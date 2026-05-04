@@ -1,17 +1,24 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Loader2, RefreshCw, Sparkles, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
-import { useAgentCards, visibleCards, type AgentCard } from "@/hooks/useAgentCards";
+import { supabase } from "@/integrations/supabase/client";
+import { useAgentCards, visibleCards, fetchDrafts, type AgentCard } from "@/hooks/useAgentCards";
 import { AgentActionCard } from "./AgentActionCard";
 import { SlackThreadPanel } from "./SlackThreadPanel";
 import { EmailComposer } from "./EmailComposer";
+import { AgentScanDiagnostics } from "./AgentScanDiagnostics";
 
 export function AgentTab() {
-  const { cards, loading, scanning, lastScanAt, runScan, updateStatus } = useAgentCards();
+  const {
+    cards, loading, scanning, lastScanAt, lastRunId, gmailScopeMissing,
+    runScan, updateStatus, reload,
+  } = useAgentCards();
   const [slackFor, setSlackFor] = useState<AgentCard | null>(null);
   const [emailFor, setEmailFor] = useState<AgentCard | null>(null);
+  const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const open = useMemo(() => visibleCards(cards), [cards]);
   const stalls = open.filter((c) => c.kind === "intro_stall");
@@ -21,7 +28,7 @@ export function AgentTab() {
     try {
       const data = await runScan();
       toast.success(
-        `Scan complete · ${data?.cards_created ?? 0} new, ${data?.cards_resolved ?? 0} resolved`,
+        `Scan complete · ${data?.cards_created ?? 0} new, ${data?.cards_resolved ?? 0} resolved (${data?.processed ?? 0} candidates checked)`,
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Scan failed");
@@ -36,6 +43,56 @@ export function AgentTab() {
   const handleDismiss = async (c: AgentCard) => {
     await updateStatus(c.id, "dismissed");
     toast.success("Dismissed");
+  };
+
+  const ensureDrafts = async (c: AgentCard): Promise<AgentCard> => {
+    if (c.payload.suggested_slack_message && c.payload.suggested_email_body) return c;
+    setDraftingId(c.id);
+    try {
+      const drafts = await fetchDrafts(c.id);
+      const updated: AgentCard = {
+        ...c,
+        payload: {
+          ...c.payload,
+          suggested_slack_message: drafts.slack_message,
+          suggested_email_subject: drafts.email_subject,
+          suggested_email_body: drafts.email_body,
+        },
+      };
+      await reload();
+      return updated;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't draft suggestion");
+      return c;
+    } finally {
+      setDraftingId(null);
+    }
+  };
+
+  const handleReplySlack = async (c: AgentCard) => {
+    const ready = await ensureDrafts(c);
+    setSlackFor(ready);
+  };
+  const handleEmail = async (c: AgentCard) => {
+    const ready = await ensureDrafts(c);
+    setEmailFor(ready);
+  };
+
+  const handleReconnectGoogle = async () => {
+    setReconnecting(true);
+    try {
+      const redirectUri = `${window.location.origin}/google-calendar/callback`;
+      const { data, error } = await supabase.functions.invoke("google-calendar-connect", {
+        body: { redirect_uri: redirectUri },
+      });
+      if (error || !data?.url) {
+        toast.error(`Couldn't start Google reconnect: ${error?.message || "no url"}`);
+        return;
+      }
+      window.location.href = data.url;
+    } finally {
+      setReconnecting(false);
+    }
   };
 
   return (
@@ -57,6 +114,22 @@ export function AgentTab() {
           {scanning ? "Scanning..." : "Run scan"}
         </Button>
       </div>
+
+      {gmailScopeMissing && (
+        <div className="rounded-lg border border-border bg-muted/30 p-3 flex items-start gap-3">
+          <AlertCircle className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-foreground">Gmail signals are off</p>
+            <p className="text-xs text-muted-foreground">
+              Reconnect Google to grant Gmail access — without it, the agent can't see scheduling
+              confirmations sent over email.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" disabled={reconnecting} onClick={handleReconnectGoogle}>
+            {reconnecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Reconnect Google"}
+          </Button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center gap-2 text-muted-foreground">
@@ -81,8 +154,9 @@ export function AgentTab() {
                   <AgentActionCard
                     key={c.id}
                     card={c}
-                    onReplySlack={setSlackFor}
-                    onEmail={setEmailFor}
+                    drafting={draftingId === c.id}
+                    onReplySlack={handleReplySlack}
+                    onEmail={handleEmail}
                     onSnooze={handleSnooze}
                     onDismiss={handleDismiss}
                   />
@@ -100,8 +174,9 @@ export function AgentTab() {
                   <AgentActionCard
                     key={c.id}
                     card={c}
-                    onReplySlack={setSlackFor}
-                    onEmail={setEmailFor}
+                    drafting={draftingId === c.id}
+                    onReplySlack={handleReplySlack}
+                    onEmail={handleEmail}
                     onSnooze={handleSnooze}
                     onDismiss={handleDismiss}
                   />
@@ -111,6 +186,8 @@ export function AgentTab() {
           )}
         </div>
       )}
+
+      <AgentScanDiagnostics runId={lastRunId} />
 
       <SlackThreadPanel
         open={!!slackFor}
