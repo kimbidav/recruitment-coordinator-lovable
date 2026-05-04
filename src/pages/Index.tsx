@@ -40,6 +40,9 @@ const Index = () => {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const onboarding = useOnboardingStatus();
+  const { cards: agentCards } = useAgentCards();
+  const agentOpenCount = useMemo(() => visibleCards(agentCards).length, [agentCards]);
+  const [activeTab, setActiveTab] = useState<string>("pipeline");
 
   // First-run redirect: brand-new users land on /onboarding instead of an
   // empty dashboard. Honors a "skip for now" dismissal.
