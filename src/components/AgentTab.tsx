@@ -76,6 +76,7 @@ export function AgentTab() {
     try {
       const data = await runScan();
       setCompletedIds(new Set());
+      setSkippedIds(new Set());
       setSessionTotal(0);
       toast.success(
         `Scan complete · ${data?.cards_created ?? 0} new, ${data?.cards_resolved ?? 0} resolved (${data?.processed ?? 0} candidates checked)`,
