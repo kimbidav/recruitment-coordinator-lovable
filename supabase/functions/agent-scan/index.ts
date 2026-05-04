@@ -568,6 +568,7 @@ Deno.serve(async (req) => {
                 thread_excerpt: threadExcerpt,
                 thread_messages: threadMessages,
                 last_event: lastEvent,
+                signals,
               };
             }
           }
