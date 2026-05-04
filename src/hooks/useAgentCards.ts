@@ -29,12 +29,28 @@ export interface AgentCard {
   payload: AgentCardPayload;
 }
 
+interface ScanResult {
+  ok: boolean;
+  error?: string | null;
+  run_id?: string;
+  processed?: number;
+  cards_created?: number;
+  cards_resolved?: number;
+  has_more?: boolean;
+  next_cursor?: string | null;
+  gmail_scope_missing?: boolean;
+}
+
+const MAX_PAGES = 6; // safety bound: 6 * 25 = up to 150 submissions per scan
+
 export function useAgentCards() {
   const { user } = useAuth();
   const [cards, setCards] = useState<AgentCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
+  const [lastRunId, setLastRunId] = useState<string | null>(null);
+  const [gmailScopeMissing, setGmailScopeMissing] = useState(false);
 
   const reload = useCallback(async () => {
     if (!user) return;
@@ -50,13 +66,14 @@ export function useAgentCards() {
 
       const { data: run } = await supabase
         .from("agent_scan_runs")
-        .select("finished_at")
+        .select("id, finished_at")
         .eq("user_id", user.id)
         .not("finished_at", "is", null)
         .order("finished_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       setLastScanAt(run?.finished_at ?? null);
+      if (run?.id) setLastRunId(run.id);
     } catch (e) {
       console.error("loadAgentCards", e);
     } finally {
@@ -72,13 +89,40 @@ export function useAgentCards() {
     setScanning(true);
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const { data, error } = await supabase.functions.invoke("agent-scan", {
-        body: { tz },
-      });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+      let cursor: string | null = null;
+      let runId: string | undefined;
+      let totalCreated = 0;
+      let totalResolved = 0;
+      let totalProcessed = 0;
+      let scopeMissing = false;
+
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const { data, error } = await supabase.functions.invoke("agent-scan", {
+          body: { tz, cursor, run_id: runId },
+        });
+        if (error) throw error;
+        const res = (data ?? {}) as ScanResult;
+        if (res.error) throw new Error(res.error);
+        runId = res.run_id ?? runId;
+        totalCreated += res.cards_created ?? 0;
+        totalResolved += res.cards_resolved ?? 0;
+        totalProcessed += res.processed ?? 0;
+        if (res.gmail_scope_missing) scopeMissing = true;
+        if (!res.has_more) break;
+        cursor = res.next_cursor ?? null;
+        if (!cursor) break;
+      }
+
+      setGmailScopeMissing(scopeMissing);
+      if (runId) setLastRunId(runId);
       await reload();
-      return data;
+      return {
+        cards_created: totalCreated,
+        cards_resolved: totalResolved,
+        processed: totalProcessed,
+        gmail_scope_missing: scopeMissing,
+        run_id: runId,
+      };
     } finally {
       setScanning(false);
     }
@@ -92,7 +136,17 @@ export function useAgentCards() {
     await reload();
   }, [reload]);
 
-  return { cards, loading, scanning, lastScanAt, reload, runScan, updateStatus };
+  return {
+    cards,
+    loading,
+    scanning,
+    lastScanAt,
+    lastRunId,
+    gmailScopeMissing,
+    reload,
+    runScan,
+    updateStatus,
+  };
 }
 
 export function visibleCards(cards: AgentCard[]): AgentCard[] {
@@ -102,4 +156,17 @@ export function visibleCards(cards: AgentCard[]): AgentCard[] {
     if (c.status === "snoozed" && c.snooze_until && new Date(c.snooze_until).getTime() > now) return false;
     return true;
   });
+}
+
+export async function fetchDrafts(cardId: string): Promise<{
+  slack_message: string;
+  email_subject: string;
+  email_body: string;
+}> {
+  const { data, error } = await supabase.functions.invoke("agent-draft", {
+    body: { card_id: cardId },
+  });
+  if (error) throw error;
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as { slack_message: string; email_subject: string; email_body: string };
 }
