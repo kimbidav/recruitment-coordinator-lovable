@@ -144,18 +144,30 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
         </div>
       ) : null}
 
-      {p.channel_id && p.message_ts ? (
+      {!isBatch && p.channel_id && p.message_ts ? (
         <SlackThreadInline
           channelId={p.channel_id}
           messageTs={p.message_ts}
           initialReply={p.suggested_slack_message}
           maxMessagesHeight={260}
         />
-      ) : p.thread_excerpt && !p.last_event?.detail ? (
+      ) : !isBatch && p.thread_excerpt && !p.last_event?.detail ? (
         <div className="text-xs text-muted-foreground border-l-2 border-border pl-2 line-clamp-2">
           {p.thread_excerpt}
         </div>
       ) : null}
+
+      {isBatch && p.suggested_slack_message && (
+        <div className="rounded-md border border-border p-3">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium mb-1">
+            Suggested batch nudge
+          </div>
+          <pre className="text-xs text-foreground whitespace-pre-wrap font-sans">{p.suggested_slack_message}</pre>
+          <Button size="sm" className="mt-2 gap-1.5" onClick={() => onReplySlack(card)}>
+            <MessageSquare className="h-3.5 w-3.5" /> Reply in Slack
+          </Button>
+        </div>
+      )}
 
       {isStall && p.suggested_followup_at && (
         <div className="text-xs text-muted-foreground flex items-center gap-1">
@@ -165,10 +177,12 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
       )}
 
       <div className="flex items-center gap-2 flex-wrap pt-1">
-        <Button size="sm" variant="outline" disabled={drafting} onClick={() => onEmail(card)} className="gap-1.5">
-          {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
-          Email candidate
-        </Button>
+        {!isBatch && (
+          <Button size="sm" variant="outline" disabled={drafting} onClick={() => onEmail(card)} className="gap-1.5">
+            {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+            Email candidate
+          </Button>
+        )}
         {p.slack_permalink && (
           <a
             href={p.slack_permalink}
