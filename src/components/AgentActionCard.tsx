@@ -14,6 +14,7 @@ import {
   Calendar,
   MessageCircle,
   Send,
+  Ban,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { AgentCard } from "@/hooks/useAgentCards";
@@ -22,13 +23,15 @@ import { SlackThreadInline } from "./SlackThreadPanel";
 interface Props {
   card: AgentCard;
   drafting?: boolean;
+  closing?: boolean;
   onReplySlack: (card: AgentCard) => void;
   onEmail: (card: AgentCard) => void;
   onSnooze: (card: AgentCard) => void;
   onDismiss: (card: AgentCard) => void;
+  onCloseCandidate: (card: AgentCard) => void;
 }
 
-export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooze, onDismiss }: Props) {
+export function AgentActionCard({ card, drafting, closing, onReplySlack, onEmail, onSnooze, onDismiss, onCloseCandidate }: Props) {
   const p = card.payload || {};
   const isStall = card.kind === "intro_stall";
   const isBatch = card.kind === "batch_followup";
@@ -181,6 +184,19 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
           <Button size="sm" variant="outline" disabled={drafting} onClick={() => onEmail(card)} className="gap-1.5">
             {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
             Email candidate
+          </Button>
+        )}
+        {!isBatch && card.payload.channel_id && card.payload.message_ts && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={closing}
+            onClick={() => onCloseCandidate(card)}
+            className="gap-1.5"
+            title="Close out candidate (adds ⛔ reaction in Slack)"
+          >
+            {closing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
+            Close out candidate
           </Button>
         )}
         {p.slack_permalink && (

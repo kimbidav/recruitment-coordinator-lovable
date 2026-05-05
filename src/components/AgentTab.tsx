@@ -19,6 +19,7 @@ export function AgentTab() {
   const [slackFor, setSlackFor] = useState<AgentCard | null>(null);
   const [emailFor, setEmailFor] = useState<AgentCard | null>(null);
   const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [closingId, setClosingId] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
 
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
@@ -102,6 +103,29 @@ export function AgentTab() {
     markCompletedAndAdvance(c.id);
     await updateStatus(c.id, "resolved");
     toast.success("Marked done");
+  };
+  const handleCloseCandidate = async (c: AgentCard) => {
+    if (!c.payload.channel_id || !c.payload.message_ts) return;
+    setClosingId(c.id);
+    try {
+      const { data, error } = await supabase.functions.invoke("slack-thread", {
+        body: {
+          action: "close",
+          channel_id: c.payload.channel_id,
+          message_ts: c.payload.message_ts,
+        },
+      });
+      if (error || (data as any)?.error) {
+        throw new Error(error?.message || (data as any)?.error || "Failed to close");
+      }
+      markCompletedAndAdvance(c.id);
+      await updateStatus(c.id, "resolved");
+      toast.success("Candidate closed out · ⛔ added in Slack");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't close out candidate");
+    } finally {
+      setClosingId(null);
+    }
   };
 
   const ensureDrafts = async (c: AgentCard): Promise<AgentCard> => {
@@ -228,10 +252,12 @@ export function AgentTab() {
             <AgentActionCard
               card={current}
               drafting={draftingId === current.id}
+              closing={closingId === current.id}
               onReplySlack={handleReplySlack}
               onEmail={handleEmail}
               onSnooze={handleSnooze}
               onDismiss={handleDismiss}
+              onCloseCandidate={handleCloseCandidate}
             />
           </div>
 
