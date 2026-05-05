@@ -95,10 +95,11 @@ Deno.serve(async (req) => {
     }
 
     const drafts = buildDrafts({
-      kind: card.kind as "intro_stall" | "post_interview_followup",
+      kind: card.kind as DraftArgs["kind"],
       candidateName: p.candidate_name ?? "",
       company: p.company_name ?? "",
       recruiterName,
+      candidates: Array.isArray(p.candidates) ? p.candidates.map((c: any) => c.name).filter(Boolean) : undefined,
     });
 
     // Cache onto the card
