@@ -7,10 +7,12 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 // suggested_followup_at enforcement (snooze until that time), and bigger pagination.
 
 const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
-const BATCH_LIMIT = 50;
+const BATCH_LIMIT = 15;
 const CALENDAR_LOOKBACK_DAYS = 90;
 const CALENDAR_LOOKAHEAD_DAYS = 45;
-const PAGE_SOFT_TIMEOUT_MS = 25_000;
+// Hard cap well under edge-runtime's 150s idle timeout. We return early and
+// the client paginates via the returned cursor.
+const PAGE_SOFT_TIMEOUT_MS = 90_000;
 
 const COMPANY_NOISE = new Set([
   "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a","technologies","tech",
