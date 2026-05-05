@@ -789,10 +789,14 @@ Deno.serve(async (req) => {
           }
         } else {
           // post-interview path
-          if (signal.outcome === "scheduled" && signal.scheduled_time) {
+          // 1. If there's a future calendar event matching this candidate, treat it as next round scheduled
+          if (upcomingCal) {
+            suppressedReason = "next_round_scheduled_via_calendar";
+            snoozeUntil = new Date(upcomingCal.ts + 86400000).toISOString();
+          } else if (signal.outcome === "scheduled" && signal.scheduled_time) {
             const t = new Date(signal.scheduled_time).getTime();
             if (!isNaN(t) && t > Date.now()) {
-              // Next round scheduled — suppress + snooze until day after
+              // Next round scheduled via email — suppress + snooze until day after
               suppressedReason = "next_round_scheduled_via_email";
               snoozeUntil = new Date(t + 86400000).toISOString();
             }
