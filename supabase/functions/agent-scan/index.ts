@@ -1,18 +1,19 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
-// Agent scan: looks at accepted Slack submissions and produces follow-up cards.
-// Card kinds:
-//   - intro_stall: accepted ≥ 2 days ago, no scheduling signal in calendar or Gmail
-//   - post_interview_followup: meeting happened, no Slack thread activity for 3+ days
-// Detection uses Lovable AI (google/gemini-3-flash-preview) for calendar + email scan.
-// Drafts (Slack/email) are generated lazily via the agent-draft function — not here.
+// Agent scan v2: detects intro_stall, post_interview_followup, and batch_followup cards.
+// Adds: email-based scheduling detection (intro_stall + post-interview suppression),
+// 3-tier calendar matching (exact/fuzzy/LLM), client domain learning, batch follow-ups,
+// suggested_followup_at enforcement (snooze until that time), and bigger pagination.
 
 const LOVABLE_AI_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
-const BATCH_LIMIT = 25; // submissions processed per invocation
+const BATCH_LIMIT = 50;
+const CALENDAR_LOOKBACK_DAYS = 90;
+const CALENDAR_LOOKAHEAD_DAYS = 45;
+const PAGE_SOFT_TIMEOUT_MS = 25_000;
 
 const COMPANY_NOISE = new Set([
-  "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a",
+  "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a","technologies","tech",
 ]);
 function companyKey(s: string): string {
   return (s || "")
@@ -24,8 +25,33 @@ function companyKey(s: string): string {
     .filter((t) => !COMPANY_NOISE.has(t))
     .join("");
 }
+function companyTokens(s: string): string[] {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .filter((t) => !COMPANY_NOISE.has(t));
+}
 function firstName(full: string): string {
   return (full || "").trim().split(/\s+/)[0] || full;
+}
+function lastName(full: string): string {
+  const parts = (full || "").trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : "";
+}
+function inferDomainCandidates(client: string): string[] {
+  const slug = companyKey(client);
+  if (!slug) return [];
+  return [
+    `${slug}.com`,
+    `${slug}.ai`,
+    `${slug}.io`,
+    `get${slug}.com`,
+    `get${slug}.ai`,
+    `${slug}.co`,
+  ];
 }
 
 async function refreshGoogleAccess(refreshToken: string) {
@@ -51,7 +77,7 @@ async function listCalendarEvents(token: string, fromIso: string, toIso: string)
     timeMin: fromIso,
     timeMax: toIso,
     singleEvents: "true",
-    maxResults: "500",
+    maxResults: "1000",
     orderBy: "startTime",
   });
   const r = await fetch(
@@ -68,87 +94,223 @@ async function listCalendarEvents(token: string, fromIso: string, toIso: string)
   }));
 }
 
-interface GmailHit { from: string; to: string; subject: string; snippet: string; date: string }
+interface GmailHit {
+  id: string; from: string; to: string; subject: string; snippet: string; date: string; bodyText?: string;
+}
 
-async function searchGmail(token: string, query: string, max = 8): Promise<GmailHit[]> {
-  const lr = await fetch(
+async function gmailSearchIds(token: string, query: string, max = 10): Promise<string[]> {
+  const r = await fetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${max}&q=${encodeURIComponent(query)}`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
-  const lj = await lr.json();
-  if (!lr.ok) throw new Error(`gmail list: ${JSON.stringify(lj)}`);
-  const ids: string[] = (lj.messages ?? []).map((m: any) => m.id);
-  const hits: GmailHit[] = [];
-  await Promise.all(
-    ids.map(async (id) => {
-      try {
-        const r = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
-        const j = await r.json();
-        if (!r.ok) return;
-        const headers: any[] = j.payload?.headers ?? [];
-        const get = (n: string) => headers.find((h) => h.name.toLowerCase() === n.toLowerCase())?.value ?? "";
-        hits.push({
-          from: get("From"),
-          to: get("To"),
-          subject: get("Subject"),
-          snippet: j.snippet ?? "",
-          date: get("Date"),
-        });
-      } catch { /* ignore */ }
-    }),
-  );
-  return hits;
+  const j = await r.json();
+  if (!r.ok) return [];
+  return (j.messages ?? []).map((m: any) => m.id);
 }
 
-async function llmDetectSignal(args: {
+function decodeBody(payload: any): string {
+  if (!payload) return "";
+  if (payload.body?.data) {
+    try {
+      const b64 = (payload.body.data as string).replace(/-/g, "+").replace(/_/g, "/");
+      return atob(b64);
+    } catch { /* ignore */ }
+  }
+  for (const part of payload.parts ?? []) {
+    if (part.mimeType === "text/plain" || part.mimeType?.startsWith("text/")) {
+      const t = decodeBody(part);
+      if (t) return t;
+    }
+  }
+  return "";
+}
+
+async function gmailFetch(token: string, id: string, withBody: boolean): Promise<GmailHit | null> {
+  const fmt = withBody ? "full" : "metadata";
+  const meta = withBody
+    ? ""
+    : "&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date";
+  const r = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=${fmt}${meta}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const j = await r.json();
+  if (!r.ok) return null;
+  const headers: any[] = j.payload?.headers ?? [];
+  const get = (n: string) => headers.find((h) => h.name.toLowerCase() === n.toLowerCase())?.value ?? "";
+  const bodyText = withBody ? decodeBody(j.payload).slice(0, 3000) : undefined;
+  return {
+    id,
+    from: get("From"),
+    to: get("To"),
+    subject: get("Subject"),
+    snippet: j.snippet ?? "",
+    date: get("Date"),
+    bodyText,
+  };
+}
+
+async function searchGmailHits(token: string, query: string, max = 8, withBody = false): Promise<GmailHit[]> {
+  const ids = await gmailSearchIds(token, query, max);
+  const out: GmailHit[] = [];
+  await Promise.all(ids.map(async (id) => {
+    const h = await gmailFetch(token, id, withBody);
+    if (h) out.push(h);
+  }));
+  return out;
+}
+
+// --- Domain learning ----------------------------------------------------------
+
+async function learnClientDomain(args: {
+  admin: any; userId: string; gmailToken: string | null; clientName: string;
+}): Promise<string | null> {
+  const { admin, userId, gmailToken, clientName } = args;
+  // 1. cache hit
+  const { data: cached } = await admin
+    .from("client_domain_cache")
+    .select("domain, confidence")
+    .eq("user_id", userId).eq("client_name", clientName).maybeSingle();
+  if (cached?.domain) return cached.domain;
+  if (!gmailToken) return null;
+
+  // 2. infer & probe
+  for (const dom of inferDomainCandidates(clientName)) {
+    const ids = await gmailSearchIds(gmailToken, `from:@${dom} OR to:@${dom} newer_than:180d`, 1);
+    if (ids.length) {
+      await admin.from("client_domain_cache").upsert({
+        user_id: userId, client_name: clientName, domain: dom,
+        source: "inferred", confidence: 0.7, learned_at: new Date().toISOString(),
+      });
+      return dom;
+    }
+  }
+
+  // 3. LLM pick from recent senders
+  const apiKey = Deno.env.get("LOVABLE_API_KEY");
+  if (!apiKey) return null;
+  const recent = await searchGmailHits(gmailToken, `newer_than:60d`, 25, false);
+  const domains = Array.from(new Set(
+    recent.flatMap((h) => [h.from, h.to])
+      .map((s) => (s.match(/@([\w.-]+)/)?.[1] || "").toLowerCase())
+      .filter(Boolean)
+      .filter((d) => !["gmail.com","yahoo.com","outlook.com","hotmail.com"].includes(d)),
+  )).slice(0, 30);
+  if (!domains.length) return null;
+
+  try {
+    const r = await fetch(LOVABLE_AI_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [{
+          role: "user",
+          content: `Which of these email domains belongs to the company "${clientName}"?\nDomains: ${domains.join(", ")}\nReturn the single best match, or null if none plausible.`,
+        }],
+        tools: [{
+          type: "function",
+          function: {
+            name: "pick_domain",
+            parameters: {
+              type: "object",
+              properties: {
+                domain: { type: ["string", "null"] },
+                confidence: { type: "number" },
+              },
+              required: ["domain", "confidence"], additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: "function", function: { name: "pick_domain" } },
+      }),
+    });
+    const j = await r.json();
+    const args = j.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!args) return null;
+    const parsed = JSON.parse(args);
+    if (parsed.domain) {
+      await admin.from("client_domain_cache").upsert({
+        user_id: userId, client_name: clientName, domain: parsed.domain,
+        source: "llm", confidence: parsed.confidence ?? 0.6, learned_at: new Date().toISOString(),
+      });
+      return parsed.domain;
+    }
+  } catch (e) {
+    console.error("learnClientDomain llm", e);
+  }
+  return null;
+}
+
+// --- LLM signal detectors -----------------------------------------------------
+
+interface SchedulingSignal {
+  outcome: "scheduled" | "not_scheduled" | "ambiguous";
+  scheduled_time: string | null;
+  candidate_email: string | null;
+  evidence: string;
+}
+
+async function llmDetectScheduling(args: {
   candidateName: string;
   company: string;
   calendar: CalEvent[];
   gmail: GmailHit[];
-}): Promise<{ scheduled: boolean; scheduled_time: string | null; candidate_email: string | null; reason: string }> {
+  context: "intro_stall" | "post_interview";
+  meetingTimeIso?: string | null;
+}): Promise<SchedulingSignal> {
   const apiKey = Deno.env.get("LOVABLE_API_KEY");
-  if (!apiKey) return { scheduled: false, scheduled_time: null, candidate_email: null, reason: "no_llm" };
+  if (!apiKey) return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "no_llm" };
 
-  const prompt = `Determine if a meeting has been scheduled between the recruiter and the candidate.
+  const isPostInterview = args.context === "post_interview";
+  const scopeNote = isPostInterview
+    ? `An interview already happened on ${args.meetingTimeIso ?? "(unknown date)"}. Decide whether a NEXT round / NEXT meeting is scheduled or being scheduled in the emails (e.g. "let's chat next Thursday", "looking forward to round 2").`
+    : `Decide whether ANY meeting between the candidate and someone at the company is scheduled — calendar event OR an email confirming a specific date/time (including soft commitments like "let's chat next Thursday at 2"). Past meetings count.`;
+
+  const prompt = `You are detecting interview scheduling signals.
 Candidate: ${args.candidateName}
 Company: ${args.company}
 
-Calendar events (past 60 days through next 30 days):
-${args.calendar.slice(0, 50).map((e, i) => `${i + 1}. "${e.summary}" @ ${e.start} attendees=${e.attendees.join(",")}`).join("\n") || "(none)"}
+${scopeNote}
 
-Recent Gmail threads:
-${args.gmail.slice(0, 20).map((h, i) => `${i + 1}. From:${h.from} To:${h.to} Subj:${h.subject} | ${h.snippet}`).join("\n") || "(none)"}
+Calendar events (${CALENDAR_LOOKBACK_DAYS}d back → ${CALENDAR_LOOKAHEAD_DAYS}d forward):
+${args.calendar.slice(0, 30).map((e, i) => `${i + 1}. "${e.summary}" @ ${e.start} attendees=${e.attendees.join(",")}`).join("\n") || "(none)"}
 
-Decide:
-- scheduled = true ONLY if there is a clear scheduled meeting between the candidate and someone at the company (calendar event matching candidate first name + company, OR an email confirming a specific date/time). Past meetings count.
-- scheduled_time = ISO 8601 if known, else null. May be in the past.
-- candidate_email = best guess of the candidate's email from the From/To headers (not the recruiter), else null.`;
+Recent emails (with body excerpts):
+${args.gmail.slice(0, 12).map((h, i) =>
+  `${i + 1}. ${h.date} | From:${h.from} To:${h.to} | Subj:${h.subject}\n   Body: ${(h.bodyText || h.snippet || "").slice(0, 400)}`
+).join("\n") || "(none)"}
+
+Output:
+- outcome:
+  • "scheduled" = clear scheduled meeting (calendar event matching, OR email confirming a specific date/time/day)
+  • "ambiguous" = vague language only ("let me circle back", "happy to chat sometime", "looking into times") — DO NOT mark scheduled
+  • "not_scheduled" = nothing matching at all
+- scheduled_time: ISO 8601 if a specific time is known (resolve relative phrasing like "next Thursday" against the email Date header), else null. May be in the past.
+- candidate_email: best guess of the candidate's email from headers (not the recruiter), else null.
+- evidence: one short sentence with the snippet that drove your decision.`;
 
   const body = {
-    model: "google/gemini-3-flash-preview",
+    model: "google/gemini-2.5-pro",
     messages: [{ role: "user", content: prompt }],
     tools: [{
       type: "function",
       function: {
-        name: "report_signal",
-        description: "Report whether a meeting is scheduled.",
+        name: "report_scheduling",
         parameters: {
           type: "object",
           properties: {
-            scheduled: { type: "boolean" },
+            outcome: { type: "string", enum: ["scheduled", "not_scheduled", "ambiguous"] },
             scheduled_time: { type: ["string", "null"] },
             candidate_email: { type: ["string", "null"] },
-            reason: { type: "string" },
+            evidence: { type: "string" },
           },
-          required: ["scheduled", "scheduled_time", "candidate_email", "reason"],
+          required: ["outcome", "scheduled_time", "candidate_email", "evidence"],
           additionalProperties: false,
         },
       },
     }],
-    tool_choice: { type: "function", function: { name: "report_signal" } },
+    tool_choice: { type: "function", function: { name: "report_scheduling" } },
   };
 
   const r = await fetch(LOVABLE_AI_URL, {
@@ -157,29 +319,95 @@ Decide:
     body: JSON.stringify(body),
   });
   if (!r.ok) {
-    const t = await r.text();
-    console.error("llm err", r.status, t);
-    return { scheduled: false, scheduled_time: null, candidate_email: null, reason: "llm_error" };
+    console.error("llm err", r.status, await r.text());
+    return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "llm_error" };
   }
   const j = await r.json();
   const tc = j.choices?.[0]?.message?.tool_calls?.[0];
-  if (!tc) return { scheduled: false, scheduled_time: null, candidate_email: null, reason: "no_tool_call" };
+  if (!tc) return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "no_tool_call" };
+  try { return JSON.parse(tc.function.arguments); }
+  catch { return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "parse_error" }; }
+}
+
+async function llmPickCalendarEvents(args: {
+  candidateName: string; company: string; events: CalEvent[];
+}): Promise<number[]> {
+  const apiKey = Deno.env.get("LOVABLE_API_KEY");
+  if (!apiKey || !args.events.length) return [];
   try {
-    return JSON.parse(tc.function.arguments);
-  } catch {
-    return { scheduled: false, scheduled_time: null, candidate_email: null, reason: "parse_error" };
+    const r = await fetch(LOVABLE_AI_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [{
+          role: "user",
+          content: `Which of these calendar events look like an interview between candidate "${args.candidateName}" and someone at "${args.company}"? Titles often use formats like "Yi x Altara", "Fan / Decagon", initials, or nicknames.\n\n${
+            args.events.slice(0, 15).map((e, i) => `${i}. "${e.summary}" @ ${e.start} (${e.attendees.slice(0,3).join(",")})`).join("\n")
+          }`,
+        }],
+        tools: [{
+          type: "function",
+          function: {
+            name: "pick_events",
+            parameters: {
+              type: "object",
+              properties: {
+                indices: { type: "array", items: { type: "integer" } },
+              },
+              required: ["indices"], additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: "function", function: { name: "pick_events" } },
+      }),
+    });
+    const j = await r.json();
+    const a = j.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!a) return [];
+    const parsed = JSON.parse(a);
+    return Array.isArray(parsed.indices) ? parsed.indices.filter((n: any) => Number.isInteger(n)) : [];
+  } catch (e) {
+    console.error("llmPickCalendarEvents", e);
+    return [];
   }
 }
 
-function fridayFivePmAfter(iso: string, _tz: string): string {
-  const d = new Date(iso);
-  const day = d.getUTCDay();
-  const daysUntilNextFri = ((5 - day + 7) % 7) + 7;
-  const target = new Date(Date.UTC(
-    d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + daysUntilNextFri, 17 + 8, 0, 0,
-  ));
-  return target.toISOString();
+// --- Calendar matching --------------------------------------------------------
+
+function calendarMatches(args: {
+  candidateName: string; company: string; calendar: CalEvent[];
+}): { matches: CalEvent[]; tier: "exact" | "fuzzy" | "none" } {
+  const fn = firstName(args.candidateName).toLowerCase();
+  const ln = lastName(args.candidateName).toLowerCase();
+  const cKey = companyKey(args.company);
+  const cToks = companyTokens(args.company);
+  const exact: CalEvent[] = [];
+  const fuzzy: CalEvent[] = [];
+
+  for (const e of args.calendar) {
+    const t = (e.summary || "").toLowerCase();
+    const att = e.attendees.join(" ").toLowerCase();
+    const tKey = companyKey(t);
+    const attKey = companyKey(att);
+    const hasFirst = fn && t.includes(fn);
+    const hasLast = ln && t.includes(ln);
+    const hasCompany = cKey && (tKey === cKey || tKey.includes(cKey) || attKey.includes(cKey));
+    const hasAnyTok = cToks.some((tok) => tok.length >= 4 && t.includes(tok));
+    // Title patterns: "X x Y", "X / Y", "X × Y", "X | Y"
+    const sepPattern = new RegExp(`\\b${fn}\\b\\s*[x×\\/|]\\s*\\b(${cToks.join("|") || "__none__"})\\b`, "i");
+    const sepMatch = fn && cToks.length && sepPattern.test(t);
+
+    if ((hasFirst && hasCompany) || sepMatch) exact.push(e);
+    else if (hasFirst || hasLast || hasAnyTok || hasCompany) fuzzy.push(e);
+  }
+
+  if (exact.length) return { matches: exact, tier: "exact" };
+  if (fuzzy.length) return { matches: fuzzy, tier: "fuzzy" };
+  return { matches: [], tier: "none" };
 }
+
+// --- Misc helpers -------------------------------------------------------------
 
 async function fetchSlackThread(token: string, channelId: string, ts: string) {
   const r = await fetch(
@@ -191,9 +419,17 @@ async function fetchSlackThread(token: string, channelId: string, ts: string) {
   return { messages: j.messages ?? [] };
 }
 
+function batchSlackMessage(candidates: string[]): string {
+  const lines = candidates.map((n) => `– ${n}`).join("\n");
+  return `Quick status check on:\n${lines}\nAny updates?`;
+}
+
+// --- Main handler -------------------------------------------------------------
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
+  const startTime = Date.now();
   const admin = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -208,6 +444,7 @@ Deno.serve(async (req) => {
   let nextCursor: string | null = null;
   let gmailScopeMissing = false;
   let scanError: string | null = null;
+  let totalEligible: number | null = null;
 
   try {
     const authHeader = req.headers.get("Authorization");
@@ -231,26 +468,28 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const tz: string = body.tz ?? "America/Los_Angeles";
-    const cursor: string | null = body.cursor ?? null; // ISO timestamp; process submissions submitted strictly AFTER this
+    const cursor: string | null = body.cursor ?? null;
     const reuseRunId: string | undefined = body.run_id;
 
-    // Start (or reuse) scan run
+    // settings
+    const { data: settings } = await admin
+      .from("agent_settings").select("*").eq("user_id", userId).maybeSingle();
+    const introStallMinDays: number = settings?.intro_stall_min_days ?? 3;
+    const batchThreshold: number = settings?.batch_followup_threshold ?? 3;
+
     if (reuseRunId) {
       runId = reuseRunId;
     } else {
       const { data: runRow } = await admin
         .from("agent_scan_runs")
         .insert({ user_id: userId, started_at: new Date().toISOString() })
-        .select("id")
-        .single();
+        .select("id").single();
       runId = runRow?.id;
     }
 
-    // Load slack token
     const { data: slackTok } = await admin
       .from("slack_tokens").select("access_token").eq("user_id", userId).maybeSingle();
 
-    // Load google token + refresh; check Gmail scope
     const { data: gTok } = await admin
       .from("google_calendar_tokens").select("*").eq("user_id", userId).maybeSingle();
 
@@ -275,21 +514,30 @@ Deno.serve(async (req) => {
       gmailScopeMissing = true;
     }
 
-    // Calendar window: past 60d → next 30d
+    // Calendar window
     let calendar: CalEvent[] = [];
     if (googleAccess) {
       const now = new Date();
-      const from = new Date(now.getTime() - 60 * 86400000);
-      const to = new Date(now.getTime() + 30 * 86400000);
+      const from = new Date(now.getTime() - CALENDAR_LOOKBACK_DAYS * 86400000);
+      const to = new Date(now.getTime() + CALENDAR_LOOKAHEAD_DAYS * 86400000);
       try {
         calendar = await listCalendarEvents(googleAccess, from.toISOString(), to.toISOString());
-      } catch (e) {
-        console.error("calendar fetch", e);
-      }
+      } catch (e) { console.error("calendar fetch", e); }
     }
 
-    // Load accepted Slack submissions (oldest-first within window), paginated by cursor
-    const eligibilityCutoff = new Date(Date.now() - 2 * 86400000).toISOString();
+    const eligibilityCutoff = new Date(Date.now() - introStallMinDays * 86400000).toISOString();
+
+    // Total count once on first invocation
+    if (!cursor) {
+      const { count } = await admin
+        .from("slack_submissions")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("status", "accepted")
+        .lte("submitted_at", eligibilityCutoff);
+      totalEligible = count ?? null;
+    }
+
     let q = admin
       .from("slack_submissions")
       .select("id, channel_id, message_ts, client_name, candidate_name, status, submitted_at, permalink, linkedin_url")
@@ -297,14 +545,13 @@ Deno.serve(async (req) => {
       .eq("status", "accepted")
       .lte("submitted_at", eligibilityCutoff)
       .order("submitted_at", { ascending: true })
-      .limit(BATCH_LIMIT + 1); // +1 to detect has_more
+      .limit(BATCH_LIMIT + 1);
     if (cursor) q = q.gt("submitted_at", cursor);
     const { data: subsRaw } = await q;
     const subs = subsRaw ?? [];
     hasMore = subs.length > BATCH_LIMIT;
     const batch = hasMore ? subs.slice(0, BATCH_LIMIT) : subs;
 
-    // Existing open/snoozed cards (only relevant if first invocation; resolution is done at end of full run)
     const isFirstInvocation = !cursor;
     const existingByKey = new Map<string, { id: string; status: string }>();
     if (isFirstInvocation) {
@@ -317,7 +564,6 @@ Deno.serve(async (req) => {
         existingByKey.set(`${c.slack_submission_id}::${c.kind}`, { id: c.id, status: c.status });
       }
     } else {
-      // For continuation calls, only load existing cards for this batch's submissions
       const ids = batch.map((s) => s.id);
       if (ids.length) {
         const { data: existingCards } = await admin
@@ -332,8 +578,17 @@ Deno.serve(async (req) => {
       }
     }
     const stillRelevant = new Set<string>();
+    // Track sub-level outcomes for batch grouping at the end
+    const stallsByClient = new Map<string, Array<{
+      sub: typeof batch[number]; cardPayload: Record<string, unknown>;
+    }>>();
 
     for (const sub of batch) {
+      // Soft timeout: stop early if we're close to the limit
+      if (Date.now() - startTime > PAGE_SOFT_TIMEOUT_MS) {
+        hasMore = true;
+        break;
+      }
       processed++;
       nextCursor = sub.submitted_at;
       const candidateName = sub.candidate_name || "";
@@ -349,32 +604,46 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Pre-filter calendar events by candidate first name OR normalized company
-        const fn = firstName(candidateName).toLowerCase();
-        const cKey = companyKey(company);
-        const calMatches = calendar.filter((e) => {
-          const t = (e.summary || "").toLowerCase();
-          const att = e.attendees.join(" ").toLowerCase();
-          return t.includes(fn) || (cKey && (companyKey(t) === cKey || companyKey(att).includes(cKey)));
+        // 3-tier calendar matching
+        let { matches: calMatches, tier } = calendarMatches({
+          candidateName, company, calendar,
         });
-
-        // Gmail search: candidate-name only (companies vary; company added as soft hint)
-        let gmailHits: GmailHit[] = [];
-        if (googleAccess && !gmailScopeMissing) {
-          try {
-            const q = `"${candidateName.replace(/"/g, "")}" newer_than:120d`;
-            gmailHits = await searchGmail(googleAccess, q, 10);
-          } catch (e) {
-            console.error("gmail search", e);
-          }
+        if (tier === "none" && calendar.length) {
+          // LLM tiebreak — only when no exact/fuzzy match
+          const sample = calendar.slice(-15);
+          const idxs = await llmPickCalendarEvents({
+            candidateName, company, events: sample,
+          });
+          calMatches = idxs.map((i) => sample[i]).filter(Boolean);
+          if (calMatches.length) tier = "fuzzy";
         }
 
-        // LLM signal detection
-        const signal = await llmDetectSignal({
-          candidateName, company,
-          calendar: calMatches.length ? calMatches : calendar.slice(0, 30),
-          gmail: gmailHits,
-        });
+        // Domain learning + targeted client email search
+        let clientDomain: string | null = null;
+        let gmailHits: GmailHit[] = [];
+        if (googleAccess && !gmailScopeMissing && company) {
+          try {
+            clientDomain = await learnClientDomain({
+              admin, userId, gmailToken: googleAccess, clientName: company,
+            });
+          } catch (e) { console.error("domain", e); }
+
+          try {
+            const queries: string[] = [];
+            if (clientDomain) {
+              queries.push(`(from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
+            }
+            queries.push(`"${candidateName.replace(/"/g, "")}" newer_than:120d`);
+            const seen = new Set<string>();
+            for (const qstr of queries) {
+              const hits = await searchGmailHits(googleAccess, qstr, 8, true);
+              for (const h of hits) {
+                if (!seen.has(h.id)) { seen.add(h.id); gmailHits.push(h); }
+              }
+              if (gmailHits.length >= 12) break;
+            }
+          } catch (e) { console.error("gmail search", e); }
+        }
 
         // Slack thread activity
         let lastThreadTs = parseFloat(sub.message_ts) * 1000;
@@ -388,105 +657,53 @@ Deno.serve(async (req) => {
               if (tsMs > lastThreadTs) lastThreadTs = tsMs;
             }
             threadExcerpt = (t.messages.slice(-2).map((m: any) => m.text).join(" • ") || "").slice(0, 400);
-            // Keep up to the last 8 messages for in-card preview
             threadMessages = t.messages.slice(-8).map((m: any) => ({
               ts: m.ts,
               user: m.user || m.username || m.bot_id || undefined,
               text: (m.text || "").slice(0, 1000),
               at: new Date(parseFloat(m.ts) * 1000).toISOString(),
             }));
-          } catch (e) {
-            console.error("slack thread", e);
-          }
+          } catch (e) { console.error("slack thread", e); }
         }
 
-        // Prefer past calendar event for "meeting happened" detection
+        const subMs = parseFloat(sub.message_ts) * 1000;
         const pastCalMatch = calMatches.find((e) => {
           const ts = e.start ? new Date(e.start).getTime() : NaN;
           return !isNaN(ts) && ts < Date.now();
         });
-
-        // Build a "last known event" we can display on the card so the user
-        // can see what we observed and where we got it from.
-        type LastEvent = { kind: string; label: string; at: string; source: string; detail?: string };
-        const candidates: LastEvent[] = [];
-        // Slack: last reply in thread (if any newer than the original submission)
-        const subMs = parseFloat(sub.message_ts) * 1000;
-        if (lastThreadTs > subMs) {
-          candidates.push({
-            kind: "slack_reply",
-            label: "Last Slack reply in thread",
-            at: new Date(lastThreadTs).toISOString(),
-            source: "Slack thread",
-            detail: threadExcerpt ? threadExcerpt.slice(0, 160) : undefined,
-          });
-        }
-        // Slack: original submission
-        candidates.push({
-          kind: "slack_submission",
-          label: "Submitted in Slack",
-          at: new Date(subMs).toISOString(),
-          source: "Slack channel",
-        });
-        // Calendar: most recent past meeting
-        const pastCals = calMatches
-          .map((e) => ({ e, ts: e.start ? new Date(e.start).getTime() : NaN }))
-          .filter((x) => !isNaN(x.ts) && x.ts < Date.now())
-          .sort((a, b) => b.ts - a.ts);
-        if (pastCals[0]) {
-          candidates.push({
-            kind: "calendar_past",
-            label: `Interview held: ${pastCals[0].e.summary || "(untitled)"}`,
-            at: new Date(pastCals[0].ts).toISOString(),
-            source: "Google Calendar",
-          });
-        }
-        // Calendar: next upcoming meeting
         const upcomingCal = calMatches
           .map((e) => ({ e, ts: e.start ? new Date(e.start).getTime() : NaN }))
           .filter((x) => !isNaN(x.ts) && x.ts >= Date.now())
           .sort((a, b) => a.ts - b.ts)[0];
-        if (upcomingCal) {
-          candidates.push({
-            kind: "calendar_upcoming",
-            label: `Upcoming interview: ${upcomingCal.e.summary || "(untitled)"}`,
-            at: new Date(upcomingCal.ts).toISOString(),
-            source: "Google Calendar",
-          });
-        }
-        // Gmail: most recent matching email
-        const recentGmail = (gmailHits || [])
-          .map((g: any) => ({ g, ts: g.date ? new Date(g.date).getTime() : NaN }))
-          .filter((x) => !isNaN(x.ts))
-          .sort((a, b) => b.ts - a.ts)[0];
-        if (recentGmail) {
-          candidates.push({
-            kind: "gmail",
-            label: `Email: ${(recentGmail.g.subject || "(no subject)").slice(0, 80)}`,
-            at: new Date(recentGmail.ts).toISOString(),
-            source: `Gmail · ${recentGmail.g.from || "unknown sender"}`,
-          });
-        }
-        const lastEvent = candidates
-          .filter((c) => !!c.at)
-          .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] ?? null;
+        const pastCals = calMatches
+          .map((e) => ({ e, ts: e.start ? new Date(e.start).getTime() : NaN }))
+          .filter((x) => !isNaN(x.ts) && x.ts < Date.now())
+          .sort((a, b) => b.ts - a.ts);
 
-        // Build a richer "signals timeline" — semantic milestones we can show
-        // as: "Introduced on …", "Scheduled <interview> on …", "Interviewed on …", etc.
+        // Decide which scheduling check to run
+        const daysSinceThreadActivity = (Date.now() - lastThreadTs) / 86400000;
+        const threadActiveRecently = lastThreadTs > subMs && daysSinceThreadActivity < 3;
+
+        // Run scheduling detection
+        const signal = await llmDetectScheduling({
+          candidateName, company,
+          calendar: calMatches.length ? calMatches : calendar.slice(0, 25),
+          gmail: gmailHits,
+          context: pastCalMatch ? "post_interview" : "intro_stall",
+          meetingTimeIso: pastCalMatch?.start ?? null,
+        });
+
+        // Build signals timeline
         type Signal = {
           kind: "introduced" | "scheduled" | "interviewed" | "upcoming" | "last_reply" | "email";
-          label: string;
-          at: string;
-          source: string;
+          label: string; at: string; source: string;
         };
         const signals: Signal[] = [];
         signals.push({
-          kind: "introduced",
-          label: "Introduced in Slack",
-          at: new Date(subMs).toISOString(),
-          source: "Slack",
+          kind: "introduced", label: "Introduced in Slack",
+          at: new Date(subMs).toISOString(), source: "Slack",
         });
-        if (signal.scheduled && signal.scheduled_time) {
+        if (signal.outcome === "scheduled" && signal.scheduled_time) {
           const t = new Date(signal.scheduled_time).getTime();
           if (!isNaN(t)) {
             signals.push({
@@ -495,71 +712,80 @@ Deno.serve(async (req) => {
                 ? `Scheduled: ${upcomingCal.e.summary}`
                 : (pastCals[0]?.e.summary ? `Scheduled: ${pastCals[0].e.summary}` : "Interview scheduled"),
               at: new Date(t).toISOString(),
-              source: "Detected by agent",
+              source: signal.evidence?.startsWith("calendar") ? "Google Calendar" : "Detected via email",
             });
           }
         }
-        if (upcomingCal) {
-          signals.push({
-            kind: "upcoming",
-            label: `Upcoming: ${upcomingCal.e.summary || "(untitled)"}`,
-            at: new Date(upcomingCal.ts).toISOString(),
-            source: "Google Calendar",
-          });
-        }
-        if (pastCals[0]) {
-          signals.push({
-            kind: "interviewed",
-            label: `Interviewed: ${pastCals[0].e.summary || "(untitled)"}`,
-            at: new Date(pastCals[0].ts).toISOString(),
-            source: "Google Calendar",
-          });
-        }
-        if (recentGmail) {
-          signals.push({
-            kind: "email",
-            label: `Email: ${(recentGmail.g.subject || "(no subject)").slice(0, 80)}`,
-            at: new Date(recentGmail.ts).toISOString(),
-            source: `Gmail · ${recentGmail.g.from || "unknown sender"}`,
-          });
-        }
-        if (lastThreadTs > subMs) {
-          signals.push({
-            kind: "last_reply",
-            label: "Last Slack reply",
-            at: new Date(lastThreadTs).toISOString(),
-            source: "Slack thread",
-          });
-        }
-        // Sort newest first
+        if (upcomingCal) signals.push({
+          kind: "upcoming", label: `Upcoming: ${upcomingCal.e.summary || "(untitled)"}`,
+          at: new Date(upcomingCal.ts).toISOString(), source: "Google Calendar",
+        });
+        if (pastCals[0]) signals.push({
+          kind: "interviewed", label: `Interviewed: ${pastCals[0].e.summary || "(untitled)"}`,
+          at: new Date(pastCals[0].ts).toISOString(), source: "Google Calendar",
+        });
+        const recentGmail = gmailHits
+          .map((g) => ({ g, ts: g.date ? new Date(g.date).getTime() : NaN }))
+          .filter((x) => !isNaN(x.ts))
+          .sort((a, b) => b.ts - a.ts)[0];
+        if (recentGmail) signals.push({
+          kind: "email", label: `Email: ${(recentGmail.g.subject || "(no subject)").slice(0, 80)}`,
+          at: new Date(recentGmail.ts).toISOString(),
+          source: `Gmail · ${recentGmail.g.from || "unknown sender"}`,
+        });
+        if (lastThreadTs > subMs) signals.push({
+          kind: "last_reply", label: "Last Slack reply",
+          at: new Date(lastThreadTs).toISOString(), source: "Slack thread",
+        });
         signals.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+        const lastEvent = signals[0]
+          ? { ...signals[0], detail: threadExcerpt ? threadExcerpt.slice(0, 160) : undefined }
+          : null;
 
         let kind: "intro_stall" | "post_interview_followup" | null = null;
         let payload: Record<string, unknown> = {};
+        let snoozeUntil: string | null = null;
+        let suppressedReason: string | null = null;
 
-        const daysSinceThreadActivity = (Date.now() - lastThreadTs) / 86400000;
-        const threadActiveRecently = lastThreadTs > subMs && daysSinceThreadActivity < 3;
-
-        if (!signal.scheduled && !pastCalMatch && !threadActiveRecently) {
-          kind = "intro_stall";
-          payload = {
-            signal_summary: signal.reason || "No scheduled meeting found in calendar or recent emails.",
-            candidate_email: signal.candidate_email,
-            suggested_followup_at: fridayFivePmAfter(sub.submitted_at, tz),
-            slack_permalink: sub.permalink,
-            thread_excerpt: threadExcerpt,
-            thread_messages: threadMessages,
-            last_event: lastEvent,
-            signals,
-          };
-        } else {
-          // Determine meeting time: past calendar match wins; else parse signal
-          let meetingMs = pastCalMatch?.start ? new Date(pastCalMatch.start).getTime() : NaN;
-          if (isNaN(meetingMs) && signal.scheduled_time) {
-            const t = new Date(signal.scheduled_time).getTime();
-            if (!isNaN(t)) meetingMs = t;
+        if (!pastCalMatch) {
+          // intro_stall path
+          if (signal.outcome === "scheduled") {
+            suppressedReason = `scheduled_via_${signal.evidence?.toLowerCase().includes("calendar") ? "calendar" : "email"}`;
+            // If future scheduled time exists, schedule a re-check
+            if (signal.scheduled_time) {
+              const t = new Date(signal.scheduled_time).getTime();
+              if (!isNaN(t) && t > Date.now()) {
+                snoozeUntil = new Date(t + 86400000).toISOString();
+              }
+            }
+          } else if (signal.outcome === "ambiguous") {
+            suppressedReason = "ambiguous_signal";
+          } else if (threadActiveRecently) {
+            suppressedReason = "thread_active";
+          } else {
+            kind = "intro_stall";
+            payload = {
+              signal_summary: signal.evidence || "No scheduled meeting found in calendar or recent emails.",
+              candidate_email: signal.candidate_email,
+              slack_permalink: sub.permalink,
+              thread_excerpt: threadExcerpt,
+              thread_messages: threadMessages,
+              last_event: lastEvent,
+              signals,
+            };
           }
-          if (!isNaN(meetingMs) && meetingMs < Date.now()) {
+        } else {
+          // post-interview path
+          if (signal.outcome === "scheduled" && signal.scheduled_time) {
+            const t = new Date(signal.scheduled_time).getTime();
+            if (!isNaN(t) && t > Date.now()) {
+              // Next round scheduled — suppress + snooze until day after
+              suppressedReason = "next_round_scheduled_via_email";
+              snoozeUntil = new Date(t + 86400000).toISOString();
+            }
+          }
+          if (!suppressedReason) {
+            const meetingMs = new Date(pastCalMatch.start).getTime();
             const daysSinceThread = (Date.now() - lastThreadTs) / 86400000;
             if (daysSinceThread >= 3) {
               kind = "post_interview_followup";
@@ -573,27 +799,72 @@ Deno.serve(async (req) => {
                 last_event: lastEvent,
                 signals,
               };
+            } else {
+              suppressedReason = "thread_active_post_interview";
             }
           }
         }
 
-        if (!kind) {
+        if (!kind && !snoozeUntil) {
           await admin.from("agent_scan_items").insert({
             user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
             candidate_name: candidateName, client_name: company,
-            outcome: "no_signal_needed",
-            reason: signal.scheduled
-              ? "scheduled — no follow-up needed yet"
-              : (pastCalMatch ? "past meeting found, thread still active" : "no card needed"),
+            outcome: suppressedReason ? "suppressed" : "no_signal_needed",
+            reason: suppressedReason || "no card needed",
             signal,
           });
           continue;
         }
 
-        const firstNm = (candidateName || "").trim().split(/\s+/)[0] || "the candidate";
+        // If we have a snooze (suppression with a future re-check), create/update a snoozed card
+        if (!kind && snoozeUntil) {
+          const snoozeKind: "intro_stall" | "post_interview_followup" =
+            pastCalMatch ? "post_interview_followup" : "intro_stall";
+          const fnNm = firstName(candidateName);
+          const slackMsg = snoozeKind === "intro_stall"
+            ? `Hey — wanted to see if ${fnNm} got scheduled, or do I need to bump?`
+            : `Hey — any feedback on ${fnNm} from the interview? Happy to share notes from our side too.`;
+          const snoozePayload = {
+            candidate_name: candidateName,
+            company_name: company,
+            channel_id: sub.channel_id,
+            message_ts: sub.message_ts,
+            signal_summary: signal.evidence,
+            suggested_followup_at: snoozeUntil,
+            slack_permalink: sub.permalink,
+            thread_excerpt: threadExcerpt,
+            thread_messages: threadMessages,
+            last_event: lastEvent,
+            signals,
+            suggested_slack_message: slackMsg,
+          };
+          stillRelevant.add(`${sub.id}::${snoozeKind}`);
+          const existing = existingByKey.get(`${sub.id}::${snoozeKind}`);
+          if (existing) {
+            await admin.from("agent_action_cards").update({
+              payload: snoozePayload, status: "snoozed", snooze_until: snoozeUntil,
+              updated_at: new Date().toISOString(),
+            }).eq("id", existing.id);
+          } else {
+            await admin.from("agent_action_cards").insert({
+              user_id: userId, slack_submission_id: sub.id, kind: snoozeKind,
+              status: "snoozed", snooze_until: snoozeUntil, payload: snoozePayload,
+            });
+          }
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "snoozed_until_scheduled",
+            reason: suppressedReason ?? "scheduled_future",
+            signal,
+          });
+          continue;
+        }
+
+        const fnNm = firstName(candidateName);
         const suggested_slack_message = kind === "intro_stall"
-          ? `Hey — wanted to see if ${firstNm} got scheduled, or do I need to bump?`
-          : `Hey — any feedback on ${firstNm} from the interview? Happy to share notes from our side too.`;
+          ? `Hey — wanted to see if ${fnNm} got scheduled, or do I need to bump?`
+          : `Hey — any feedback on ${fnNm} from the interview? Happy to share notes from our side too.`;
         payload = {
           ...payload,
           candidate_name: candidateName,
@@ -603,21 +874,27 @@ Deno.serve(async (req) => {
           suggested_slack_message,
         };
 
+        // Hold intro_stall for batching
+        if (kind === "intro_stall" && company) {
+          const k = companyKey(company);
+          if (!stallsByClient.has(k)) stallsByClient.set(k, []);
+          stallsByClient.get(k)!.push({ sub, cardPayload: payload });
+          // We'll write the card below tentatively; batch sweep may roll it up.
+        }
+
         stillRelevant.add(`${sub.id}::${kind}`);
         const existing = existingByKey.get(`${sub.id}::${kind}`);
         let outcome: string;
         if (existing) {
           await admin.from("agent_action_cards").update({
-            payload, updated_at: new Date().toISOString(),
+            payload, status: "open", snooze_until: null,
+            updated_at: new Date().toISOString(),
           }).eq("id", existing.id);
           outcome = "card_updated";
         } else {
           await admin.from("agent_action_cards").insert({
-            user_id: userId,
-            slack_submission_id: sub.id,
-            kind,
-            status: "open",
-            payload,
+            user_id: userId, slack_submission_id: sub.id,
+            kind, status: "open", payload,
           });
           cardsCreated++;
           outcome = "card_created";
@@ -639,44 +916,109 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Auto-resolve only on the FINAL invocation of a run (no more pages).
-    // To avoid resolving cards we haven't yet re-scanned, we do this only when !hasMore AND first invocation
-    // OR when it's the last continuation — caller decides by stopping. Safest: resolve when !hasMore.
-    if (!hasMore && isFirstInvocation) {
-      // Resolve cards whose submissions weren't marked relevant in this single-batch run
-      for (const [key, c] of existingByKey) {
-        if (!stillRelevant.has(key)) {
+    // --- Batch follow-ups: roll up clients with ≥ batchThreshold stalls ---
+    for (const [cKey, items] of stallsByClient) {
+      if (items.length < batchThreshold) continue;
+      // Most recent submission's channel
+      const sorted = [...items].sort((a, b) =>
+        new Date(b.sub.submitted_at).getTime() - new Date(a.sub.submitted_at).getTime());
+      const channel_id = sorted[0].sub.channel_id;
+      const message_ts = sorted[0].sub.message_ts;
+      const clientName = sorted[0].sub.client_name;
+      const candNames = sorted.map((s) => s.sub.candidate_name);
+      const slackMsg = batchSlackMessage(candNames);
+
+      // Synthetic submission key for the batch card
+      const batchKey = sorted[0].sub.id; // anchor on most recent
+      const payload = {
+        candidate_name: `${candNames.length} candidates`,
+        company_name: clientName,
+        channel_id, message_ts,
+        client_name: clientName,
+        candidates: sorted.map((s) => ({
+          submission_id: s.sub.id,
+          name: s.sub.candidate_name,
+          submitted_at: s.sub.submitted_at,
+          message_ts: s.sub.message_ts,
+        })),
+        suggested_slack_message: slackMsg,
+        signal_summary: `${candNames.length} candidates at ${clientName} have no scheduling signal.`,
+      };
+
+      // Resolve the individual intro_stall cards we just wrote
+      for (const it of sorted) {
+        const k = `${it.sub.id}::intro_stall`;
+        const existing = existingByKey.get(k);
+        if (existing) {
           await admin.from("agent_action_cards").update({
             status: "resolved", updated_at: new Date().toISOString(),
-          }).eq("id", c.id);
-          cardsResolved++;
+          }).eq("id", existing.id);
+        } else {
+          // Just-inserted card: delete it in favor of batch
+          await admin.from("agent_action_cards")
+            .delete()
+            .eq("user_id", userId)
+            .eq("slack_submission_id", it.sub.id)
+            .eq("kind", "intro_stall");
         }
+        stillRelevant.delete(k);
+        await admin.from("agent_scan_items").insert({
+          user_id: userId, scan_run_id: runId, slack_submission_id: it.sub.id,
+          candidate_name: it.sub.candidate_name, client_name: clientName,
+          outcome: "rolled_into_batch", reason: cKey,
+        });
+      }
+
+      stillRelevant.add(`${batchKey}::batch_followup`);
+      const existingBatch = existingByKey.get(`${batchKey}::batch_followup`);
+      if (existingBatch) {
+        await admin.from("agent_action_cards").update({
+          payload, status: "open", snooze_until: null,
+          updated_at: new Date().toISOString(),
+        }).eq("id", existingBatch.id);
+      } else {
+        await admin.from("agent_action_cards").insert({
+          user_id: userId, slack_submission_id: batchKey,
+          kind: "batch_followup", status: "open", payload,
+        });
+        cardsCreated++;
       }
     }
-    // Note: for multi-page runs, resolution is best handled by a separate sweeper or on the final page
-    // by re-loading all open cards and comparing against agent_scan_items for this run_id.
-    if (!hasMore && !isFirstInvocation && runId && userId) {
-      const { data: openCards } = await admin
-        .from("agent_action_cards")
-        .select("id, slack_submission_id, kind")
-        .eq("user_id", userId)
-        .in("status", ["open", "snoozed"]);
-      const { data: items } = await admin
-        .from("agent_scan_items")
-        .select("slack_submission_id, outcome, reason")
-        .eq("scan_run_id", runId);
-      const seenAsRelevant = new Set<string>();
-      for (const it of items ?? []) {
-        if (it.outcome === "card_created" || it.outcome === "card_updated") {
-          seenAsRelevant.add(`${it.slack_submission_id}::${it.reason}`);
+
+    // Auto-resolve cards no longer relevant — only on final page
+    if (!hasMore) {
+      if (isFirstInvocation) {
+        for (const [key, c] of existingByKey) {
+          if (!stillRelevant.has(key)) {
+            await admin.from("agent_action_cards").update({
+              status: "resolved", updated_at: new Date().toISOString(),
+            }).eq("id", c.id);
+            cardsResolved++;
+          }
         }
-      }
-      for (const c of openCards ?? []) {
-        if (!seenAsRelevant.has(`${c.slack_submission_id}::${c.kind}`)) {
-          await admin.from("agent_action_cards").update({
-            status: "resolved", updated_at: new Date().toISOString(),
-          }).eq("id", c.id);
-          cardsResolved++;
+      } else if (runId && userId) {
+        const { data: openCards } = await admin
+          .from("agent_action_cards")
+          .select("id, slack_submission_id, kind")
+          .eq("user_id", userId)
+          .in("status", ["open", "snoozed"]);
+        const { data: items } = await admin
+          .from("agent_scan_items")
+          .select("slack_submission_id, outcome, reason")
+          .eq("scan_run_id", runId);
+        const seen = new Set<string>();
+        for (const it of items ?? []) {
+          if (it.outcome === "card_created" || it.outcome === "card_updated" || it.outcome === "snoozed_until_scheduled") {
+            seen.add(`${it.slack_submission_id}::${it.reason === "scheduled_future" || it.reason?.startsWith("scheduled") || it.reason?.startsWith("next_round") ? (it.reason?.includes("post_interview") ? "post_interview_followup" : "intro_stall") : it.reason}`);
+          }
+        }
+        for (const c of openCards ?? []) {
+          if (!seen.has(`${c.slack_submission_id}::${c.kind}`)) {
+            await admin.from("agent_action_cards").update({
+              status: "resolved", updated_at: new Date().toISOString(),
+            }).eq("id", c.id);
+            cardsResolved++;
+          }
         }
       }
     }
@@ -685,7 +1027,6 @@ Deno.serve(async (req) => {
     console.error("agent-scan fatal", scanError);
   } finally {
     if (runId) {
-      // Only finalize the run when there are no more pages
       const finishPatch: Record<string, unknown> = {
         cards_created: cardsCreated,
         cards_resolved: cardsResolved,
@@ -706,6 +1047,7 @@ Deno.serve(async (req) => {
     has_more: hasMore,
     next_cursor: hasMore ? nextCursor : null,
     gmail_scope_missing: gmailScopeMissing,
+    total_eligible: totalEligible,
   }), {
     status: scanError ? 500 : 200,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
