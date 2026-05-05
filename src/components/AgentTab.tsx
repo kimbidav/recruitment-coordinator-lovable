@@ -208,7 +208,11 @@ export function AgentTab() {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span className="uppercase tracking-wide font-medium">
-                {current.kind === "intro_stall" ? "Intro stall" : "Post-interview follow-up"}
+                {current.kind === "intro_stall"
+                  ? "Intro stall"
+                  : current.kind === "post_interview_followup"
+                    ? "Post-interview follow-up"
+                    : "Batch follow-up"}
                 {" · "}
                 Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
               </span>
