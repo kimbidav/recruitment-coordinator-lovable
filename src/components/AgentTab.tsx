@@ -252,10 +252,12 @@ export function AgentTab() {
             <AgentActionCard
               card={current}
               drafting={draftingId === current.id}
+              closing={closingId === current.id}
               onReplySlack={handleReplySlack}
               onEmail={handleEmail}
               onSnooze={handleSnooze}
               onDismiss={handleDismiss}
+              onCloseCandidate={handleCloseCandidate}
             />
           </div>
 
