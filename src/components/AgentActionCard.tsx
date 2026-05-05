@@ -31,24 +31,31 @@ interface Props {
 export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooze, onDismiss }: Props) {
   const p = card.payload || {};
   const isStall = card.kind === "intro_stall";
+  const isBatch = card.kind === "batch_followup";
   return (
     <Card className="p-4 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-semibold text-foreground truncate">
-              {p.candidate_name || "(unknown)"}
+              {isBatch
+                ? `${p.client_name || p.company_name} · ${p.candidates?.length ?? 0} candidates`
+                : (p.candidate_name || "(unknown)")}
             </h3>
-            <span className="text-sm text-muted-foreground truncate">· {p.company_name}</span>
+            {!isBatch && (
+              <span className="text-sm text-muted-foreground truncate">· {p.company_name}</span>
+            )}
           </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <Badge variant={isStall ? "secondary" : "outline"} className="gap-1">
-              {isStall ? (
+            <Badge variant={isStall || isBatch ? "secondary" : "outline"} className="gap-1">
+              {isBatch ? (
+                <MessageCircle className="h-3 w-3" />
+              ) : isStall ? (
                 <CalendarClock className="h-3 w-3" />
               ) : (
                 <AlarmClock className="h-3 w-3" />
               )}
-              {isStall ? "No scheduling signal" : "Awaiting feedback"}
+              {isBatch ? "Batch status check" : isStall ? "No scheduling signal" : "Awaiting feedback"}
             </Badge>
             <span className="text-xs text-muted-foreground">
               created {formatDistanceToNow(new Date(card.created_at), { addSuffix: true })}
@@ -64,6 +71,24 @@ export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooz
           </Button>
         </div>
       </div>
+
+      {isBatch && p.candidates && p.candidates.length > 0 && (
+        <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+            Candidates
+          </div>
+          <ul className="space-y-0.5">
+            {p.candidates.map((c) => (
+              <li key={c.submission_id} className="text-xs text-foreground flex items-center justify-between gap-2">
+                <span className="truncate">{c.name}</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {formatDistanceToNow(new Date(c.submitted_at), { addSuffix: true })}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {p.signal_summary && (
         <p className="text-sm text-muted-foreground">{p.signal_summary}</p>
