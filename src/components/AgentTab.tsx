@@ -19,6 +19,7 @@ export function AgentTab() {
   const [slackFor, setSlackFor] = useState<AgentCard | null>(null);
   const [emailFor, setEmailFor] = useState<AgentCard | null>(null);
   const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [closingId, setClosingId] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
 
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
