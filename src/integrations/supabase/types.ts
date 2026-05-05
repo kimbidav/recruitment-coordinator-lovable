@@ -125,6 +125,30 @@ export type Database = {
         }
         Relationships: []
       }
+      agent_settings: {
+        Row: {
+          batch_followup_threshold: number
+          created_at: string
+          intro_stall_min_days: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          batch_followup_threshold?: number
+          created_at?: string
+          intro_stall_min_days?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          batch_followup_threshold?: number
+          created_at?: string
+          intro_stall_min_days?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       candidates: {
         Row: {
           ashby_candidate_id: string | null
@@ -222,6 +246,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      client_domain_cache: {
+        Row: {
+          client_name: string
+          confidence: number
+          domain: string
+          learned_at: string
+          source: string
+          user_id: string
+        }
+        Insert: {
+          client_name: string
+          confidence?: number
+          domain: string
+          learned_at?: string
+          source?: string
+          user_id: string
+        }
+        Update: {
+          client_name?: string
+          confidence?: number
+          domain?: string
+          learned_at?: string
+          source?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       fetch_jobs: {
         Row: {
