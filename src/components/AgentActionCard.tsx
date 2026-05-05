@@ -186,6 +186,19 @@ export function AgentActionCard({ card, drafting, closing, onReplySlack, onEmail
             Email candidate
           </Button>
         )}
+        {!isBatch && card.payload.channel_id && card.payload.message_ts && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={closing}
+            onClick={() => onCloseCandidate(card)}
+            className="gap-1.5"
+            title="Close out candidate (adds ⛔ reaction in Slack)"
+          >
+            {closing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
+            Close out candidate
+          </Button>
+        )}
         {p.slack_permalink && (
           <a
             href={p.slack_permalink}
