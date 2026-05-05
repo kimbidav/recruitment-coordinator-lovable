@@ -23,10 +23,12 @@ import { SlackThreadInline } from "./SlackThreadPanel";
 interface Props {
   card: AgentCard;
   drafting?: boolean;
+  closing?: boolean;
   onReplySlack: (card: AgentCard) => void;
   onEmail: (card: AgentCard) => void;
   onSnooze: (card: AgentCard) => void;
   onDismiss: (card: AgentCard) => void;
+  onCloseCandidate: (card: AgentCard) => void;
 }
 
 export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooze, onDismiss }: Props) {
