@@ -14,6 +14,17 @@ const CALENDAR_LOOKAHEAD_DAYS = 45;
 // the client paginates via the returned cursor.
 const PAGE_SOFT_TIMEOUT_MS = 90_000;
 
+// Fetch with a hard timeout so external API stalls can't blow the page budget.
+async function fetchWithTimeout(input: string, init: RequestInit = {}, ms = 12_000): Promise<Response> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(input, { ...init, signal: ctl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const COMPANY_NOISE = new Set([
   "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a","technologies","tech",
 ]);
