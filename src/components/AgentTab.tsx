@@ -13,7 +13,7 @@ import { Progress } from "@/components/ui/progress";
 
 export function AgentTab() {
   const {
-    cards, loading, scanning, lastScanAt, lastRunId, gmailScopeMissing,
+    cards, loading, scanning, scanProgress, lastScanAt, lastRunId, gmailScopeMissing,
     runScan, updateStatus, reload,
   } = useAgentCards();
   const [slackFor, setSlackFor] = useState<AgentCard | null>(null);
@@ -24,9 +24,10 @@ export function AgentTab() {
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
 
   const open = useMemo(() => visibleCards(cards), [cards]);
-  // Stable queue order: stalls first, then follow-ups, oldest first within each kind
+  // Stable queue order: batch first, then stalls, then follow-ups, oldest first within each kind
   const queue = useMemo(() => {
-    const ord = (k: AgentCard["kind"]) => (k === "intro_stall" ? 0 : 1);
+    const ord = (k: AgentCard["kind"]) =>
+      k === "batch_followup" ? 0 : k === "intro_stall" ? 1 : 2;
     return [...open]
       .filter((c) => !skippedIds.has(c.id))
       .sort((a, b) => {
@@ -173,7 +174,11 @@ export function AgentTab() {
         </div>
         <Button onClick={handleScan} disabled={scanning} className="gap-2">
           {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          {scanning ? "Scanning..." : "Run scan"}
+          {scanning
+            ? scanProgress.total != null
+              ? `Scanning… ${scanProgress.processed} / ${scanProgress.total}`
+              : `Scanning… ${scanProgress.processed}`
+            : "Run scan"}
         </Button>
       </div>
 
@@ -203,7 +208,11 @@ export function AgentTab() {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span className="uppercase tracking-wide font-medium">
-                {current.kind === "intro_stall" ? "Intro stall" : "Post-interview follow-up"}
+                {current.kind === "intro_stall"
+                  ? "Intro stall"
+                  : current.kind === "post_interview_followup"
+                    ? "Post-interview follow-up"
+                    : "Batch follow-up"}
                 {" · "}
                 Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
               </span>

@@ -7,17 +7,24 @@ function firstName(full: string): string {
 }
 
 interface DraftArgs {
-  kind: "intro_stall" | "post_interview_followup";
+  kind: "intro_stall" | "post_interview_followup" | "batch_followup";
   candidateName: string;
   company: string;
   recruiterName: string;
+  candidates?: string[];
 }
 
 export function buildDrafts(args: DraftArgs) {
   const fn = firstName(args.candidateName);
-  const slack_message = args.kind === "intro_stall"
-    ? `Hey — wanted to see if ${fn} got scheduled, or do I need to bump?`
-    : `Hey — any feedback on ${fn} from the interview? Happy to share notes from our side too.`;
+  let slack_message: string;
+  if (args.kind === "intro_stall") {
+    slack_message = `Hey — wanted to see if ${fn} got scheduled, or do I need to bump?`;
+  } else if (args.kind === "post_interview_followup") {
+    slack_message = `Hey — any feedback on ${fn} from the interview? Happy to share notes from our side too.`;
+  } else {
+    const list = (args.candidates ?? []).map((n) => `– ${n}`).join("\n");
+    slack_message = `Quick status check on:\n${list}\nAny updates?`;
+  }
   const email_subject = args.kind === "intro_stall"
     ? `Following up — ${args.company}`
     : `How did your ${args.company} conversation go?`;
@@ -88,10 +95,11 @@ Deno.serve(async (req) => {
     }
 
     const drafts = buildDrafts({
-      kind: card.kind as "intro_stall" | "post_interview_followup",
+      kind: card.kind as DraftArgs["kind"],
       candidateName: p.candidate_name ?? "",
       company: p.company_name ?? "",
       recruiterName,
+      candidates: Array.isArray(p.candidates) ? p.candidates.map((c: any) => c.name).filter(Boolean) : undefined,
     });
 
     // Cache onto the card

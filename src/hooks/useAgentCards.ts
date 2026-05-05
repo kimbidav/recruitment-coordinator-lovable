@@ -17,6 +17,8 @@ export interface AgentCardPayload {
   suggested_slack_message?: string;
   suggested_email_subject?: string;
   suggested_email_body?: string;
+  client_name?: string;
+  candidates?: Array<{ submission_id: string; name: string; submitted_at: string; message_ts: string }>;
   last_event?: {
     kind: string;
     label: string;
@@ -35,7 +37,7 @@ export interface AgentCardPayload {
 export interface AgentCard {
   id: string;
   slack_submission_id: string | null;
-  kind: "intro_stall" | "post_interview_followup";
+  kind: "intro_stall" | "post_interview_followup" | "batch_followup";
   status: "open" | "snoozed" | "dismissed" | "resolved";
   snooze_until: string | null;
   created_at: string;
@@ -53,15 +55,23 @@ interface ScanResult {
   has_more?: boolean;
   next_cursor?: string | null;
   gmail_scope_missing?: boolean;
+  total_eligible?: number | null;
 }
 
-const MAX_PAGES = 6; // safety bound: 6 * 25 = up to 150 submissions per scan
+const MAX_PAGES = 20; // safety bound: 20 * 50 = up to 1000 submissions per scan
+
+export interface ScanProgress {
+  processed: number;
+  total: number | null;
+  pages: number;
+}
 
 export function useAgentCards() {
   const { user } = useAuth();
   const [cards, setCards] = useState<AgentCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<ScanProgress>({ processed: 0, total: null, pages: 0 });
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
   const [lastRunId, setLastRunId] = useState<string | null>(null);
   const [gmailScopeMissing, setGmailScopeMissing] = useState(false);
@@ -101,6 +111,7 @@ export function useAgentCards() {
 
   const runScan = useCallback(async () => {
     setScanning(true);
+    setScanProgress({ processed: 0, total: null, pages: 0 });
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       let cursor: string | null = null;
@@ -108,6 +119,7 @@ export function useAgentCards() {
       let totalCreated = 0;
       let totalResolved = 0;
       let totalProcessed = 0;
+      let totalEligible: number | null = null;
       let scopeMissing = false;
 
       for (let page = 0; page < MAX_PAGES; page++) {
@@ -121,7 +133,9 @@ export function useAgentCards() {
         totalCreated += res.cards_created ?? 0;
         totalResolved += res.cards_resolved ?? 0;
         totalProcessed += res.processed ?? 0;
+        if (res.total_eligible != null) totalEligible = res.total_eligible;
         if (res.gmail_scope_missing) scopeMissing = true;
+        setScanProgress({ processed: totalProcessed, total: totalEligible, pages: page + 1 });
         if (!res.has_more) break;
         cursor = res.next_cursor ?? null;
         if (!cursor) break;
@@ -134,6 +148,7 @@ export function useAgentCards() {
         cards_created: totalCreated,
         cards_resolved: totalResolved,
         processed: totalProcessed,
+        total_eligible: totalEligible,
         gmail_scope_missing: scopeMissing,
         run_id: runId,
       };
@@ -154,6 +169,7 @@ export function useAgentCards() {
     cards,
     loading,
     scanning,
+    scanProgress,
     lastScanAt,
     lastRunId,
     gmailScopeMissing,
