@@ -17,6 +17,8 @@ export interface AgentCardPayload {
   suggested_slack_message?: string;
   suggested_email_subject?: string;
   suggested_email_body?: string;
+  client_name?: string;
+  candidates?: Array<{ submission_id: string; name: string; submitted_at: string; message_ts: string }>;
   last_event?: {
     kind: string;
     label: string;
@@ -35,7 +37,7 @@ export interface AgentCardPayload {
 export interface AgentCard {
   id: string;
   slack_submission_id: string | null;
-  kind: "intro_stall" | "post_interview_followup";
+  kind: "intro_stall" | "post_interview_followup" | "batch_followup";
   status: "open" | "snoozed" | "dismissed" | "resolved";
   snooze_until: string | null;
   created_at: string;
@@ -53,6 +55,7 @@ interface ScanResult {
   has_more?: boolean;
   next_cursor?: string | null;
   gmail_scope_missing?: boolean;
+  total_eligible?: number | null;
 }
 
 const MAX_PAGES = 6; // safety bound: 6 * 25 = up to 150 submissions per scan
