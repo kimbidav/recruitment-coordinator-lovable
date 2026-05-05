@@ -14,6 +14,7 @@ import {
   Calendar,
   MessageCircle,
   Send,
+  Ban,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { AgentCard } from "@/hooks/useAgentCards";
