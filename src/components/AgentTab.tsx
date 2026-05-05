@@ -174,7 +174,11 @@ export function AgentTab() {
         </div>
         <Button onClick={handleScan} disabled={scanning} className="gap-2">
           {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          {scanning ? "Scanning..." : "Run scan"}
+          {scanning
+            ? scanProgress.total != null
+              ? `Scanning… ${scanProgress.processed} / ${scanProgress.total}`
+              : `Scanning… ${scanProgress.processed}`
+            : "Run scan"}
         </Button>
       </div>
 
