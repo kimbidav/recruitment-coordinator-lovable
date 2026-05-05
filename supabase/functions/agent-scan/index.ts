@@ -68,7 +68,7 @@ function inferDomainCandidates(client: string): string[] {
 }
 
 async function refreshGoogleAccess(refreshToken: string) {
-  const r = await fetch("https://oauth2.googleapis.com/token", {
+  const r = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -93,7 +93,7 @@ async function listCalendarEvents(token: string, fromIso: string, toIso: string)
     maxResults: "1000",
     orderBy: "startTime",
   });
-  const r = await fetch(
+  const r = await fetchWithTimeout(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
@@ -112,7 +112,7 @@ interface GmailHit {
 }
 
 async function gmailSearchIds(token: string, query: string, max = 10): Promise<string[]> {
-  const r = await fetch(
+  const r = await fetchWithTimeout(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${max}&q=${encodeURIComponent(query)}`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
@@ -143,7 +143,7 @@ async function gmailFetch(token: string, id: string, withBody: boolean): Promise
   const meta = withBody
     ? ""
     : "&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date";
-  const r = await fetch(
+  const r = await fetchWithTimeout(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=${fmt}${meta}`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
@@ -212,7 +212,7 @@ async function learnClientDomain(args: {
   if (!domains.length) return null;
 
   try {
-    const r = await fetch(LOVABLE_AI_URL, {
+    const r = await fetchWithTimeout(LOVABLE_AI_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -326,7 +326,7 @@ Output:
     tool_choice: { type: "function", function: { name: "report_scheduling" } },
   };
 
-  const r = await fetch(LOVABLE_AI_URL, {
+  const r = await fetchWithTimeout(LOVABLE_AI_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -348,7 +348,7 @@ async function llmPickCalendarEvents(args: {
   const apiKey = Deno.env.get("LOVABLE_API_KEY");
   if (!apiKey || !args.events.length) return [];
   try {
-    const r = await fetch(LOVABLE_AI_URL, {
+    const r = await fetchWithTimeout(LOVABLE_AI_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -423,7 +423,7 @@ function calendarMatches(args: {
 // --- Misc helpers -------------------------------------------------------------
 
 async function fetchSlackThread(token: string, channelId: string, ts: string) {
-  const r = await fetch(
+  const r = await fetchWithTimeout(
     `https://slack.com/api/conversations.replies?channel=${channelId}&ts=${ts}&limit=50`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
