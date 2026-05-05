@@ -31,7 +31,7 @@ interface Props {
   onCloseCandidate: (card: AgentCard) => void;
 }
 
-export function AgentActionCard({ card, drafting, onReplySlack, onEmail, onSnooze, onDismiss }: Props) {
+export function AgentActionCard({ card, drafting, closing, onReplySlack, onEmail, onSnooze, onDismiss, onCloseCandidate }: Props) {
   const p = card.payload || {};
   const isStall = card.kind === "intro_stall";
   const isBatch = card.kind === "batch_followup";
