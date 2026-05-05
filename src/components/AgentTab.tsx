@@ -13,7 +13,7 @@ import { Progress } from "@/components/ui/progress";
 
 export function AgentTab() {
   const {
-    cards, loading, scanning, lastScanAt, lastRunId, gmailScopeMissing,
+    cards, loading, scanning, scanProgress, lastScanAt, lastRunId, gmailScopeMissing,
     runScan, updateStatus, reload,
   } = useAgentCards();
   const [slackFor, setSlackFor] = useState<AgentCard | null>(null);
@@ -24,9 +24,10 @@ export function AgentTab() {
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
 
   const open = useMemo(() => visibleCards(cards), [cards]);
-  // Stable queue order: stalls first, then follow-ups, oldest first within each kind
+  // Stable queue order: batch first, then stalls, then follow-ups, oldest first within each kind
   const queue = useMemo(() => {
-    const ord = (k: AgentCard["kind"]) => (k === "intro_stall" ? 0 : 1);
+    const ord = (k: AgentCard["kind"]) =>
+      k === "batch_followup" ? 0 : k === "intro_stall" ? 1 : 2;
     return [...open]
       .filter((c) => !skippedIds.has(c.id))
       .sort((a, b) => {
