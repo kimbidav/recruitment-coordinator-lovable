@@ -785,6 +785,16 @@ Deno.serve(async (req) => {
                 snoozeUntil = new Date(t + 86400000).toISOString();
               }
             }
+          } else if (signal.outcome === "interview_completed") {
+            // Interview already happened per email — snooze for a few days to give client time to respond
+            suppressedReason = "interview_completed_via_email";
+            snoozeUntil = new Date(Date.now() + 3 * 86400000).toISOString();
+          } else if (signal.outcome === "scheduling_in_progress") {
+            suppressedReason = "scheduling_in_progress";
+            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
+            snoozeUntil = !isNaN(fu) && fu > Date.now()
+              ? new Date(fu).toISOString()
+              : new Date(Date.now() + 7 * 86400000).toISOString();
           } else if (signal.outcome === "ambiguous") {
             suppressedReason = "ambiguous_signal";
           } else if (threadActiveRecently) {
@@ -794,6 +804,7 @@ Deno.serve(async (req) => {
             payload = {
               signal_summary: signal.evidence || "No scheduled meeting found in calendar or recent emails.",
               candidate_email: signal.candidate_email,
+              suggested_followup_at: signal.suggested_followup_at ?? undefined,
               slack_permalink: sub.permalink,
               thread_excerpt: threadExcerpt,
               thread_messages: threadMessages,
@@ -814,6 +825,12 @@ Deno.serve(async (req) => {
               suppressedReason = "next_round_scheduled_via_email";
               snoozeUntil = new Date(t + 86400000).toISOString();
             }
+          } else if (signal.outcome === "scheduling_in_progress") {
+            suppressedReason = "next_round_scheduling_in_progress";
+            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
+            snoozeUntil = !isNaN(fu) && fu > Date.now()
+              ? new Date(fu).toISOString()
+              : new Date(Date.now() + 7 * 86400000).toISOString();
           }
           if (!suppressedReason) {
             const meetingMs = new Date(pastCalMatch.start).getTime();
