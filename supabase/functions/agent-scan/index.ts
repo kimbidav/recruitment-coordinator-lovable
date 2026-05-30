@@ -323,12 +323,13 @@ Output:
         parameters: {
           type: "object",
           properties: {
-            outcome: { type: "string", enum: ["scheduled", "not_scheduled", "ambiguous"] },
+            outcome: { type: "string", enum: ["scheduled", "scheduling_in_progress", "interview_completed", "not_scheduled", "ambiguous"] },
             scheduled_time: { type: ["string", "null"] },
+            suggested_followup_at: { type: ["string", "null"] },
             candidate_email: { type: ["string", "null"] },
             evidence: { type: "string" },
           },
-          required: ["outcome", "scheduled_time", "candidate_email", "evidence"],
+          required: ["outcome", "scheduled_time", "suggested_followup_at", "candidate_email", "evidence"],
           additionalProperties: false,
         },
       },
@@ -343,13 +344,16 @@ Output:
   });
   if (!r.ok) {
     console.error("llm err", r.status, await r.text());
-    return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "llm_error" };
+    return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "llm_error" };
   }
   const j = await r.json();
   const tc = j.choices?.[0]?.message?.tool_calls?.[0];
-  if (!tc) return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "no_tool_call" };
-  try { return JSON.parse(tc.function.arguments); }
-  catch { return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "parse_error" }; }
+  if (!tc) return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "no_tool_call" };
+  try {
+    const parsed = JSON.parse(tc.function.arguments);
+    return { suggested_followup_at: null, ...parsed };
+  }
+  catch { return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "parse_error" }; }
 }
 
 async function llmPickCalendarEvents(args: {
