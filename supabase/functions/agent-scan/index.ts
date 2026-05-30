@@ -1195,6 +1195,7 @@ Deno.serve(async (req) => {
         })),
         suggested_slack_message: slackMsg,
         signal_summary: `${candNames.length} candidates at ${clientName} have no scheduling signal.`,
+        ...ashbyFlagsFor(clientName),
       };
 
       // Resolve the individual intro_stall cards we just wrote
