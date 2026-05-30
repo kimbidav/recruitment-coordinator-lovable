@@ -697,20 +697,54 @@ Deno.serve(async (req) => {
       sub: typeof batch[number]; cardPayload: Record<string, unknown>;
     }>>();
 
-    // Clients (company_name) that have an Ashby instance synced — skip card generation,
-    // since the user can track progress directly in Ashby.
-    const ashbyClientNames = new Set<string>();
+    // Clients (company_name) tracked in Ashby — we still produce cards for them,
+    // but tag them so the UI can show a separate "Ashby pipeline" view and flag
+    // candidates with no recent Ashby movement.
+    const ASHBY_STALE_DAYS = 3;
+    const ashbyByCompany = new Map<string, number | null>(); // ms timestamp of latest activity, or null
     {
       const { data: ashbyRows } = await admin
         .from("candidates")
-        .select("company_name")
+        .select("company_name,last_activity_at,current_stage_date,latest_feedback_date")
         .eq("user_id", userId)
         .not("ashby_candidate_id", "is", null);
-      for (const r of ashbyRows ?? []) {
-        const name = (r as { company_name?: string }).company_name?.trim().toLowerCase();
-        if (name) ashbyClientNames.add(name);
+      for (const r of (ashbyRows ?? []) as Array<{
+        company_name?: string;
+        last_activity_at?: string | null;
+        current_stage_date?: string | null;
+        latest_feedback_date?: string | null;
+      }>) {
+        const name = r.company_name?.trim().toLowerCase();
+        if (!name) continue;
+        const candidates = [r.last_activity_at, r.current_stage_date, r.latest_feedback_date]
+          .map((s) => (s ? new Date(s).getTime() : NaN))
+          .filter((n) => !isNaN(n));
+        const latest = candidates.length ? Math.max(...candidates) : null;
+        const prev = ashbyByCompany.get(name);
+        if (prev === undefined) ashbyByCompany.set(name, latest);
+        else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(name, latest);
       }
     }
+    const ashbyFlagsFor = (companyName: string): {
+      ashby_tracked: boolean;
+      ashby_last_activity_at: string | null;
+      ashby_stale: boolean;
+      ashby_days_since_activity: number | null;
+    } => {
+      const key = companyName.trim().toLowerCase();
+      if (!key || !ashbyByCompany.has(key)) {
+        return { ashby_tracked: false, ashby_last_activity_at: null, ashby_stale: false, ashby_days_since_activity: null };
+      }
+      const last = ashbyByCompany.get(key) ?? null;
+      const days = last == null ? null : Math.floor((Date.now() - last) / 86400000);
+      const stale = last == null ? true : days! >= ASHBY_STALE_DAYS;
+      return {
+        ashby_tracked: true,
+        ashby_last_activity_at: last == null ? null : new Date(last).toISOString(),
+        ashby_stale: stale,
+        ashby_days_since_activity: days,
+      };
+    };
 
     for (const sub of batch) {
       // Soft timeout: stop early if we're close to the limit
@@ -729,16 +763,6 @@ Deno.serve(async (req) => {
             user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
             candidate_name: candidateName, client_name: company,
             outcome: "skipped_no_name", reason: "no candidate_name",
-          });
-          continue;
-        }
-
-        // Skip clients tracked in Ashby — user already has visibility there.
-        if (company && ashbyClientNames.has(company.trim().toLowerCase())) {
-          await admin.from("agent_scan_items").insert({
-            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
-            candidate_name: candidateName, client_name: company,
-            outcome: "skipped_ashby_client", reason: "client has Ashby instance",
           });
           continue;
         }
