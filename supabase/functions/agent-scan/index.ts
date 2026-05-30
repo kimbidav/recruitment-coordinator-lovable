@@ -1087,6 +1087,7 @@ Deno.serve(async (req) => {
             last_event: lastEvent,
             signals,
             suggested_slack_message: slackMsg,
+            ...ashbyFlagsFor(company),
           };
           stillRelevant.add(`${sub.id}::${snoozeKind}`);
           const existing = existingByKey.get(`${sub.id}::${snoozeKind}`);
