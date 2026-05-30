@@ -258,8 +258,9 @@ async function learnClientDomain(args: {
 // --- LLM signal detectors -----------------------------------------------------
 
 interface SchedulingSignal {
-  outcome: "scheduled" | "not_scheduled" | "ambiguous";
+  outcome: "scheduled" | "scheduling_in_progress" | "interview_completed" | "not_scheduled" | "ambiguous";
   scheduled_time: string | null;
+  suggested_followup_at: string | null;
   candidate_email: string | null;
   evidence: string;
 }
@@ -273,14 +274,16 @@ async function llmDetectScheduling(args: {
   meetingTimeIso?: string | null;
 }): Promise<SchedulingSignal> {
   const apiKey = Deno.env.get("LOVABLE_API_KEY");
-  if (!apiKey) return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "no_llm" };
+  if (!apiKey) return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "no_llm" };
 
   const isPostInterview = args.context === "post_interview";
   const scopeNote = isPostInterview
-    ? `An interview already happened on ${args.meetingTimeIso ?? "(unknown date)"}. Decide whether a NEXT round / NEXT meeting is scheduled or being scheduled in the emails (e.g. "let's chat next Thursday", "looking forward to round 2").`
-    : `Decide whether ANY meeting between the candidate and someone at the company is scheduled — calendar event OR an email confirming a specific date/time (including soft commitments like "let's chat next Thursday at 2"). Past meetings count.`;
+    ? `An interview already happened on ${args.meetingTimeIso ?? "(unknown date)"}. Decide whether a NEXT round / NEXT meeting is scheduled, actively being scheduled, or already completed via email.`
+    : `Decide whether ANY meeting between the candidate and someone at the company is scheduled, actively being scheduled, or already happened — calendar event OR an email exchange.`;
 
-  const prompt = `You are detecting interview scheduling signals.
+  const today = new Date().toISOString().slice(0, 10);
+  const prompt = `You are detecting interview scheduling signals between a candidate and a client/hiring company.
+Today: ${today}
 Candidate: ${args.candidateName}
 Company: ${args.company}
 
@@ -291,17 +294,24 @@ ${args.calendar.slice(0, 30).map((e, i) => `${i + 1}. "${e.summary}" @ ${e.start
 
 Recent emails (with body excerpts):
 ${args.gmail.slice(0, 12).map((h, i) =>
-  `${i + 1}. ${h.date} | From:${h.from} To:${h.to} | Subj:${h.subject}\n   Body: ${(h.bodyText || h.snippet || "").slice(0, 400)}`
+  `${i + 1}. ${h.date} | From:${h.from} To:${h.to} | Subj:${h.subject}\n   Body: ${(h.bodyText || h.snippet || "").slice(0, 500)}`
 ).join("\n") || "(none)"}
 
 Output:
-- outcome:
-  • "scheduled" = clear scheduled meeting (calendar event matching, OR email confirming a specific date/time/day)
-  • "ambiguous" = vague language only ("let me circle back", "happy to chat sometime", "looking into times") — DO NOT mark scheduled
-  • "not_scheduled" = nothing matching at all
-- scheduled_time: ISO 8601 if a specific time is known (resolve relative phrasing like "next Thursday" against the email Date header), else null. May be in the past.
+- outcome (pick ONE):
+  • "scheduled" = a specific date/time is confirmed (calendar event matching, OR an email like "I set up a time on your schedule for Monday at 10:30 am", "confirmed for Thursday 2pm", or a calendar invite acceptance).
+  • "scheduling_in_progress" = scheduling is actively in motion but no specific time confirmed yet. Examples:
+      - Client sent a Calendly / Ashby / scheduling link AND the candidate replied positively ("I'll grab some time this week", "thanks, will book a slot", "looking forward to it").
+      - Candidate said they will book ("I'll grab time", "I'll find a slot this week").
+      - Client said "please grab a time here: [link]" within the last 7 days and candidate has not yet declined.
+    Treat these as "in progress" — do NOT nag yet.
+  • "interview_completed" = an email indicates the meeting already happened ("Ken and I spoke today", "great chatting yesterday", "thanks for the time today"). Use this even without a calendar event.
+  • "ambiguous" = vague language only ("let me circle back", "happy to chat sometime") — no link sent, no commitment.
+  • "not_scheduled" = nothing matching at all.
+- scheduled_time: ISO 8601 if a specific time is known (resolve relative phrasing like "next Thursday" against the email Date header). Else null.
+- suggested_followup_at: ISO 8601 date when we SHOULD re-check this candidate. Required for "scheduling_in_progress" — pick a date 5–10 business days after the most recent scheduling email (give the candidate time to book). Else null.
 - candidate_email: best guess of the candidate's email from headers (not the recruiter), else null.
-- evidence: one short sentence with the snippet that drove your decision.`;
+- evidence: one short sentence quoting the snippet that drove your decision.`;
 
   const body = {
     model: "google/gemini-2.5-pro",
@@ -313,12 +323,13 @@ Output:
         parameters: {
           type: "object",
           properties: {
-            outcome: { type: "string", enum: ["scheduled", "not_scheduled", "ambiguous"] },
+            outcome: { type: "string", enum: ["scheduled", "scheduling_in_progress", "interview_completed", "not_scheduled", "ambiguous"] },
             scheduled_time: { type: ["string", "null"] },
+            suggested_followup_at: { type: ["string", "null"] },
             candidate_email: { type: ["string", "null"] },
             evidence: { type: "string" },
           },
-          required: ["outcome", "scheduled_time", "candidate_email", "evidence"],
+          required: ["outcome", "scheduled_time", "suggested_followup_at", "candidate_email", "evidence"],
           additionalProperties: false,
         },
       },
@@ -333,13 +344,16 @@ Output:
   });
   if (!r.ok) {
     console.error("llm err", r.status, await r.text());
-    return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "llm_error" };
+    return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "llm_error" };
   }
   const j = await r.json();
   const tc = j.choices?.[0]?.message?.tool_calls?.[0];
-  if (!tc) return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "no_tool_call" };
-  try { return JSON.parse(tc.function.arguments); }
-  catch { return { outcome: "not_scheduled", scheduled_time: null, candidate_email: null, evidence: "parse_error" }; }
+  if (!tc) return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "no_tool_call" };
+  try {
+    const parsed = JSON.parse(tc.function.arguments);
+    return { suggested_followup_at: null, ...parsed };
+  }
+  catch { return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "parse_error" }; }
 }
 
 async function llmPickCalendarEvents(args: {
@@ -771,6 +785,16 @@ Deno.serve(async (req) => {
                 snoozeUntil = new Date(t + 86400000).toISOString();
               }
             }
+          } else if (signal.outcome === "interview_completed") {
+            // Interview already happened per email — snooze for a few days to give client time to respond
+            suppressedReason = "interview_completed_via_email";
+            snoozeUntil = new Date(Date.now() + 3 * 86400000).toISOString();
+          } else if (signal.outcome === "scheduling_in_progress") {
+            suppressedReason = "scheduling_in_progress";
+            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
+            snoozeUntil = !isNaN(fu) && fu > Date.now()
+              ? new Date(fu).toISOString()
+              : new Date(Date.now() + 7 * 86400000).toISOString();
           } else if (signal.outcome === "ambiguous") {
             suppressedReason = "ambiguous_signal";
           } else if (threadActiveRecently) {
@@ -780,6 +804,7 @@ Deno.serve(async (req) => {
             payload = {
               signal_summary: signal.evidence || "No scheduled meeting found in calendar or recent emails.",
               candidate_email: signal.candidate_email,
+              suggested_followup_at: signal.suggested_followup_at ?? undefined,
               slack_permalink: sub.permalink,
               thread_excerpt: threadExcerpt,
               thread_messages: threadMessages,
@@ -800,6 +825,12 @@ Deno.serve(async (req) => {
               suppressedReason = "next_round_scheduled_via_email";
               snoozeUntil = new Date(t + 86400000).toISOString();
             }
+          } else if (signal.outcome === "scheduling_in_progress") {
+            suppressedReason = "next_round_scheduling_in_progress";
+            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
+            snoozeUntil = !isNaN(fu) && fu > Date.now()
+              ? new Date(fu).toISOString()
+              : new Date(Date.now() + 7 * 86400000).toISOString();
           }
           if (!suppressedReason) {
             const meetingMs = new Date(pastCalMatch.start).getTime();
