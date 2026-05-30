@@ -731,9 +731,10 @@ Deno.serve(async (req) => {
           if (calMatches.length) tier = "fuzzy";
         }
 
-        // Domain learning + targeted client email search
+        // Domain learning + candidate-email-aware Gmail retrieval
         let clientDomain: string | null = null;
         let gmailHits: GmailHit[] = [];
+        let knownCandidateEmail: string | null = null;
         if (googleAccess && !gmailScopeMissing && company) {
           try {
             clientDomain = await learnClientDomain({
@@ -741,22 +742,59 @@ Deno.serve(async (req) => {
             });
           } catch (e) { console.error("domain", e); }
 
+          // 1. cached candidate email (strongest signal)
           try {
+            knownCandidateEmail = await loadCandidateEmail({
+              admin, userId, slackSubmissionId: sub.id,
+            });
+          } catch (e) { console.error("load candidate email", e); }
+
+          // 2. learn from any matched calendar event attendees
+          if (!knownCandidateEmail && calMatches.length) {
+            for (const ev of calMatches) {
+              const guess = pickCandidateEmailFromEvent(ev, {
+                ownEmail: ownGoogleEmail, clientDomain,
+              });
+              if (guess) {
+                knownCandidateEmail = guess;
+                try {
+                  await saveCandidateEmail({
+                    admin, userId, slackSubmissionId: sub.id,
+                    email: guess, source: "calendar", confidence: 0.85,
+                  });
+                } catch (e) { console.error("save cand email cal", e); }
+                break;
+              }
+            }
+          }
+
+          // 3. multi-tier Gmail retrieval
+          try {
+            const firstName = (candidateName.trim().split(/\s+/)[0] || "").replace(/[^A-Za-z'-]/g, "");
             const queries: string[] = [];
+            if (knownCandidateEmail) {
+              queries.push(`(from:${knownCandidateEmail} OR to:${knownCandidateEmail}) newer_than:120d`);
+            }
+            if (clientDomain && firstName.length >= 2) {
+              queries.push(`"${firstName}" (from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
+            }
             if (clientDomain) {
+              queries.push(`(calendly OR "grab time" OR "find a time" OR "set up a time" OR "scheduling link" OR "confirmed for" OR "look forward to") (from:@${clientDomain} OR to:@${clientDomain}) newer_than:30d`);
               queries.push(`(from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
             }
             queries.push(`"${candidateName.replace(/"/g, "")}" newer_than:120d`);
+
             const seen = new Set<string>();
             for (const qstr of queries) {
               const hits = await searchGmailHits(googleAccess, qstr, 8, true);
               for (const h of hits) {
                 if (!seen.has(h.id)) { seen.add(h.id); gmailHits.push(h); }
               }
-              if (gmailHits.length >= 12) break;
+              if (gmailHits.length >= 15) break;
             }
           } catch (e) { console.error("gmail search", e); }
         }
+
 
         // Slack thread activity
         let lastThreadTs = parseFloat(sub.message_ts) * 1000;
