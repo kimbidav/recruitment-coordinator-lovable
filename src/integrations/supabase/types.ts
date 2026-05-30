@@ -149,6 +149,36 @@ export type Database = {
         }
         Relationships: []
       }
+      candidate_emails: {
+        Row: {
+          confidence: number
+          email: string
+          id: string
+          learned_at: string
+          slack_submission_id: string
+          source: string
+          user_id: string
+        }
+        Insert: {
+          confidence?: number
+          email: string
+          id?: string
+          learned_at?: string
+          slack_submission_id: string
+          source?: string
+          user_id: string
+        }
+        Update: {
+          confidence?: number
+          email?: string
+          id?: string
+          learned_at?: string
+          slack_submission_id?: string
+          source?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       candidates: {
         Row: {
           ashby_candidate_id: string | null

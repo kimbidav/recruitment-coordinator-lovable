@@ -255,7 +255,78 @@ async function learnClientDomain(args: {
   return null;
 }
 
+// --- Candidate email cache ----------------------------------------------------
+
+const PUBLIC_EMAIL_DOMAINS = new Set([
+  "gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com",
+  "me.com","aol.com","proton.me","protonmail.com","live.com","msn.com",
+]);
+
+function extractEmail(s: string): string | null {
+  if (!s) return null;
+  const m = s.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
+  return m ? m[0].toLowerCase() : null;
+}
+function emailDomain(e: string | null): string | null {
+  if (!e) return null;
+  const m = e.match(/@([\w.-]+)/);
+  return m ? m[1].toLowerCase() : null;
+}
+
+async function loadCandidateEmail(args: {
+  admin: any; userId: string; slackSubmissionId: string;
+}): Promise<string | null> {
+  const { data } = await args.admin
+    .from("candidate_emails")
+    .select("email, confidence")
+    .eq("user_id", args.userId)
+    .eq("slack_submission_id", args.slackSubmissionId)
+    .order("confidence", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data?.email ?? null;
+}
+
+async function saveCandidateEmail(args: {
+  admin: any; userId: string; slackSubmissionId: string;
+  email: string; source: string; confidence: number;
+}) {
+  if (!args.email) return;
+  await args.admin.from("candidate_emails").upsert({
+    user_id: args.userId,
+    slack_submission_id: args.slackSubmissionId,
+    email: args.email.toLowerCase(),
+    source: args.source,
+    confidence: args.confidence,
+    learned_at: new Date().toISOString(),
+  }, { onConflict: "user_id,slack_submission_id,email" });
+}
+
+/**
+ * Pick the most likely candidate email from a calendar event's attendees:
+ * exclude the user's own email, exclude the client's domain (those are
+ * interviewers), and prefer a non-public domain if the candidate has a work
+ * email; otherwise fall back to a public-domain (gmail/etc) address.
+ */
+function pickCandidateEmailFromEvent(
+  ev: { attendees: string[] },
+  opts: { ownEmail: string | null; clientDomain: string | null },
+): string | null {
+  const own = (opts.ownEmail ?? "").toLowerCase();
+  const cd = (opts.clientDomain ?? "").toLowerCase();
+  const candidates = ev.attendees
+    .map((a) => extractEmail(a))
+    .filter((e): e is string => !!e)
+    .filter((e) => e !== own)
+    .filter((e) => !cd || !e.endsWith(`@${cd}`));
+  if (!candidates.length) return null;
+  const personal = candidates.find((e) => PUBLIC_EMAIL_DOMAINS.has(emailDomain(e) ?? ""));
+  const work = candidates.find((e) => !PUBLIC_EMAIL_DOMAINS.has(emailDomain(e) ?? ""));
+  return work ?? personal ?? candidates[0];
+}
+
 // --- LLM signal detectors -----------------------------------------------------
+
 
 interface SchedulingSignal {
   outcome: "scheduled" | "scheduling_in_progress" | "interview_completed" | "not_scheduled" | "ambiguous";
@@ -272,6 +343,8 @@ async function llmDetectScheduling(args: {
   gmail: GmailHit[];
   context: "intro_stall" | "post_interview";
   meetingTimeIso?: string | null;
+  knownCandidateEmail?: string | null;
+  clientDomain?: string | null;
 }): Promise<SchedulingSignal> {
   const apiKey = Deno.env.get("LOVABLE_API_KEY");
   if (!apiKey) return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "no_llm" };
@@ -281,11 +354,23 @@ async function llmDetectScheduling(args: {
     ? `An interview already happened on ${args.meetingTimeIso ?? "(unknown date)"}. Decide whether a NEXT round / NEXT meeting is scheduled, actively being scheduled, or already completed via email.`
     : `Decide whether ANY meeting between the candidate and someone at the company is scheduled, actively being scheduled, or already happened — calendar event OR an email exchange.`;
 
+  const firstName = (args.candidateName.trim().split(/\s+/)[0] || "").toLowerCase();
+  const attributionNote = `IMPORTANT: Emails between the client and the candidate usually do NOT include the candidate's full name. They often use only the first name ("Hi ${firstName || "<first name>"},"), or no name at all. Attribute by EMAIL ADDRESS, not by name in the body:
+- If a known candidate email is provided below, any email from/to that address IS the candidate.
+- Otherwise, a thread between the client domain (${args.clientDomain ?? "unknown"}) and an external address whose first name plausibly matches "${firstName}" should be treated as the candidate.
+- Do NOT require the candidate's last name to appear anywhere.`;
+
   const today = new Date().toISOString().slice(0, 10);
   const prompt = `You are detecting interview scheduling signals between a candidate and a client/hiring company.
 Today: ${today}
 Candidate: ${args.candidateName}
 Company: ${args.company}
+Known candidate email: ${args.knownCandidateEmail ?? "(unknown — infer if possible)"}
+Client email domain: ${args.clientDomain ?? "(unknown)"}
+
+${attributionNote}
+
+
 
 ${scopeNote}
 
@@ -519,6 +604,7 @@ Deno.serve(async (req) => {
 
     const { data: gTok } = await admin
       .from("google_calendar_tokens").select("*").eq("user_id", userId).maybeSingle();
+    const ownGoogleEmail: string | null = (gTok?.google_email ?? null) as string | null;
 
     let googleAccess: string | null = gTok?.access_token ?? null;
     if (gTok) {
@@ -645,9 +731,10 @@ Deno.serve(async (req) => {
           if (calMatches.length) tier = "fuzzy";
         }
 
-        // Domain learning + targeted client email search
+        // Domain learning + candidate-email-aware Gmail retrieval
         let clientDomain: string | null = null;
         let gmailHits: GmailHit[] = [];
+        let knownCandidateEmail: string | null = null;
         if (googleAccess && !gmailScopeMissing && company) {
           try {
             clientDomain = await learnClientDomain({
@@ -655,22 +742,59 @@ Deno.serve(async (req) => {
             });
           } catch (e) { console.error("domain", e); }
 
+          // 1. cached candidate email (strongest signal)
           try {
+            knownCandidateEmail = await loadCandidateEmail({
+              admin, userId, slackSubmissionId: sub.id,
+            });
+          } catch (e) { console.error("load candidate email", e); }
+
+          // 2. learn from any matched calendar event attendees
+          if (!knownCandidateEmail && calMatches.length) {
+            for (const ev of calMatches) {
+              const guess = pickCandidateEmailFromEvent(ev, {
+                ownEmail: ownGoogleEmail, clientDomain,
+              });
+              if (guess) {
+                knownCandidateEmail = guess;
+                try {
+                  await saveCandidateEmail({
+                    admin, userId, slackSubmissionId: sub.id,
+                    email: guess, source: "calendar", confidence: 0.85,
+                  });
+                } catch (e) { console.error("save cand email cal", e); }
+                break;
+              }
+            }
+          }
+
+          // 3. multi-tier Gmail retrieval
+          try {
+            const firstName = (candidateName.trim().split(/\s+/)[0] || "").replace(/[^A-Za-z'-]/g, "");
             const queries: string[] = [];
+            if (knownCandidateEmail) {
+              queries.push(`(from:${knownCandidateEmail} OR to:${knownCandidateEmail}) newer_than:120d`);
+            }
+            if (clientDomain && firstName.length >= 2) {
+              queries.push(`"${firstName}" (from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
+            }
             if (clientDomain) {
+              queries.push(`(calendly OR "grab time" OR "find a time" OR "set up a time" OR "scheduling link" OR "confirmed for" OR "look forward to") (from:@${clientDomain} OR to:@${clientDomain}) newer_than:30d`);
               queries.push(`(from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
             }
             queries.push(`"${candidateName.replace(/"/g, "")}" newer_than:120d`);
+
             const seen = new Set<string>();
             for (const qstr of queries) {
               const hits = await searchGmailHits(googleAccess, qstr, 8, true);
               for (const h of hits) {
                 if (!seen.has(h.id)) { seen.add(h.id); gmailHits.push(h); }
               }
-              if (gmailHits.length >= 12) break;
+              if (gmailHits.length >= 15) break;
             }
           } catch (e) { console.error("gmail search", e); }
         }
+
 
         // Slack thread activity
         let lastThreadTs = parseFloat(sub.message_ts) * 1000;
@@ -718,7 +842,29 @@ Deno.serve(async (req) => {
           gmail: gmailHits,
           context: pastCalMatch ? "post_interview" : "intro_stall",
           meetingTimeIso: pastCalMatch?.start ?? null,
+          knownCandidateEmail,
+          clientDomain,
         });
+
+        // Persist any new candidate email the LLM inferred
+        if (signal.candidate_email) {
+          const inferred = extractEmail(signal.candidate_email);
+          const cd = (clientDomain ?? "").toLowerCase();
+          const ownE = (ownGoogleEmail ?? "").toLowerCase();
+          if (
+            inferred && inferred !== ownE &&
+            (!cd || !inferred.endsWith(`@${cd}`)) &&
+            inferred !== (knownCandidateEmail ?? "").toLowerCase()
+          ) {
+            try {
+              await saveCandidateEmail({
+                admin, userId, slackSubmissionId: sub.id,
+                email: inferred, source: "llm", confidence: 0.7,
+              });
+            } catch (e) { console.error("save cand email llm", e); }
+          }
+        }
+
 
         // Build signals timeline
         type Signal = {
