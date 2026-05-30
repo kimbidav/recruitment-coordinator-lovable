@@ -32,6 +32,10 @@ export interface AgentCardPayload {
     at: string;
     source: string;
   }>;
+  ashby_tracked?: boolean;
+  ashby_last_activity_at?: string | null;
+  ashby_stale?: boolean;
+  ashby_days_since_activity?: number | null;
 }
 
 export interface AgentCard {
