@@ -842,7 +842,29 @@ Deno.serve(async (req) => {
           gmail: gmailHits,
           context: pastCalMatch ? "post_interview" : "intro_stall",
           meetingTimeIso: pastCalMatch?.start ?? null,
+          knownCandidateEmail,
+          clientDomain,
         });
+
+        // Persist any new candidate email the LLM inferred
+        if (signal.candidate_email) {
+          const inferred = extractEmail(signal.candidate_email);
+          const cd = (clientDomain ?? "").toLowerCase();
+          const ownE = (ownGoogleEmail ?? "").toLowerCase();
+          if (
+            inferred && inferred !== ownE &&
+            (!cd || !inferred.endsWith(`@${cd}`)) &&
+            inferred !== (knownCandidateEmail ?? "").toLowerCase()
+          ) {
+            try {
+              await saveCandidateEmail({
+                admin, userId, slackSubmissionId: sub.id,
+                email: inferred, source: "llm", confidence: 0.7,
+              });
+            } catch (e) { console.error("save cand email llm", e); }
+          }
+        }
+
 
         // Build signals timeline
         type Signal = {
