@@ -23,13 +23,15 @@ export function AgentTab() {
   const [reconnecting, setReconnecting] = useState(false);
 
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<"slack" | "ashby">("slack");
 
   const open = useMemo(() => visibleCards(cards), [cards]);
-  // Stable queue order: batch first, then stalls, then follow-ups, oldest first within each kind
-  const queue = useMemo(() => {
+
+  const slackQueue = useMemo(() => {
     const ord = (k: AgentCard["kind"]) =>
       k === "batch_followup" ? 0 : k === "intro_stall" ? 1 : 2;
-    return [...open]
+    return open
+      .filter((c) => !c.payload.ashby_tracked)
       .filter((c) => !skippedIds.has(c.id))
       .sort((a, b) => {
         const k = ord(a.kind) - ord(b.kind);
@@ -38,9 +40,33 @@ export function AgentTab() {
       });
   }, [open, skippedIds]);
 
+  const ashbyQueue = useMemo(() => {
+    // Stale first (these are the ones the user needs to action), then by age.
+    return open
+      .filter((c) => c.payload.ashby_tracked)
+      .filter((c) => !skippedIds.has(c.id))
+      .sort((a, b) => {
+        const staleDiff = Number(!!b.payload.ashby_stale) - Number(!!a.payload.ashby_stale);
+        if (staleDiff !== 0) return staleDiff;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+  }, [open, skippedIds]);
+
+  const queue = view === "slack" ? slackQueue : ashbyQueue;
+  const ashbyStaleCount = useMemo(
+    () => ashbyQueue.filter((c) => c.payload.ashby_stale).length,
+    [ashbyQueue],
+  );
+
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
   const [sessionTotal, setSessionTotal] = useState<number>(0);
+
+  // Reset cursor/session when switching views
+  useEffect(() => {
+    setCursorId(null);
+    setSessionTotal(0);
+  }, [view]);
 
   // Initialize / maintain the cursor as the queue changes
   useEffect(() => {
@@ -222,6 +248,39 @@ export function AgentTab() {
         </div>
       )}
 
+      {/* View toggle: Slack-only vs Ashby-tracked */}
+      <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5 text-sm">
+        <button
+          type="button"
+          onClick={() => setView("slack")}
+          className={`px-3 py-1.5 rounded-md transition-colors ${
+            view === "slack"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Slack pipeline
+          <span className="ml-2 text-xs text-muted-foreground">{slackQueue.length}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("ashby")}
+          className={`px-3 py-1.5 rounded-md transition-colors ${
+            view === "ashby"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Ashby pipeline
+          <span className="ml-2 text-xs text-muted-foreground">{ashbyQueue.length}</span>
+          {ashbyStaleCount > 0 && (
+            <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+              {ashbyStaleCount} stale
+            </span>
+          )}
+        </button>
+      </div>
+
       {loading ? (
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading...
@@ -231,14 +290,29 @@ export function AgentTab() {
           {/* Tasker header: progress + position */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="uppercase tracking-wide font-medium">
-                {current.kind === "intro_stall"
-                  ? "Intro stall"
-                  : current.kind === "post_interview_followup"
-                    ? "Post-interview follow-up"
-                    : "Batch follow-up"}
-                {" · "}
-                Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
+              <span className="uppercase tracking-wide font-medium flex items-center gap-2">
+                <span>
+                  {current.kind === "intro_stall"
+                    ? "Intro stall"
+                    : current.kind === "post_interview_followup"
+                      ? "Post-interview follow-up"
+                      : "Batch follow-up"}
+                  {" · "}
+                  Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
+                </span>
+                {current.payload.ashby_tracked && current.payload.ashby_stale && (
+                  <span className="normal-case tracking-normal inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                    No Ashby activity
+                    {current.payload.ashby_days_since_activity != null
+                      ? ` · ${current.payload.ashby_days_since_activity}d`
+                      : ""}
+                  </span>
+                )}
+                {current.payload.ashby_tracked && !current.payload.ashby_stale && (
+                  <span className="normal-case tracking-normal inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    Active in Ashby
+                  </span>
+                )}
               </span>
               <span>
                 {completedCount} done · {queue.length} left
