@@ -769,21 +769,26 @@ Deno.serve(async (req) => {
             }
           }
 
-          // 3. multi-tier Gmail retrieval
+          // 3. multi-tier Gmail retrieval — every tier must include the client domain,
+          // otherwise we cross-contaminate signals from other clients the candidate
+          // is also interviewing with (e.g. a Phonic thread attributed to an Auctor card).
           try {
             const firstName = (candidateName.trim().split(/\s+/)[0] || "").replace(/[^A-Za-z'-]/g, "");
             const queries: string[] = [];
-            if (knownCandidateEmail) {
-              queries.push(`(from:${knownCandidateEmail} OR to:${knownCandidateEmail}) newer_than:120d`);
+            const domainClause = clientDomain ? `(from:@${clientDomain} OR to:@${clientDomain} OR cc:@${clientDomain})` : "";
+            if (clientDomain && knownCandidateEmail) {
+              queries.push(`(from:${knownCandidateEmail} OR to:${knownCandidateEmail} OR cc:${knownCandidateEmail}) ${domainClause} newer_than:120d`);
             }
             if (clientDomain && firstName.length >= 2) {
-              queries.push(`"${firstName}" (from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
+              queries.push(`"${firstName}" ${domainClause} newer_than:60d`);
             }
             if (clientDomain) {
-              queries.push(`(calendly OR "grab time" OR "find a time" OR "set up a time" OR "scheduling link" OR "confirmed for" OR "look forward to") (from:@${clientDomain} OR to:@${clientDomain}) newer_than:30d`);
-              queries.push(`(from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
+              queries.push(`(calendly OR "grab time" OR "find a time" OR "set up a time" OR "scheduling link" OR "confirmed for" OR "look forward to") ${domainClause} newer_than:30d`);
+              queries.push(`${domainClause} newer_than:60d`);
             }
-            queries.push(`"${candidateName.replace(/"/g, "")}" newer_than:120d`);
+            if (clientDomain) {
+              queries.push(`"${candidateName.replace(/"/g, "")}" ${domainClause} newer_than:120d`);
+            }
 
             const seen = new Set<string>();
             for (const qstr of queries) {
