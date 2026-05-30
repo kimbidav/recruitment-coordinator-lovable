@@ -343,6 +343,8 @@ async function llmDetectScheduling(args: {
   gmail: GmailHit[];
   context: "intro_stall" | "post_interview";
   meetingTimeIso?: string | null;
+  knownCandidateEmail?: string | null;
+  clientDomain?: string | null;
 }): Promise<SchedulingSignal> {
   const apiKey = Deno.env.get("LOVABLE_API_KEY");
   if (!apiKey) return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "no_llm" };
@@ -352,11 +354,23 @@ async function llmDetectScheduling(args: {
     ? `An interview already happened on ${args.meetingTimeIso ?? "(unknown date)"}. Decide whether a NEXT round / NEXT meeting is scheduled, actively being scheduled, or already completed via email.`
     : `Decide whether ANY meeting between the candidate and someone at the company is scheduled, actively being scheduled, or already happened — calendar event OR an email exchange.`;
 
+  const firstName = (args.candidateName.trim().split(/\s+/)[0] || "").toLowerCase();
+  const attributionNote = `IMPORTANT: Emails between the client and the candidate usually do NOT include the candidate's full name. They often use only the first name ("Hi ${firstName || "<first name>"},"), or no name at all. Attribute by EMAIL ADDRESS, not by name in the body:
+- If a known candidate email is provided below, any email from/to that address IS the candidate.
+- Otherwise, a thread between the client domain (${args.clientDomain ?? "unknown"}) and an external address whose first name plausibly matches "${firstName}" should be treated as the candidate.
+- Do NOT require the candidate's last name to appear anywhere.`;
+
   const today = new Date().toISOString().slice(0, 10);
   const prompt = `You are detecting interview scheduling signals between a candidate and a client/hiring company.
 Today: ${today}
 Candidate: ${args.candidateName}
 Company: ${args.company}
+Known candidate email: ${args.knownCandidateEmail ?? "(unknown — infer if possible)"}
+Client email domain: ${args.clientDomain ?? "(unknown)"}
+
+${attributionNote}
+
+
 
 ${scopeNote}
 
