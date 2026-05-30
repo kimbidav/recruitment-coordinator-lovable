@@ -290,14 +290,29 @@ export function AgentTab() {
           {/* Tasker header: progress + position */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="uppercase tracking-wide font-medium">
-                {current.kind === "intro_stall"
-                  ? "Intro stall"
-                  : current.kind === "post_interview_followup"
-                    ? "Post-interview follow-up"
-                    : "Batch follow-up"}
-                {" · "}
-                Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
+              <span className="uppercase tracking-wide font-medium flex items-center gap-2">
+                <span>
+                  {current.kind === "intro_stall"
+                    ? "Intro stall"
+                    : current.kind === "post_interview_followup"
+                      ? "Post-interview follow-up"
+                      : "Batch follow-up"}
+                  {" · "}
+                  Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
+                </span>
+                {current.payload.ashby_tracked && current.payload.ashby_stale && (
+                  <span className="normal-case tracking-normal inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                    No Ashby activity
+                    {current.payload.ashby_days_since_activity != null
+                      ? ` · ${current.payload.ashby_days_since_activity}d`
+                      : ""}
+                  </span>
+                )}
+                {current.payload.ashby_tracked && !current.payload.ashby_stale && (
+                  <span className="normal-case tracking-normal inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    Active in Ashby
+                  </span>
+                )}
               </span>
               <span>
                 {completedCount} done · {queue.length} left
