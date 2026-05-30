@@ -255,7 +255,78 @@ async function learnClientDomain(args: {
   return null;
 }
 
+// --- Candidate email cache ----------------------------------------------------
+
+const PUBLIC_EMAIL_DOMAINS = new Set([
+  "gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com",
+  "me.com","aol.com","proton.me","protonmail.com","live.com","msn.com",
+]);
+
+function extractEmail(s: string): string | null {
+  if (!s) return null;
+  const m = s.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
+  return m ? m[0].toLowerCase() : null;
+}
+function emailDomain(e: string | null): string | null {
+  if (!e) return null;
+  const m = e.match(/@([\w.-]+)/);
+  return m ? m[1].toLowerCase() : null;
+}
+
+async function loadCandidateEmail(args: {
+  admin: any; userId: string; slackSubmissionId: string;
+}): Promise<string | null> {
+  const { data } = await args.admin
+    .from("candidate_emails")
+    .select("email, confidence")
+    .eq("user_id", args.userId)
+    .eq("slack_submission_id", args.slackSubmissionId)
+    .order("confidence", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data?.email ?? null;
+}
+
+async function saveCandidateEmail(args: {
+  admin: any; userId: string; slackSubmissionId: string;
+  email: string; source: string; confidence: number;
+}) {
+  if (!args.email) return;
+  await args.admin.from("candidate_emails").upsert({
+    user_id: args.userId,
+    slack_submission_id: args.slackSubmissionId,
+    email: args.email.toLowerCase(),
+    source: args.source,
+    confidence: args.confidence,
+    learned_at: new Date().toISOString(),
+  }, { onConflict: "user_id,slack_submission_id,email" });
+}
+
+/**
+ * Pick the most likely candidate email from a calendar event's attendees:
+ * exclude the user's own email, exclude the client's domain (those are
+ * interviewers), and prefer a non-public domain if the candidate has a work
+ * email; otherwise fall back to a public-domain (gmail/etc) address.
+ */
+function pickCandidateEmailFromEvent(
+  ev: { attendees: string[] },
+  opts: { ownEmail: string | null; clientDomain: string | null },
+): string | null {
+  const own = (opts.ownEmail ?? "").toLowerCase();
+  const cd = (opts.clientDomain ?? "").toLowerCase();
+  const candidates = ev.attendees
+    .map((a) => extractEmail(a))
+    .filter((e): e is string => !!e)
+    .filter((e) => e !== own)
+    .filter((e) => !cd || !e.endsWith(`@${cd}`));
+  if (!candidates.length) return null;
+  const personal = candidates.find((e) => PUBLIC_EMAIL_DOMAINS.has(emailDomain(e) ?? ""));
+  const work = candidates.find((e) => !PUBLIC_EMAIL_DOMAINS.has(emailDomain(e) ?? ""));
+  return work ?? personal ?? candidates[0];
+}
+
 // --- LLM signal detectors -----------------------------------------------------
+
 
 interface SchedulingSignal {
   outcome: "scheduled" | "scheduling_in_progress" | "interview_completed" | "not_scheduled" | "ambiguous";
