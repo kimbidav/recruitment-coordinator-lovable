@@ -502,16 +502,17 @@ function calendarMatches(args: {
     const att = e.attendees.join(" ").toLowerCase();
     const tKey = companyKey(t);
     const attKey = companyKey(att);
-    const hasFirst = fn && t.includes(fn);
-    const hasLast = ln && t.includes(ln);
+    const hasFirst = fn && fn.length >= 2 && new RegExp(`\\b${fn}\\b`).test(t);
+    const hasLast = ln && ln.length >= 2 && new RegExp(`\\b${ln}\\b`).test(t);
     const hasCompany = cKey && (tKey === cKey || tKey.includes(cKey) || attKey.includes(cKey));
-    const hasAnyTok = cToks.some((tok) => tok.length >= 4 && t.includes(tok));
     // Title patterns: "X x Y", "X / Y", "X × Y", "X | Y"
     const sepPattern = new RegExp(`\\b${fn}\\b\\s*[x×\\/|]\\s*\\b(${cToks.join("|") || "__none__"})\\b`, "i");
     const sepMatch = fn && cToks.length && sepPattern.test(t);
 
+    // Strict: require BOTH a candidate-name token AND a company signal.
+    // Avoids attributing e.g. "Vishu x Auctor" to a different Auctor candidate.
     if ((hasFirst && hasCompany) || sepMatch) exact.push(e);
-    else if (hasFirst || hasLast || hasAnyTok || hasCompany) fuzzy.push(e);
+    else if ((hasFirst || hasLast) && hasCompany) fuzzy.push(e);
   }
 
   if (exact.length) return { matches: exact, tier: "exact" };
