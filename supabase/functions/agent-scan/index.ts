@@ -502,16 +502,17 @@ function calendarMatches(args: {
     const att = e.attendees.join(" ").toLowerCase();
     const tKey = companyKey(t);
     const attKey = companyKey(att);
-    const hasFirst = fn && t.includes(fn);
-    const hasLast = ln && t.includes(ln);
+    const hasFirst = fn && fn.length >= 2 && new RegExp(`\\b${fn}\\b`).test(t);
+    const hasLast = ln && ln.length >= 2 && new RegExp(`\\b${ln}\\b`).test(t);
     const hasCompany = cKey && (tKey === cKey || tKey.includes(cKey) || attKey.includes(cKey));
-    const hasAnyTok = cToks.some((tok) => tok.length >= 4 && t.includes(tok));
     // Title patterns: "X x Y", "X / Y", "X × Y", "X | Y"
     const sepPattern = new RegExp(`\\b${fn}\\b\\s*[x×\\/|]\\s*\\b(${cToks.join("|") || "__none__"})\\b`, "i");
     const sepMatch = fn && cToks.length && sepPattern.test(t);
 
+    // Strict: require BOTH a candidate-name token AND a company signal.
+    // Avoids attributing e.g. "Vishu x Auctor" to a different Auctor candidate.
     if ((hasFirst && hasCompany) || sepMatch) exact.push(e);
-    else if (hasFirst || hasLast || hasAnyTok || hasCompany) fuzzy.push(e);
+    else if ((hasFirst || hasLast) && hasCompany) fuzzy.push(e);
   }
 
   if (exact.length) return { matches: exact, tier: "exact" };
@@ -768,21 +769,26 @@ Deno.serve(async (req) => {
             }
           }
 
-          // 3. multi-tier Gmail retrieval
+          // 3. multi-tier Gmail retrieval — every tier must include the client domain,
+          // otherwise we cross-contaminate signals from other clients the candidate
+          // is also interviewing with (e.g. a Phonic thread attributed to an Auctor card).
           try {
             const firstName = (candidateName.trim().split(/\s+/)[0] || "").replace(/[^A-Za-z'-]/g, "");
             const queries: string[] = [];
-            if (knownCandidateEmail) {
-              queries.push(`(from:${knownCandidateEmail} OR to:${knownCandidateEmail}) newer_than:120d`);
+            const domainClause = clientDomain ? `(from:@${clientDomain} OR to:@${clientDomain} OR cc:@${clientDomain})` : "";
+            if (clientDomain && knownCandidateEmail) {
+              queries.push(`(from:${knownCandidateEmail} OR to:${knownCandidateEmail} OR cc:${knownCandidateEmail}) ${domainClause} newer_than:120d`);
             }
             if (clientDomain && firstName.length >= 2) {
-              queries.push(`"${firstName}" (from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
+              queries.push(`"${firstName}" ${domainClause} newer_than:60d`);
             }
             if (clientDomain) {
-              queries.push(`(calendly OR "grab time" OR "find a time" OR "set up a time" OR "scheduling link" OR "confirmed for" OR "look forward to") (from:@${clientDomain} OR to:@${clientDomain}) newer_than:30d`);
-              queries.push(`(from:@${clientDomain} OR to:@${clientDomain}) newer_than:60d`);
+              queries.push(`(calendly OR "grab time" OR "find a time" OR "set up a time" OR "scheduling link" OR "confirmed for" OR "look forward to") ${domainClause} newer_than:30d`);
+              queries.push(`${domainClause} newer_than:60d`);
             }
-            queries.push(`"${candidateName.replace(/"/g, "")}" newer_than:120d`);
+            if (clientDomain) {
+              queries.push(`"${candidateName.replace(/"/g, "")}" ${domainClause} newer_than:120d`);
+            }
 
             const seen = new Set<string>();
             for (const qstr of queries) {
