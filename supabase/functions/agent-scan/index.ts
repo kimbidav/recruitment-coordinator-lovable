@@ -1123,6 +1123,7 @@ Deno.serve(async (req) => {
           channel_id: sub.channel_id,
           message_ts: sub.message_ts,
           suggested_slack_message,
+          ...ashbyFlagsFor(company),
         };
 
         // Hold intro_stall for batching
