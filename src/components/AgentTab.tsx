@@ -23,13 +23,15 @@ export function AgentTab() {
   const [reconnecting, setReconnecting] = useState(false);
 
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<"slack" | "ashby">("slack");
 
   const open = useMemo(() => visibleCards(cards), [cards]);
-  // Stable queue order: batch first, then stalls, then follow-ups, oldest first within each kind
-  const queue = useMemo(() => {
+
+  const slackQueue = useMemo(() => {
     const ord = (k: AgentCard["kind"]) =>
       k === "batch_followup" ? 0 : k === "intro_stall" ? 1 : 2;
-    return [...open]
+    return open
+      .filter((c) => !c.payload.ashby_tracked)
       .filter((c) => !skippedIds.has(c.id))
       .sort((a, b) => {
         const k = ord(a.kind) - ord(b.kind);
@@ -38,9 +40,33 @@ export function AgentTab() {
       });
   }, [open, skippedIds]);
 
+  const ashbyQueue = useMemo(() => {
+    // Stale first (these are the ones the user needs to action), then by age.
+    return open
+      .filter((c) => c.payload.ashby_tracked)
+      .filter((c) => !skippedIds.has(c.id))
+      .sort((a, b) => {
+        const staleDiff = Number(!!b.payload.ashby_stale) - Number(!!a.payload.ashby_stale);
+        if (staleDiff !== 0) return staleDiff;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+  }, [open, skippedIds]);
+
+  const queue = view === "slack" ? slackQueue : ashbyQueue;
+  const ashbyStaleCount = useMemo(
+    () => ashbyQueue.filter((c) => c.payload.ashby_stale).length,
+    [ashbyQueue],
+  );
+
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
   const [sessionTotal, setSessionTotal] = useState<number>(0);
+
+  // Reset cursor/session when switching views
+  useEffect(() => {
+    setCursorId(null);
+    setSessionTotal(0);
+  }, [view]);
 
   // Initialize / maintain the cursor as the queue changes
   useEffect(() => {
