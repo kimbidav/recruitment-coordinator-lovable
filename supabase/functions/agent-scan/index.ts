@@ -697,6 +697,21 @@ Deno.serve(async (req) => {
       sub: typeof batch[number]; cardPayload: Record<string, unknown>;
     }>>();
 
+    // Clients (company_name) that have an Ashby instance synced — skip card generation,
+    // since the user can track progress directly in Ashby.
+    const ashbyClientNames = new Set<string>();
+    {
+      const { data: ashbyRows } = await admin
+        .from("candidates")
+        .select("company_name")
+        .eq("user_id", userId)
+        .not("ashby_candidate_id", "is", null);
+      for (const r of ashbyRows ?? []) {
+        const name = (r as { company_name?: string }).company_name?.trim().toLowerCase();
+        if (name) ashbyClientNames.add(name);
+      }
+    }
+
     for (const sub of batch) {
       // Soft timeout: stop early if we're close to the limit
       if (Date.now() - startTime > PAGE_SOFT_TIMEOUT_MS) {
@@ -717,6 +732,17 @@ Deno.serve(async (req) => {
           });
           continue;
         }
+
+        // Skip clients tracked in Ashby — user already has visibility there.
+        if (company && ashbyClientNames.has(company.trim().toLowerCase())) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "skipped_ashby_client", reason: "client has Ashby instance",
+          });
+          continue;
+        }
+
 
         // 3-tier calendar matching
         let { matches: calMatches, tier } = calendarMatches({
