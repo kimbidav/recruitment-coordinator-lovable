@@ -519,6 +519,7 @@ Deno.serve(async (req) => {
 
     const { data: gTok } = await admin
       .from("google_calendar_tokens").select("*").eq("user_id", userId).maybeSingle();
+    const ownGoogleEmail: string | null = (gTok?.google_email ?? null) as string | null;
 
     let googleAccess: string | null = gTok?.access_token ?? null;
     if (gTok) {
