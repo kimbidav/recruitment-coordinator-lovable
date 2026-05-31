@@ -723,6 +723,17 @@ Deno.serve(async (req) => {
         const prev = ashbyByCompany.get(name);
         if (prev === undefined) ashbyByCompany.set(name, latest);
         else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(name, latest);
+    }
+    // Also include any client ever seen in an Ashby fetch, even with no current candidates.
+    {
+      const { data: knownRows } = await admin
+        .from("ashby_known_clients")
+        .select("client_name")
+        .eq("user_id", userId);
+      for (const r of (knownRows ?? []) as Array<{ client_name?: string }>) {
+        const name = r.client_name?.trim().toLowerCase();
+        if (!name) continue;
+        if (!ashbyByCompany.has(name)) ashbyByCompany.set(name, null);
       }
     }
     const ashbyFlagsFor = (companyName: string): {
