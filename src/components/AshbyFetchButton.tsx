@@ -231,6 +231,40 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       setStoredAshbyCookie(cookieToUse);
       onUpload(candidates);
 
+      // Remember every client we saw in this fetch so the Tasker treats them as Ashby-tracked
+      // even when no current candidates exist in pipeline.
+      if (user) {
+        const clientNames = Array.from(
+          new Set(
+            candidates
+              .map((c) => (c.company_name ?? "").trim())
+              .filter((n) => n.length > 0),
+          ),
+        );
+        // Also include any org names the extractor reports, in case some orgs have 0 current candidates.
+        const statsAny = stats as unknown as { orgs?: unknown; org_names?: unknown };
+        for (const key of ["orgs", "org_names"] as const) {
+          const v = statsAny[key];
+          if (Array.isArray(v)) {
+            for (const item of v) {
+              const name = typeof item === "string" ? item.trim() : typeof (item as { name?: unknown })?.name === "string" ? ((item as { name: string }).name).trim() : "";
+              if (name && !clientNames.includes(name)) clientNames.push(name);
+            }
+          }
+        }
+        if (clientNames.length) {
+          const { supabase } = await import("@/integrations/supabase/client");
+          const rows = clientNames.map((client_name) => ({
+            user_id: user.id,
+            client_name,
+            last_seen_at: new Date().toISOString(),
+          }));
+          await supabase
+            .from("ashby_known_clients")
+            .upsert(rows, { onConflict: "user_id,client_name" });
+        }
+      }
+
       const orgsTotal = stats.orgs_total;
       const orgsFetched = stats.orgs_fetched;
       const orgsFailed = stats.orgs_failed ?? 0;
