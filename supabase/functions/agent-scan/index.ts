@@ -723,6 +723,7 @@ Deno.serve(async (req) => {
         const prev = ashbyByCompany.get(name);
         if (prev === undefined) ashbyByCompany.set(name, latest);
         else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(name, latest);
+      }
     }
     // Also include any client ever seen in an Ashby fetch, even with no current candidates.
     {
