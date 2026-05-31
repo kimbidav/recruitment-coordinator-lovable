@@ -149,6 +149,30 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_known_clients: {
+        Row: {
+          client_name: string
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          user_id: string
+        }
+        Insert: {
+          client_name: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          user_id: string
+        }
+        Update: {
+          client_name?: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       candidate_emails: {
         Row: {
           confidence: number
