@@ -216,13 +216,18 @@ Deno.serve(async (req) => {
       if (!cursor) break;
     }
 
-    // Client companies are external Slack Connect channels (shared with an outside org).
-    // Internal channels (eng-recruiting-general, eng-candidate-review, etc.) are NOT
-    // client channels even if they happen to be shared inside our workspace, so we
-    // require is_ext_shared specifically and ignore plain is_shared / is_org_shared.
+    // Client companies are external Slack Connect channels (shared with an outside org),
+    // OR internal channels explicitly named for a client (prefix `internal-`, e.g.
+    // `internal-deshawresearch-eng` — used when we track a client's pipeline only in
+    // our own Slack and there's no shared Connect channel / Ashby instance).
+    // Plain internal channels (eng-recruiting-general, eng-candidate-review, etc.)
+    // are NOT client channels.
     const candidateChannels = channels.filter(
-      (c) => !c.is_archived && c.is_ext_shared === true,
+      (c) =>
+        !c.is_archived &&
+        (c.is_ext_shared === true || /^internal[-_]/i.test(c.name ?? "")),
     );
+
 
     // Load existing mappings to preserve user overrides
     const { data: existingMappings } = await supabase
