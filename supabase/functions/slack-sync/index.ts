@@ -253,6 +253,19 @@ Deno.serve(async (req) => {
       if (mapErr) console.error("channel mapping upsert error:", mapErr.message);
     }
 
+    // Disable any previously-mapped channels that no longer qualify as external
+    // client channels (e.g. internal eng channels that were synced before this filter).
+    const keepIds = new Set(candidateChannels.map((c) => c.id));
+    const staleIds = Array.from(existingByChannel.keys()).filter((id) => !keepIds.has(id));
+    if (staleIds.length > 0) {
+      const { error: disableErr } = await supabase
+        .from("slack_channel_mappings")
+        .update({ enabled: false })
+        .eq("user_id", userId)
+        .in("channel_id", staleIds);
+      if (disableErr) console.error("disable stale mappings error:", disableErr.message);
+    }
+
     // 2) For each enabled channel, fetch parent messages by this user
     const enabledChannels = candidateChannels.filter((c) => {
       const m = existingByChannel.get(c.id);
