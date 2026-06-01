@@ -214,23 +214,12 @@ Deno.serve(async (req) => {
       if (!cursor) break;
     }
 
-    // Channels to always exclude (internal review channels, not client submission channels)
-    const EXCLUDED_CHANNEL_PATTERNS: RegExp[] = [
-      /eng[-_]?candidate[-_]?review/i,
-      /candidate[-_]?review[-_]?eng/i,
-    ];
-    const isExcluded = (name: string) =>
-      EXCLUDED_CHANNEL_PATTERNS.some((re) => re.test(name ?? ""));
-
-    // Filter: external/shared channels OR channels named candidatelabs-*
+    // Client companies are external Slack Connect channels (shared with an outside org).
+    // Internal channels (eng-recruiting-general, eng-candidate-review, etc.) are NOT
+    // client channels even if they happen to be shared inside our workspace, so we
+    // require is_ext_shared specifically and ignore plain is_shared / is_org_shared.
     const candidateChannels = channels.filter(
-      (c) =>
-        !c.is_archived &&
-        !isExcluded(c.name ?? "") &&
-        (c.is_ext_shared ||
-          c.is_shared ||
-          c.is_org_shared ||
-          /^candidatelabs[-_]/i.test(c.name ?? "")),
+      (c) => !c.is_archived && c.is_ext_shared === true,
     );
 
     // Load existing mappings to preserve user overrides
@@ -262,6 +251,19 @@ Deno.serve(async (req) => {
         .from("slack_channel_mappings")
         .upsert(mappingsUpsert, { onConflict: "user_id,channel_id" });
       if (mapErr) console.error("channel mapping upsert error:", mapErr.message);
+    }
+
+    // Disable any previously-mapped channels that no longer qualify as external
+    // client channels (e.g. internal eng channels that were synced before this filter).
+    const keepIds = new Set(candidateChannels.map((c) => c.id));
+    const staleIds = Array.from(existingByChannel.keys()).filter((id) => !keepIds.has(id));
+    if (staleIds.length > 0) {
+      const { error: disableErr } = await supabase
+        .from("slack_channel_mappings")
+        .update({ enabled: false })
+        .eq("user_id", userId)
+        .in("channel_id", staleIds);
+      if (disableErr) console.error("disable stale mappings error:", disableErr.message);
     }
 
     // 2) For each enabled channel, fetch parent messages by this user
