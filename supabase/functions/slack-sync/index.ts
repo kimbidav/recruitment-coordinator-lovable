@@ -48,9 +48,11 @@ const LINKEDIN_RE = /https?:\/\/(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9\-_%\.]+\
 function inferClientName(channelName: string): string {
   let name = channelName.trim().toLowerCase();
   name = name.replace(/^candidatelabs[-_]/, "");
+  name = name.replace(/^internal[-_]/, "");
   name = name.replace(/[-_]engineers?$/, "");
   name = name.replace(/[-_]eng$/, "");
   name = name.replace(/[-_]team$/, "");
+
   // Title case from words
   return name
     .split(/[-_\s]+/)
