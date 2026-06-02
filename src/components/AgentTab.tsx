@@ -281,36 +281,64 @@ export function AgentTab() {
       )}
 
       {/* View toggle: Slack-only vs Ashby-tracked */}
-      <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5 text-sm">
-        <button
-          type="button"
-          onClick={() => setView("slack")}
-          className={`px-3 py-1.5 rounded-md transition-colors ${
-            view === "slack"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Slack pipeline
-          <span className="ml-2 text-xs text-muted-foreground">{slackQueue.length}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setView("ashby")}
-          className={`px-3 py-1.5 rounded-md transition-colors ${
-            view === "ashby"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Ashby pipeline
-          <span className="ml-2 text-xs text-muted-foreground">{ashbyQueue.length}</span>
-          {ashbyStaleCount > 0 && (
-            <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
-              {ashbyStaleCount} stale
-            </span>
-          )}
-        </button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5 text-sm">
+          <button
+            type="button"
+            onClick={() => setView("slack")}
+            className={`px-3 py-1.5 rounded-md transition-colors ${
+              view === "slack"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Slack pipeline
+            <span className="ml-2 text-xs text-muted-foreground">{slackQueue.length}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("ashby")}
+            className={`px-3 py-1.5 rounded-md transition-colors ${
+              view === "ashby"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Ashby pipeline
+            <span className="ml-2 text-xs text-muted-foreground">{ashbyQueue.length}</span>
+            {ashbyStaleCount > 0 && (
+              <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                {ashbyStaleCount} stale
+              </span>
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <Input
+            value={addClientName}
+            onChange={(e) => setAddClientName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleAddAshbyClient();
+              }
+            }}
+            placeholder="Mark client as Ashby-tracked…"
+            className="h-8 w-56 text-sm"
+            disabled={addingClient || scanning}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleAddAshbyClient}
+            disabled={!addClientName.trim() || addingClient || scanning}
+            className="h-8 gap-1"
+          >
+            {addingClient ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            Add
+          </Button>
+        </div>
       </div>
 
       {loading ? (
