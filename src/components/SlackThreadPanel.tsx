@@ -73,16 +73,35 @@ export function SlackThreadPanel({
   const [mentionStart, setMentionStart] = useState<number | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
+  // Merge workspace/channel users with anyone who has posted in the thread.
+  // Thread participants (especially external Slack Connect guests like clients)
+  // sometimes don't appear in users.list / conversations.members, so we surface
+  // them directly from the loaded messages so they're always mentionable.
+  const mentionableUsers = useMemo<SlackUser[]>(() => {
+    const map = new Map<string, SlackUser>();
+    for (const u of users) map.set(u.id, u);
+    for (const m of messages) {
+      if (!m.user_id || map.has(m.user_id)) continue;
+      map.set(m.user_id, {
+        id: m.user_id,
+        name: m.user_name || m.user_id,
+        real_name: m.user_name || "",
+        image: m.user_image,
+      });
+    }
+    return [...map.values()];
+  }, [users, messages]);
+
   const filteredUsers = useMemo(() => {
     if (!mentionOpen) return [];
     const q = mentionQuery.toLowerCase();
-    const matches = users.filter(
+    const matches = mentionableUsers.filter(
       (u) =>
         u.name.toLowerCase().includes(q) ||
         u.real_name.toLowerCase().includes(q),
     );
     return matches.slice(0, 8);
-  }, [mentionOpen, mentionQuery, users]);
+  }, [mentionOpen, mentionQuery, mentionableUsers]);
 
   // Load workspace + channel users (once per open) for @mentions.
   // Passing channel_id lets the backend include external/shared-channel guests
@@ -139,8 +158,8 @@ export function SlackThreadPanel({
   // Convert "@displayname" tokens in the draft into Slack mention syntax "<@U123>".
   // Longest matching name wins to handle names that overlap (e.g. "shel" vs "shelby").
   const encodeMentions = (raw: string): string => {
-    if (users.length === 0) return raw;
-    const sorted = [...users].sort((a, b) => b.name.length - a.name.length);
+    if (mentionableUsers.length === 0) return raw;
+    const sorted = [...mentionableUsers].sort((a, b) => b.name.length - a.name.length);
     let out = raw;
     for (const u of sorted) {
       const escaped = u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -416,16 +435,31 @@ export function SlackThreadInline({
   const [mentionStart, setMentionStart] = useState<number | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
+  const mentionableUsers = useMemo<SlackUser[]>(() => {
+    const map = new Map<string, SlackUser>();
+    for (const u of users) map.set(u.id, u);
+    for (const m of messages) {
+      if (!m.user_id || map.has(m.user_id)) continue;
+      map.set(m.user_id, {
+        id: m.user_id,
+        name: m.user_name || m.user_id,
+        real_name: m.user_name || "",
+        image: m.user_image,
+      });
+    }
+    return [...map.values()];
+  }, [users, messages]);
+
   const filteredUsers = useMemo(() => {
     if (!mentionOpen) return [];
     const q = mentionQuery.toLowerCase();
-    const matches = users.filter(
+    const matches = mentionableUsers.filter(
       (u) =>
         u.name.toLowerCase().includes(q) ||
         u.real_name.toLowerCase().includes(q),
     );
     return matches.slice(0, 8);
-  }, [mentionOpen, mentionQuery, users]);
+  }, [mentionOpen, mentionQuery, mentionableUsers]);
 
   // Reset state when the target thread changes (different card)
   useEffect(() => {
@@ -482,8 +516,8 @@ export function SlackThreadInline({
   }, [channelId, messageTs]);
 
   const encodeMentions = (raw: string): string => {
-    if (users.length === 0) return raw;
-    const sorted = [...users].sort((a, b) => b.name.length - a.name.length);
+    if (mentionableUsers.length === 0) return raw;
+    const sorted = [...mentionableUsers].sort((a, b) => b.name.length - a.name.length);
     let out = raw;
     for (const u of sorted) {
       const escaped = u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
