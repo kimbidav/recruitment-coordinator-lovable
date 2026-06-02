@@ -1276,7 +1276,11 @@ Deno.serve(async (req) => {
         })),
         suggested_slack_message: slackMsg,
         signal_summary: `${candNames.length} candidates at ${clientName} have no scheduling signal.`,
-        ...ashbyFlagsFor(clientName),
+        // Reuse per-card ashby flags so the batch lands in the same pipeline as its members.
+        ashby_tracked: (sorted[0].cardPayload as { ashby_tracked?: boolean }).ashby_tracked === true,
+        ashby_last_activity_at: (sorted[0].cardPayload as { ashby_last_activity_at?: string | null }).ashby_last_activity_at ?? null,
+        ashby_stale: (sorted[0].cardPayload as { ashby_stale?: boolean }).ashby_stale === true,
+        ashby_days_since_activity: (sorted[0].cardPayload as { ashby_days_since_activity?: number | null }).ashby_days_since_activity ?? null,
       };
 
       // Resolve the individual intro_stall cards we just wrote
