@@ -719,7 +719,23 @@ Deno.serve(async (req) => {
       const tokens = cleaned.split(" ").filter((t) => t && !COMPANY_STOPWORDS.has(t));
       return tokens.join(" ");
     };
-    const ashbyByCompany = new Map<string, number | null>(); // normalized name -> ms timestamp or null
+    // Per-(client, candidate) loop routing. The candidates table is the source of truth:
+    // a row with ashby_candidate_id set → that specific loop is tracked in Ashby (BOTH or ASHBY-only);
+    // a row without ashby_candidate_id → SLACK-only loop for that person at that client.
+    // The same candidate can appear in both buckets across different clients.
+    const ashbyByCompany = new Map<string, number | null>(); // normalized client -> latest ms, for batch fallback
+    const ashbyByPair = new Map<string, { tracked: boolean; latest: number | null }>(); // `${normCompany}::${normName}`
+    const normalizeName = (raw: string): string => {
+      if (!raw) return "";
+      return raw
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    };
+    const pairKey = (company: string, name: string) => `${normalizeCompany(company)}::${normalizeName(name)}`;
     const mergeAshby = (rawName: string, latest: number | null) => {
       const key = normalizeCompany(rawName);
       if (!key) return;
@@ -728,26 +744,38 @@ Deno.serve(async (req) => {
       else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(key, latest);
     };
     {
-      const { data: ashbyRows } = await admin
+      const { data: candRows } = await admin
         .from("candidates")
-        .select("company_name,last_activity_at,current_stage_date,latest_feedback_date")
-        .eq("user_id", userId)
-        .not("ashby_candidate_id", "is", null);
-      for (const r of (ashbyRows ?? []) as Array<{
+        .select("company_name,candidate_name,ashby_candidate_id,last_activity_at,current_stage_date,latest_feedback_date")
+        .eq("user_id", userId);
+      for (const r of (candRows ?? []) as Array<{
         company_name?: string;
+        candidate_name?: string;
+        ashby_candidate_id?: string | null;
         last_activity_at?: string | null;
         current_stage_date?: string | null;
         latest_feedback_date?: string | null;
       }>) {
-        if (!r.company_name) continue;
-        const candidates = [r.last_activity_at, r.current_stage_date, r.latest_feedback_date]
+        if (!r.company_name || !r.candidate_name) continue;
+        const tracked = !!r.ashby_candidate_id;
+        const tsList = [r.last_activity_at, r.current_stage_date, r.latest_feedback_date]
           .map((s) => (s ? new Date(s).getTime() : NaN))
           .filter((n) => !isNaN(n));
-        const latest = candidates.length ? Math.max(...candidates) : null;
-        mergeAshby(r.company_name, latest);
+        const latest = tsList.length ? Math.max(...tsList) : null;
+        const k = pairKey(r.company_name, r.candidate_name);
+        const prev = ashbyByPair.get(k);
+        if (!prev) {
+          ashbyByPair.set(k, { tracked, latest });
+        } else {
+          ashbyByPair.set(k, {
+            tracked: prev.tracked || tracked,
+            latest: latest != null && (prev.latest == null || latest > prev.latest) ? latest : prev.latest,
+          });
+        }
+        if (tracked) mergeAshby(r.company_name, latest);
       }
     }
-    // Also include any client ever seen in an Ashby fetch, even with no current candidates.
+    // Also include any client ever seen in an Ashby fetch, even with no current candidates — batch fallback only.
     {
       const { data: knownRows } = await admin
         .from("ashby_known_clients")
@@ -757,9 +785,7 @@ Deno.serve(async (req) => {
         if (r.client_name) mergeAshby(r.client_name, null);
       }
     }
-    // Fuzzy lookup: exact normalized match OR one side's normalized form is a
-    // substring of the other (handles "Reducto AI" vs "Reducto", "Graphite Software" vs "Graphite").
-    const lookupAshby = (rawCompany: string): number | null | undefined => {
+    const lookupAshbyClient = (rawCompany: string): number | null | undefined => {
       const key = normalizeCompany(rawCompany);
       if (!key) return undefined;
       if (ashbyByCompany.has(key)) return ashbyByCompany.get(key)!;
@@ -769,17 +795,7 @@ Deno.serve(async (req) => {
       }
       return undefined;
     };
-    const ashbyFlagsFor = (companyName: string): {
-      ashby_tracked: boolean;
-      ashby_last_activity_at: string | null;
-      ashby_stale: boolean;
-      ashby_days_since_activity: number | null;
-    } => {
-      const hit = lookupAshby(companyName);
-      if (hit === undefined) {
-        return { ashby_tracked: false, ashby_last_activity_at: null, ashby_stale: false, ashby_days_since_activity: null };
-      }
-      const last = hit;
+    const buildFlags = (last: number | null) => {
       const days = last == null ? null : Math.floor((Date.now() - last) / 86400000);
       const stale = last == null ? true : days! >= ASHBY_STALE_DAYS;
       return {
@@ -788,6 +804,26 @@ Deno.serve(async (req) => {
         ashby_stale: stale,
         ashby_days_since_activity: days,
       };
+    };
+    const NOT_TRACKED = { ashby_tracked: false, ashby_last_activity_at: null, ashby_stale: false, ashby_days_since_activity: null } as const;
+    const ashbyFlagsFor = (companyName: string, candidateName?: string): {
+      ashby_tracked: boolean;
+      ashby_last_activity_at: string | null;
+      ashby_stale: boolean;
+      ashby_days_since_activity: number | null;
+    } => {
+      // Per-loop decision: if we have a candidates row for this exact (client, candidate),
+      // its ashby_candidate_id is authoritative — do NOT fall through to client-level lookup.
+      if (candidateName) {
+        const pair = ashbyByPair.get(pairKey(companyName, candidateName));
+        if (pair) return pair.tracked ? buildFlags(pair.latest) : { ...NOT_TRACKED };
+        // No row for this pair yet (fresh Slack submission, not synced from Ashby) → Slack.
+        return { ...NOT_TRACKED };
+      }
+      // Batch case (no single candidate): fall back to client-level fuzzy match.
+      const hit = lookupAshbyClient(companyName);
+      if (hit === undefined) return { ...NOT_TRACKED };
+      return buildFlags(hit);
     };
 
     for (const sub of batch) {
