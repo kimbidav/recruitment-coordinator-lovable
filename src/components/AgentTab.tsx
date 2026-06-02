@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Sparkles, AlertCircle, ChevronLeft, ChevronRight, CheckCircle2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Loader2, RefreshCw, Sparkles, AlertCircle, ChevronLeft, ChevronRight, CheckCircle2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { useAgentCards, visibleCards, fetchDrafts, type AgentCard } from "@/hooks/useAgentCards";
 import { AgentActionCard } from "./AgentActionCard";
 import { SlackThreadPanel } from "./SlackThreadPanel";
