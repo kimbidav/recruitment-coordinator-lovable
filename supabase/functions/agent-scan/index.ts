@@ -1203,12 +1203,13 @@ Deno.serve(async (req) => {
           channel_id: sub.channel_id,
           message_ts: sub.message_ts,
           suggested_slack_message,
-          ...ashbyFlagsFor(company),
+          ...ashbyFlagsFor(company, candidateName),
         };
 
-        // Hold intro_stall for batching
+        // Hold intro_stall for batching — partition by ashby vs slack so each batch is single-bucket.
         if (kind === "intro_stall" && company) {
-          const k = companyKey(company);
+          const trackedHere = (payload as { ashby_tracked?: boolean }).ashby_tracked === true;
+          const k = `${companyKey(company)}::${trackedHere ? "ashby" : "slack"}`;
           if (!stallsByClient.has(k)) stallsByClient.set(k, []);
           stallsByClient.get(k)!.push({ sub, cardPayload: payload });
           // We'll write the card below tentatively; batch sweep may roll it up.
