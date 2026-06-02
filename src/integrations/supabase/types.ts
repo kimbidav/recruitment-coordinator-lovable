@@ -301,6 +301,33 @@ export type Database = {
           },
         ]
       }
+      client_aliases: {
+        Row: {
+          alias: string
+          canonical: string
+          created_at: string
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          alias: string
+          canonical: string
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          alias?: string
+          canonical?: string
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       client_domain_cache: {
         Row: {
           client_name: string
