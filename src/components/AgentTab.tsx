@@ -209,9 +209,36 @@ export function AgentTab() {
     }
   };
 
+  const handleAddAshbyClient = async () => {
+    const name = addClientName.trim();
+    if (!name || !user) return;
+    setAddingClient(true);
+    try {
+      const { error } = await supabase
+        .from("ashby_known_clients")
+        .upsert(
+          { user_id: user.id, client_name: name, last_seen_at: new Date().toISOString() },
+          { onConflict: "user_id,client_name" },
+        );
+      if (error) throw error;
+      setAddClientName("");
+      toast.success(`Marked "${name}" as Ashby-tracked — re-scanning…`);
+      try {
+        await runScan();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Scan failed");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't add client");
+    } finally {
+      setAddingClient(false);
+    }
+  };
+
   const progressPct = totalForProgress > 0
     ? Math.round((completedCount / totalForProgress) * 100)
     : 0;
+
 
   return (
     <div className="space-y-6">
