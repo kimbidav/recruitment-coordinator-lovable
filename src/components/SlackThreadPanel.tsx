@@ -516,8 +516,8 @@ export function SlackThreadInline({
   }, [channelId, messageTs]);
 
   const encodeMentions = (raw: string): string => {
-    if (users.length === 0) return raw;
-    const sorted = [...users].sort((a, b) => b.name.length - a.name.length);
+    if (mentionableUsers.length === 0) return raw;
+    const sorted = [...mentionableUsers].sort((a, b) => b.name.length - a.name.length);
     let out = raw;
     for (const u of sorted) {
       const escaped = u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
