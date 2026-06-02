@@ -73,16 +73,35 @@ export function SlackThreadPanel({
   const [mentionStart, setMentionStart] = useState<number | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
+  // Merge workspace/channel users with anyone who has posted in the thread.
+  // Thread participants (especially external Slack Connect guests like clients)
+  // sometimes don't appear in users.list / conversations.members, so we surface
+  // them directly from the loaded messages so they're always mentionable.
+  const mentionableUsers = useMemo<SlackUser[]>(() => {
+    const map = new Map<string, SlackUser>();
+    for (const u of users) map.set(u.id, u);
+    for (const m of messages) {
+      if (!m.user_id || map.has(m.user_id)) continue;
+      map.set(m.user_id, {
+        id: m.user_id,
+        name: m.user_name || m.user_id,
+        real_name: m.user_name || "",
+        image: m.user_image,
+      });
+    }
+    return [...map.values()];
+  }, [users, messages]);
+
   const filteredUsers = useMemo(() => {
     if (!mentionOpen) return [];
     const q = mentionQuery.toLowerCase();
-    const matches = users.filter(
+    const matches = mentionableUsers.filter(
       (u) =>
         u.name.toLowerCase().includes(q) ||
         u.real_name.toLowerCase().includes(q),
     );
     return matches.slice(0, 8);
-  }, [mentionOpen, mentionQuery, users]);
+  }, [mentionOpen, mentionQuery, mentionableUsers]);
 
   // Load workspace + channel users (once per open) for @mentions.
   // Passing channel_id lets the backend include external/shared-channel guests
