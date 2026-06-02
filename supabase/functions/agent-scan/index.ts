@@ -707,15 +707,40 @@ Deno.serve(async (req) => {
       "labs", "lab", "ai", "technologies", "technology", "tech", "research", "io", "app",
       "company", "studios", "studio", "group", "holdings",
     ]);
+    // Internal Ashby pipelines that aren't real clients — never produce follow-ups for these.
+    const INTERNAL_PIPELINES = new Set([
+      "eng candidate review",
+      "eng recruiting general",
+      "onsites and offers",
+    ]);
+    const basicNorm = (raw: string) => (raw || "")
+      .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase().replace(/[^a-z0-9\s]+/g, " ").replace(/\s+/g, " ").trim();
+    const isInternalPipeline = (raw: string): boolean => {
+      const cleaned = basicNorm(raw);
+      return !!cleaned && INTERNAL_PIPELINES.has(cleaned);
+    };
+    // Load user-defined client aliases (alias → canonical). Applied before normalization
+    // so renamed/merged companies (e.g. Climatix → Causal Labs) collapse to one key.
+    const aliasMap = new Map<string, string>();
+    {
+      const { data: aliasRows } = await admin
+        .from("client_aliases")
+        .select("alias,canonical")
+        .eq("user_id", userId);
+      for (const r of (aliasRows ?? []) as Array<{ alias: string; canonical: string }>) {
+        const k = basicNorm(r.alias);
+        if (k && r.canonical) aliasMap.set(k, r.canonical);
+      }
+    }
+    const resolveAlias = (raw: string): string => {
+      if (!raw) return raw;
+      return aliasMap.get(basicNorm(raw)) ?? raw;
+    };
     const normalizeCompany = (raw: string): string => {
-      if (!raw) return "";
-      const cleaned = raw
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+      const resolved = resolveAlias(raw);
+      if (!resolved) return "";
+      const cleaned = basicNorm(resolved);
       const tokens = cleaned.split(" ").filter((t) => t && !COMPANY_STOPWORDS.has(t));
       return tokens.join(" ");
     };
