@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Sparkles, AlertCircle, ChevronLeft, ChevronRight, CheckCircle2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Loader2, RefreshCw, Sparkles, AlertCircle, ChevronLeft, ChevronRight, CheckCircle2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { useAgentCards, visibleCards, fetchDrafts, type AgentCard } from "@/hooks/useAgentCards";
 import { AgentActionCard } from "./AgentActionCard";
 import { SlackThreadPanel } from "./SlackThreadPanel";
@@ -12,6 +14,7 @@ import { AgentScanDiagnostics } from "./AgentScanDiagnostics";
 import { Progress } from "@/components/ui/progress";
 
 export function AgentTab() {
+  const { user } = useAuth();
   const {
     cards, loading, scanning, scanProgress, lastScanAt, lastRunId, gmailScopeMissing,
     runScan, updateStatus, reload,
@@ -21,6 +24,8 @@ export function AgentTab() {
   const [draftingId, setDraftingId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [addClientName, setAddClientName] = useState("");
+  const [addingClient, setAddingClient] = useState(false);
 
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"slack" | "ashby">("slack");
@@ -204,9 +209,36 @@ export function AgentTab() {
     }
   };
 
+  const handleAddAshbyClient = async () => {
+    const name = addClientName.trim();
+    if (!name || !user) return;
+    setAddingClient(true);
+    try {
+      const { error } = await supabase
+        .from("ashby_known_clients")
+        .upsert(
+          { user_id: user.id, client_name: name, last_seen_at: new Date().toISOString() },
+          { onConflict: "user_id,client_name" },
+        );
+      if (error) throw error;
+      setAddClientName("");
+      toast.success(`Marked "${name}" as Ashby-tracked — re-scanning…`);
+      try {
+        await runScan();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Scan failed");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't add client");
+    } finally {
+      setAddingClient(false);
+    }
+  };
+
   const progressPct = totalForProgress > 0
     ? Math.round((completedCount / totalForProgress) * 100)
     : 0;
+
 
   return (
     <div className="space-y-6">
@@ -249,36 +281,64 @@ export function AgentTab() {
       )}
 
       {/* View toggle: Slack-only vs Ashby-tracked */}
-      <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5 text-sm">
-        <button
-          type="button"
-          onClick={() => setView("slack")}
-          className={`px-3 py-1.5 rounded-md transition-colors ${
-            view === "slack"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Slack pipeline
-          <span className="ml-2 text-xs text-muted-foreground">{slackQueue.length}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setView("ashby")}
-          className={`px-3 py-1.5 rounded-md transition-colors ${
-            view === "ashby"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Ashby pipeline
-          <span className="ml-2 text-xs text-muted-foreground">{ashbyQueue.length}</span>
-          {ashbyStaleCount > 0 && (
-            <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
-              {ashbyStaleCount} stale
-            </span>
-          )}
-        </button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5 text-sm">
+          <button
+            type="button"
+            onClick={() => setView("slack")}
+            className={`px-3 py-1.5 rounded-md transition-colors ${
+              view === "slack"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Slack pipeline
+            <span className="ml-2 text-xs text-muted-foreground">{slackQueue.length}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("ashby")}
+            className={`px-3 py-1.5 rounded-md transition-colors ${
+              view === "ashby"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Ashby pipeline
+            <span className="ml-2 text-xs text-muted-foreground">{ashbyQueue.length}</span>
+            {ashbyStaleCount > 0 && (
+              <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                {ashbyStaleCount} stale
+              </span>
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <Input
+            value={addClientName}
+            onChange={(e) => setAddClientName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleAddAshbyClient();
+              }
+            }}
+            placeholder="Mark client as Ashby-tracked…"
+            className="h-8 w-56 text-sm"
+            disabled={addingClient || scanning}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleAddAshbyClient}
+            disabled={!addClientName.trim() || addingClient || scanning}
+            className="h-8 gap-1"
+          >
+            {addingClient ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            Add
+          </Button>
+        </div>
       </div>
 
       {loading ? (

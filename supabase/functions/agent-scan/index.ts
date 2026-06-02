@@ -701,7 +701,32 @@ Deno.serve(async (req) => {
     // but tag them so the UI can show a separate "Ashby pipeline" view and flag
     // candidates with no recent Ashby movement.
     const ASHBY_STALE_DAYS = 3;
-    const ashbyByCompany = new Map<string, number | null>(); // ms timestamp of latest activity, or null
+    // Normalize company names so "Reducto AI" matches "Reducto", "Foo Inc." matches "Foo", etc.
+    const COMPANY_STOPWORDS = new Set([
+      "the", "inc", "incorporated", "llc", "ltd", "limited", "co", "corp", "corporation",
+      "labs", "lab", "ai", "technologies", "technology", "tech", "research", "io", "app",
+      "company", "studios", "studio", "group", "holdings",
+    ]);
+    const normalizeCompany = (raw: string): string => {
+      if (!raw) return "";
+      const cleaned = raw
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const tokens = cleaned.split(" ").filter((t) => t && !COMPANY_STOPWORDS.has(t));
+      return tokens.join(" ");
+    };
+    const ashbyByCompany = new Map<string, number | null>(); // normalized name -> ms timestamp or null
+    const mergeAshby = (rawName: string, latest: number | null) => {
+      const key = normalizeCompany(rawName);
+      if (!key) return;
+      const prev = ashbyByCompany.get(key);
+      if (prev === undefined) ashbyByCompany.set(key, latest);
+      else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(key, latest);
+    };
     {
       const { data: ashbyRows } = await admin
         .from("candidates")
@@ -714,15 +739,12 @@ Deno.serve(async (req) => {
         current_stage_date?: string | null;
         latest_feedback_date?: string | null;
       }>) {
-        const name = r.company_name?.trim().toLowerCase();
-        if (!name) continue;
+        if (!r.company_name) continue;
         const candidates = [r.last_activity_at, r.current_stage_date, r.latest_feedback_date]
           .map((s) => (s ? new Date(s).getTime() : NaN))
           .filter((n) => !isNaN(n));
         const latest = candidates.length ? Math.max(...candidates) : null;
-        const prev = ashbyByCompany.get(name);
-        if (prev === undefined) ashbyByCompany.set(name, latest);
-        else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(name, latest);
+        mergeAshby(r.company_name, latest);
       }
     }
     // Also include any client ever seen in an Ashby fetch, even with no current candidates.
@@ -732,22 +754,32 @@ Deno.serve(async (req) => {
         .select("client_name")
         .eq("user_id", userId);
       for (const r of (knownRows ?? []) as Array<{ client_name?: string }>) {
-        const name = r.client_name?.trim().toLowerCase();
-        if (!name) continue;
-        if (!ashbyByCompany.has(name)) ashbyByCompany.set(name, null);
+        if (r.client_name) mergeAshby(r.client_name, null);
       }
     }
+    // Fuzzy lookup: exact normalized match OR one side's normalized form is a
+    // substring of the other (handles "Reducto AI" vs "Reducto", "Graphite Software" vs "Graphite").
+    const lookupAshby = (rawCompany: string): number | null | undefined => {
+      const key = normalizeCompany(rawCompany);
+      if (!key) return undefined;
+      if (ashbyByCompany.has(key)) return ashbyByCompany.get(key)!;
+      for (const [k, v] of ashbyByCompany) {
+        if (!k) continue;
+        if (k.includes(key) || key.includes(k)) return v;
+      }
+      return undefined;
+    };
     const ashbyFlagsFor = (companyName: string): {
       ashby_tracked: boolean;
       ashby_last_activity_at: string | null;
       ashby_stale: boolean;
       ashby_days_since_activity: number | null;
     } => {
-      const key = companyName.trim().toLowerCase();
-      if (!key || !ashbyByCompany.has(key)) {
+      const hit = lookupAshby(companyName);
+      if (hit === undefined) {
         return { ashby_tracked: false, ashby_last_activity_at: null, ashby_stale: false, ashby_days_since_activity: null };
       }
-      const last = ashbyByCompany.get(key) ?? null;
+      const last = hit;
       const days = last == null ? null : Math.floor((Date.now() - last) / 86400000);
       const stale = last == null ? true : days! >= ASHBY_STALE_DAYS;
       return {
