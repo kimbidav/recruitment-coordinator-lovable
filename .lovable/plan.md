@@ -1,59 +1,58 @@
-# Make email scheduling signal name-agnostic
-
 ## Problem
 
-Real scheduling threads rarely contain the candidate's full name in the body. Today's logic loses them because:
+Cards for Reducto, Deeptune, and Graphite are landing in the **Slack pipeline** tab when they should be in the **Ashby pipeline** tab.
 
-1. **Gmail query is full-name only** — `"Te-Lin Wu" newer_than:120d`. Threads addressed "Hi Ken," with a Calendly link never come back.
-2. **The client-domain query is unbound** — it pulls *all* client-domain mail from 60d and hopes the LLM stitches it to the right candidate. Noisy and easy to mis-attribute.
-3. **No candidate email is ever learned/cached** — even after we successfully detect one via the LLM, we throw it away. Next scan starts from zero.
-4. **LLM prompt assumes the candidate name appears in the email** — it has no instruction for "this thread is between the client recruiter and an unknown counterparty whose first name matches our candidate."
+The agent decides routing in `supabase/functions/agent-scan/index.ts` (`ashbyFlagsFor`). A client is "Ashby-tracked" only when its lowercased company name appears in either:
+- `candidates` table with a non-null `ashby_candidate_id`, or
+- `ashby_known_clients` table (populated only on Ashby fetch from the candidates + extractor's `orgs`/`org_names` fields).
 
-## Fix
+A DB check confirmed none of Reducto/Deeptune/Graphite exist in either source, so they fall back to Slack pipeline.
 
-### 1. Learn & cache the candidate email
-Add a small table `candidate_emails`:
-- `user_id`, `slack_submission_id`, `email`, `source` ("calendar" | "llm" | "manual"), `confidence`, `learned_at`
-- Unique on `(user_id, slack_submission_id, email)`
-- Populated when: a calendar attendee matches the candidate, or the LLM returns `candidate_email`, or you set it manually.
+## Plan
 
-This persists across scans so we only have to discover an email once.
+### 1. Auto-pull the full Ashby org list during every fetch
 
-### 2. Multi-query Gmail strategy (in order, dedup hits, cap ~15)
-For each submission:
-1. **If candidate email known** → `(from:{email} OR to:{email}) newer_than:120d` (strongest signal)
-2. **Calendar-attendee email** → if a matched calendar event has a non-internal attendee, query that address the same way
-3. **First name + client domain** → `"{firstName}" (from:@{domain} OR to:@{domain}) newer_than:60d`
-4. **Scheduling-keyword + client domain** → `(calendly OR "grab time" OR "find a time" OR "set up a time" OR "confirmed for") (from:@{domain} OR to:@{domain}) newer_than:30d` — catches threads where even the first name is absent
-5. **Full name fallback** (existing) → `"{candidateName}" newer_than:120d`
+The Railway extractor (`/api/extract`) already returns `extraction_stats.orgs_total` and (sometimes) `orgs`/`org_names`. The current code only persists names that come back through those fields **or** through `candidates[].company_name`. The miss is orgs that exist in Ashby but have zero active candidates at fetch time and aren't enumerated in the stats payload.
 
-Skip steps 3–4 when no domain is learned yet.
+Changes in `src/components/AshbyFetchButton.tsx`:
+- After `/api/extract` returns, also harvest org names from any nested per-org breakdown the response includes (e.g. `extraction_stats.per_org`, `extraction_stats.orgs_breakdown`, or any object whose keys/entries look like org rows). Today we only check top-level `orgs`/`org_names`.
+- Upsert every distinct name we see into `ashby_known_clients` (already partially done — broaden the harvest).
 
-### 3. Teach the LLM that name absence is normal
-Update the `llmDetectScheduling` prompt:
-- State explicitly: "Emails between the client and the candidate often use first name only, or no name at all. Match by email address (sender/recipient domain or known candidate address), not by name in the body."
-- Pass the **known candidate email** into the prompt when we have one, so the LLM can confidently attribute threads.
-- Add a rule: if a scheduling link is sent to / received from an address on a non-client, non-recruiter domain and the first name plausibly matches, treat as the candidate.
+Because Railway is the only source of org enumeration we have (no Ashby connector in the workspace, no `/api/orgs` endpoint), this is the best we can do automatically. If after a fresh fetch a company still doesn't appear, it's because the extractor genuinely doesn't surface it — see the fallback below.
 
-### 4. Persist anything the LLM learns
-After `llmDetectScheduling` returns, if `candidate_email` is new, upsert into `candidate_emails`. Next scan starts from the strongest query.
+### 2. Fuzzy / normalized company-name matching
 
-## Files
+In `supabase/functions/agent-scan/index.ts`, replace the strict `companyName.trim().toLowerCase()` comparison in `ashbyFlagsFor` and `ashbyByCompany` keys with a normalized form so "Reducto AI" in Slack matches "Reducto" in Ashby.
 
-- **New migration**: create `candidate_emails` table with RLS + grants (authenticated CRUD on own rows).
-- **`supabase/functions/agent-scan/index.ts`**:
-  - Add `loadCandidateEmail()` / `saveCandidateEmail()` helpers
-  - Extract candidate emails from matched calendar events (filter out your own + obvious client domains)
-  - Replace the Gmail query block (lines ~658–672) with the 5-tier strategy above
-  - Update `llmDetectScheduling` prompt + pass `knownCandidateEmail`
-  - On signal return, persist `candidate_email` if present
+Normalization:
+- Lowercase, NFKD, strip diacritics.
+- Strip punctuation and collapse whitespace.
+- Strip common suffixes: `inc`, `inc.`, `llc`, `ltd`, `co`, `corp`, `labs`, `ai`, `the`, `technologies`, `tech`, `research`.
+- Match if either side's normalized form is a token-superset of the other (e.g. `reductoai` ⊇ `reducto`).
 
-## Out of scope (mention only)
+Apply the same normalization on both sides (the map key and the lookup key).
 
-- A UI to manually set/correct a candidate's email on an action card — would close the loop when the agent can't infer one. Flag if you want it now or as a follow-up.
+### 3. Fallback: manual override entry
 
-## Validation
+Add a small "Add Ashby client" affordance on the Agent tab header (next to the Slack/Ashby pipeline tabs) — one input that inserts a row into `ashby_known_clients`. This covers the edge case where an org never appears in any Ashby extraction but the user knows it's tracked there.
 
-1. Pick 3 known submissions where the current scan misses scheduling (Te-Lin Wu / Preferencemodel + 2 of the email examples you shared).
-2. Run scan, inspect `agent_scan_items.signal.evidence` — should now quote the actual scheduling email.
-3. Confirm `candidate_emails` got populated.
+No schema changes; `ashby_known_clients` already exists with the right columns and RLS.
+
+### 4. Re-scan after the data is corrected
+
+Trigger an agent scan automatically after a new client is added (or after a successful Ashby fetch that produced new known-client rows). Existing open cards belonging to newly-tracked clients will be re-evaluated and routed to the Ashby pipeline on the next scan; no migration of historical cards is needed because `AgentTab` derives the tab purely from `payload.ashby_tracked`, which is recomputed each scan.
+
+## Technical details
+
+Files touched:
+- `src/components/AshbyFetchButton.tsx` — broader org-name harvest.
+- `supabase/functions/agent-scan/index.ts` — `normalizeCompany()` helper; use it for both the `ashbyByCompany` map and the `ashbyFlagsFor` lookup.
+- `src/components/AgentTab.tsx` — small "Add Ashby client" inline input + button; calls Supabase insert into `ashby_known_clients`, then triggers `runScan()`.
+
+No DB migration needed.
+
+## Verification
+
+1. Add "Reducto" via the new input, re-run scan, confirm Pau Perng-Hwa Kung's card now appears under **Ashby pipeline**.
+2. Run a fresh Ashby fetch; confirm any new orgs reported in extractor stats get persisted into `ashby_known_clients`.
+3. With normalization on, confirm a Slack client labelled "Reducto AI" matches an Ashby org named "Reducto".
