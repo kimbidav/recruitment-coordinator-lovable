@@ -863,6 +863,14 @@ Deno.serve(async (req) => {
       const company = sub.client_name || "";
 
       try {
+        if (isInternalPipeline(company)) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "skipped_internal_pipeline", reason: "internal Ashby pipeline, not a client",
+          });
+          continue;
+        }
         if (!candidateName) {
           await admin.from("agent_scan_items").insert({
             user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
