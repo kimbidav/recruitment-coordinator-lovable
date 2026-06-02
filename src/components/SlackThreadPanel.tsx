@@ -435,16 +435,31 @@ export function SlackThreadInline({
   const [mentionStart, setMentionStart] = useState<number | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
+  const mentionableUsers = useMemo<SlackUser[]>(() => {
+    const map = new Map<string, SlackUser>();
+    for (const u of users) map.set(u.id, u);
+    for (const m of messages) {
+      if (!m.user_id || map.has(m.user_id)) continue;
+      map.set(m.user_id, {
+        id: m.user_id,
+        name: m.user_name || m.user_id,
+        real_name: m.user_name || "",
+        image: m.user_image,
+      });
+    }
+    return [...map.values()];
+  }, [users, messages]);
+
   const filteredUsers = useMemo(() => {
     if (!mentionOpen) return [];
     const q = mentionQuery.toLowerCase();
-    const matches = users.filter(
+    const matches = mentionableUsers.filter(
       (u) =>
         u.name.toLowerCase().includes(q) ||
         u.real_name.toLowerCase().includes(q),
     );
     return matches.slice(0, 8);
-  }, [mentionOpen, mentionQuery, users]);
+  }, [mentionOpen, mentionQuery, mentionableUsers]);
 
   // Reset state when the target thread changes (different card)
   useEffect(() => {
