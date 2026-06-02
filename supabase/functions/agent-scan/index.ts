@@ -807,7 +807,7 @@ Deno.serve(async (req) => {
         .select("client_name")
         .eq("user_id", userId);
       for (const r of (knownRows ?? []) as Array<{ client_name?: string }>) {
-        if (r.client_name) mergeAshby(r.client_name, null);
+        if (r.client_name && !isInternalPipeline(r.client_name)) mergeAshby(r.client_name, null);
       }
     }
     const lookupAshbyClient = (rawCompany: string): number | null | undefined => {
