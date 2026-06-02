@@ -14,6 +14,7 @@ import { AgentScanDiagnostics } from "./AgentScanDiagnostics";
 import { Progress } from "@/components/ui/progress";
 
 export function AgentTab() {
+  const { user } = useAuth();
   const {
     cards, loading, scanning, scanProgress, lastScanAt, lastRunId, gmailScopeMissing,
     runScan, updateStatus, reload,
@@ -23,6 +24,8 @@ export function AgentTab() {
   const [draftingId, setDraftingId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [addClientName, setAddClientName] = useState("");
+  const [addingClient, setAddingClient] = useState(false);
 
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"slack" | "ashby">("slack");
