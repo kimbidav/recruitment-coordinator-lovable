@@ -242,16 +242,40 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           ),
         );
         // Also include any org names the extractor reports, in case some orgs have 0 current candidates.
-        const statsAny = stats as unknown as { orgs?: unknown; org_names?: unknown };
-        for (const key of ["orgs", "org_names"] as const) {
-          const v = statsAny[key];
+        // We scan a few known shapes plus any nested per-org breakdown the response might surface.
+        const statsAny = stats as unknown as Record<string, unknown>;
+        const harvestFromValue = (v: unknown) => {
+          if (!v) return;
+          if (typeof v === "string") {
+            const name = v.trim();
+            if (name && !clientNames.includes(name)) clientNames.push(name);
+            return;
+          }
           if (Array.isArray(v)) {
-            for (const item of v) {
-              const name = typeof item === "string" ? item.trim() : typeof (item as { name?: unknown })?.name === "string" ? ((item as { name: string }).name).trim() : "";
-              if (name && !clientNames.includes(name)) clientNames.push(name);
+            for (const item of v) harvestFromValue(item);
+            return;
+          }
+          if (typeof v === "object") {
+            const obj = v as Record<string, unknown>;
+            // Prefer obvious name fields first
+            for (const k of ["name", "org_name", "organization", "org", "client_name", "company_name"]) {
+              if (typeof obj[k] === "string") {
+                harvestFromValue(obj[k]);
+                return;
+              }
             }
           }
+        };
+        for (const key of ["orgs", "org_names", "per_org", "orgs_breakdown", "organizations"]) {
+          harvestFromValue(statsAny[key]);
         }
+        // Also walk top-level stats keys: when the breakdown is keyed by org name (e.g. {"Reducto": {...}})
+        for (const [k, v] of Object.entries(statsAny)) {
+          if (v && typeof v === "object" && !Array.isArray(v) && /^[A-Z]/.test(k) && k.length < 80) {
+            if (!clientNames.includes(k)) clientNames.push(k);
+          }
+        }
+
         if (clientNames.length) {
           const { supabase } = await import("@/integrations/supabase/client");
           const rows = clientNames.map((client_name) => ({
