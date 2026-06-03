@@ -27,16 +27,17 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Candidate } from "@/data/candidates";
-import { ASHBY_AUTOMATION_API_BASE, readErrorPayload } from "@/lib/ashbyAutomation";
+import { ASHBY_AUTOMATION_API_BASE } from "@/lib/ashbyAutomation";
 import {
   getStoredAshbyCookie,
   setStoredAshbyCookie,
   clearStoredAshbyCookie,
 } from "@/lib/ashbyCookie";
-import { createFetchJob, updateFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
+import { getFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
 
 const PROGRESS_STEPS = [
   { at: 0, label: "Connecting to Ashby..." },
@@ -92,7 +93,7 @@ function useSimulatedProgress(active: boolean) {
 }
 
 interface AshbyFetchButtonProps {
-  onUpload: (candidates: Candidate[]) => void;
+  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
 }
 
 interface ExtractionStats {
@@ -148,6 +149,126 @@ function detectOS(): "mac" | "win" {
   return /Mac|iPhone|iPad/i.test(p) ? "mac" : "win";
 }
 
+function harvestClientNames(candidates: Candidate[], stats: ExtractionStats): string[] {
+  const clientNames = Array.from(
+    new Set(
+      candidates
+        .map((c) => (c.company_name ?? "").trim())
+        .filter((n) => n.length > 0),
+    ),
+  );
+  const statsAny = stats as unknown as Record<string, unknown>;
+  const harvestFromValue = (v: unknown) => {
+    if (!v) return;
+    if (typeof v === "string") {
+      const name = v.trim();
+      if (name && !clientNames.includes(name)) clientNames.push(name);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const item of v) harvestFromValue(item);
+      return;
+    }
+    if (typeof v === "object") {
+      const obj = v as Record<string, unknown>;
+      for (const k of ["name", "org_name", "organization", "org", "client_name", "company_name"]) {
+        if (typeof obj[k] === "string") {
+          harvestFromValue(obj[k]);
+          return;
+        }
+      }
+    }
+  };
+  for (const key of ["orgs", "org_names", "per_org", "orgs_breakdown", "organizations"]) {
+    harvestFromValue(statsAny[key]);
+  }
+  for (const [k, v] of Object.entries(statsAny)) {
+    if (v && typeof v === "object" && !Array.isArray(v) && /^[A-Z]/.test(k) && k.length < 80) {
+      if (!clientNames.includes(k)) clientNames.push(k);
+    }
+  }
+  return clientNames;
+}
+
+async function persistKnownClients(userId: string, clientNames: string[]) {
+  if (!clientNames.length) return;
+  const rows = clientNames.map((client_name) => ({
+    user_id: userId,
+    client_name,
+    last_seen_at: new Date().toISOString(),
+  }));
+  await supabase.from("ashby_known_clients").upsert(rows, { onConflict: "user_id,client_name" });
+  const { data: knownAll } = await supabase
+    .from("ashby_known_clients")
+    .select("client_name, last_seen_at")
+    .eq("user_id", userId)
+    .order("client_name");
+  console.log(
+    `[Ashby fetch] harvested ${clientNames.length} companies this run; ${knownAll?.length ?? 0} total Ashby companies known:`,
+  );
+  console.table((knownAll ?? []).map((r) => ({ company: r.client_name, last_seen: r.last_seen_at })));
+}
+
+async function applyFetchResult(args: {
+  cookie: string;
+  data: unknown;
+  userId?: string;
+  complete: () => void;
+  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
+  closeDialog: () => void;
+  clearInput: () => void;
+}) {
+  const { cookie, data, userId, complete, onUpload, closeDialog, clearInput } = args;
+  const { candidates, stats } = parseAshbyResponse(data);
+  const orgsTotal = stats.orgs_total;
+  const orgsFetched = stats.orgs_fetched;
+  const orgsFailed = stats.orgs_failed ?? 0;
+  const partial = !!(orgsTotal && orgsFetched !== undefined && orgsFailed > 0);
+
+  if (candidates.length === 0) {
+    toast.error("No candidates returned from Ashby");
+    return;
+  }
+
+  const byCompany = new Map<string, number>();
+  for (const c of candidates) {
+    const name = (c.company_name ?? "").trim() || "(unknown)";
+    byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
+  }
+  const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
+  console.log(`[Ashby fetch] ${candidates.length} candidates across ${byCompany.size} companies:`);
+  console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
+  (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
+    candidates,
+    stats,
+    byCompany: Object.fromEntries(breakdown),
+    at: new Date().toISOString(),
+  };
+
+  complete();
+  await new Promise((r) => setTimeout(r, 400));
+  setStoredAshbyCookie(cookie);
+  onUpload(candidates, { deleteMissing: !partial });
+
+  if (userId) {
+    await persistKnownClients(userId, harvestClientNames(candidates, stats));
+  }
+
+  if (partial) {
+    toast.warning(
+      `Merged ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed. Older synced candidates were kept intact.`,
+      { duration: 15000 },
+    );
+  } else if (orgsTotal && orgsFetched !== undefined) {
+    toast.success(`Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs`);
+  } else {
+    toast.success(`Loaded ${candidates.length} candidates from Ashby`);
+  }
+
+  closeDialog();
+  clearInput();
+}
+
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
@@ -177,195 +298,64 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
 
   const validation = validateToken(cookie);
 
+  const pollJobUntilComplete = async (jobId: string, cookieToUse: string) => {
+    const pollStartedAt = Date.now();
+    while (Date.now() - pollStartedAt < 390_000) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const job = await getFetchJob(jobId);
+      if (!job) continue;
+
+      if (job.status === "running") continue;
+
+      if (job.status === "failed") {
+        if ((job.error_message ?? "").includes("401")) {
+          clearStoredAshbyCookie();
+          setOpen(true);
+          toast.error("Ashby session expired. Paste a fresh cookie.");
+        } else {
+          toast.error(job.error_message ?? "Failed to fetch from Ashby.");
+        }
+        return;
+      }
+
+      await applyFetchResult({
+        cookie: cookieToUse,
+        data: job.result_payload,
+        userId: user?.id,
+        complete,
+        onUpload,
+        closeDialog: () => setOpen(false),
+        clearInput: () => setCookie(""),
+      });
+      return;
+    }
+
+    toast.message("Ashby sync is still running in the background.", {
+      description: "Click Sync from Ashby again to resume watching progress.",
+    });
+  };
+
   const runFetch = async (cookieToUse: string) => {
     setLoading(true);
-    const job = user ? await createFetchJob(user.id) : null;
     try {
-      const res = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cookie: cookieToUse, force: true }),
-      });
-
-      if (res.status === 401) {
-        clearStoredAshbyCookie();
-        setOpen(true);
-        toast.error("Ashby session expired. Paste a fresh cookie.");
-        if (job) await updateFetchJob(job.id, {
-          status: "failed",
-          finished_at: new Date().toISOString(),
-          error_message: "Ashby session expired (401)",
-        });
-        return;
-      }
-
-      if (!res.ok) {
-        const msg = await readErrorPayload(res);
-        toast.error(msg);
-        if (job) await updateFetchJob(job.id, {
-          status: "failed",
-          finished_at: new Date().toISOString(),
-          error_message: msg.slice(0, 500),
-        });
-        return;
-      }
-
-      const data = await res.json();
-      const { candidates, stats } = parseAshbyResponse(data);
-
-      if (candidates.length === 0) {
-        toast.error("No candidates returned from Ashby");
-        if (job) await updateFetchJob(job.id, {
-          status: "failed",
-          finished_at: new Date().toISOString(),
-          error_message: "No candidates returned",
-          orgs_total: stats.orgs_total ?? null,
-          orgs_fetched: stats.orgs_fetched ?? null,
-          orgs_failed: stats.orgs_failed ?? null,
-        });
-        return;
-      }
-
-      // Per-company diagnostics: log every company in the raw Ashby response
-      // so we can immediately tell whether Finch Legal / Listen Labs / Valon
-      // / etc. are missing UPSTREAM (extractor) vs lost during save (DB).
-      const byCompany = new Map<string, number>();
-      for (const c of candidates) {
-        const name = (c.company_name ?? "").trim() || "(unknown)";
-        byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
-      }
-      const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
-      console.log(
-        `[Ashby fetch] ${candidates.length} candidates across ${byCompany.size} companies:`,
-      );
-      console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
-      (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
-        candidates,
-        stats,
-        byCompany: Object.fromEntries(breakdown),
-        at: new Date().toISOString(),
-      };
-
-      complete();
-      await new Promise((r) => setTimeout(r, 400));
       setStoredAshbyCookie(cookieToUse);
-      onUpload(candidates);
-
-      // Remember every client we saw in this fetch so the Tasker treats them as Ashby-tracked
-      // even when no current candidates exist in pipeline.
-      if (user) {
-        const clientNames = Array.from(
-          new Set(
-            candidates
-              .map((c) => (c.company_name ?? "").trim())
-              .filter((n) => n.length > 0),
-          ),
-        );
-        // Also include any org names the extractor reports, in case some orgs have 0 current candidates.
-        // We scan a few known shapes plus any nested per-org breakdown the response might surface.
-        const statsAny = stats as unknown as Record<string, unknown>;
-        const harvestFromValue = (v: unknown) => {
-          if (!v) return;
-          if (typeof v === "string") {
-            const name = v.trim();
-            if (name && !clientNames.includes(name)) clientNames.push(name);
-            return;
-          }
-          if (Array.isArray(v)) {
-            for (const item of v) harvestFromValue(item);
-            return;
-          }
-          if (typeof v === "object") {
-            const obj = v as Record<string, unknown>;
-            // Prefer obvious name fields first
-            for (const k of ["name", "org_name", "organization", "org", "client_name", "company_name"]) {
-              if (typeof obj[k] === "string") {
-                harvestFromValue(obj[k]);
-                return;
-              }
-            }
-          }
-        };
-        for (const key of ["orgs", "org_names", "per_org", "orgs_breakdown", "organizations"]) {
-          harvestFromValue(statsAny[key]);
-        }
-        // Also walk top-level stats keys: when the breakdown is keyed by org name (e.g. {"Reducto": {...}})
-        for (const [k, v] of Object.entries(statsAny)) {
-          if (v && typeof v === "object" && !Array.isArray(v) && /^[A-Z]/.test(k) && k.length < 80) {
-            if (!clientNames.includes(k)) clientNames.push(k);
-          }
-        }
-
-        if (clientNames.length) {
-          const { supabase } = await import("@/integrations/supabase/client");
-          const rows = clientNames.map((client_name) => ({
-            user_id: user.id,
-            client_name,
-            last_seen_at: new Date().toISOString(),
-          }));
-          await supabase
-            .from("ashby_known_clients")
-            .upsert(rows, { onConflict: "user_id,client_name" });
-
-          // Diagnostic: print the FULL cumulative Ashby company list so you can
-          // confirm Finch Legal / Listen Labs / Valon / etc. were harvested.
-          const { data: knownAll } = await supabase
-            .from("ashby_known_clients")
-            .select("client_name, last_seen_at")
-            .eq("user_id", user.id)
-            .order("client_name");
-          console.log(
-            `[Ashby fetch] harvested ${clientNames.length} companies this run; ` +
-              `${knownAll?.length ?? 0} total Ashby companies known:`,
-          );
-          console.table((knownAll ?? []).map((r) => ({
-            company: r.client_name,
-            last_seen: r.last_seen_at,
-          })));
-        }
-      }
-
-      const orgsTotal = stats.orgs_total;
-      const orgsFetched = stats.orgs_fetched;
-      const orgsFailed = stats.orgs_failed ?? 0;
-      const partial = !!(orgsTotal && orgsFetched !== undefined && orgsFailed > 0);
-
-      if (partial) {
-        toast.warning(
-          `Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed. Re-run with a fresh cookie to recover missing data.`,
-          { duration: 15000 },
-        );
-      } else if (orgsTotal && orgsFetched !== undefined) {
-        toast.success(
-          `Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs`,
-        );
-      } else {
-        toast.success(`Loaded ${candidates.length} candidates from Ashby`);
-      }
-
-      if (job) await updateFetchJob(job.id, {
-        status: partial ? "partial" : "succeeded",
-        finished_at: new Date().toISOString(),
-        orgs_total: orgsTotal ?? null,
-        orgs_fetched: orgsFetched ?? null,
-        orgs_failed: orgsFailed,
-        candidate_count: candidates.length,
+      const { data, error } = await supabase.functions.invoke("ashby-sync", {
+        body: { cookie: cookieToUse },
       });
+      if (error) throw error;
 
-      setOpen(false);
-      setCookie("");
+      const jobId = (data as { job?: { id?: string } } | null)?.job?.id;
+      if (!jobId) throw new Error("Failed to start Ashby sync");
+      await pollJobUntilComplete(jobId, cookieToUse);
     } catch (err) {
       console.error("Ashby fetch error:", err);
       const message =
         err instanceof TypeError
           ? `Could not reach Ashby automation at ${ASHBY_AUTOMATION_API_BASE}.`
-          : "Failed to fetch from Ashby.";
+          : err instanceof Error && err.message
+            ? err.message
+            : "Failed to fetch from Ashby.";
       toast.error(message);
-      if (job) await updateFetchJob(job.id, {
-        status: "failed",
-        finished_at: new Date().toISOString(),
-        error_message: message,
-      });
     } finally {
       setLoading(false);
     }
@@ -374,7 +364,19 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const handleClick = () => {
     const stored = getStoredAshbyCookie();
     if (stored) {
-      void runFetch(stored);
+      void (async () => {
+        const runningJob = user ? await getLatestRunningJob(user.id) : null;
+        if (runningJob) {
+          setLoading(true);
+          try {
+            await pollJobUntilComplete(runningJob.id, stored);
+          } finally {
+            setLoading(false);
+          }
+          return;
+        }
+        await runFetch(stored);
+      })();
     } else {
       setOpen(true);
     }

@@ -365,6 +365,8 @@ export type Database = {
           orgs_failed: number | null
           orgs_fetched: number | null
           orgs_total: number | null
+          result_payload: Json | null
+          result_received_at: string | null
           started_at: string
           status: string
           updated_at: string
@@ -379,6 +381,8 @@ export type Database = {
           orgs_failed?: number | null
           orgs_fetched?: number | null
           orgs_total?: number | null
+          result_payload?: Json | null
+          result_received_at?: string | null
           started_at?: string
           status: string
           updated_at?: string
@@ -393,6 +397,8 @@ export type Database = {
           orgs_failed?: number | null
           orgs_fetched?: number | null
           orgs_total?: number | null
+          result_payload?: Json | null
+          result_received_at?: string | null
           started_at?: string
           status?: string
           updated_at?: string

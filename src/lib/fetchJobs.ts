@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 
 export type FetchJobStatus = "pending" | "running" | "succeeded" | "failed" | "partial";
 
@@ -13,6 +14,8 @@ export interface FetchJob {
   orgs_failed: number | null;
   candidate_count: number | null;
   error_message: string | null;
+  result_payload?: Json | null;
+  result_received_at?: string | null;
   updated_at: string;
 }
 
@@ -46,5 +49,18 @@ export async function getLatestRunningJob(userId: string): Promise<FetchJob | nu
     .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  return (data as FetchJob | null) ?? null;
+}
+
+export async function getFetchJob(id: string): Promise<FetchJob | null> {
+  const { data, error } = await supabase
+    .from("fetch_jobs")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("getFetchJob failed:", error.message);
+    return null;
+  }
   return (data as FetchJob | null) ?? null;
 }
