@@ -226,6 +226,11 @@ export function usePipelineSession() {
         return;
       }
       const t0 = performance.now();
+      console.log(
+        `[saveSession] starting with ${newCandidates.length} candidates from ${
+          new Set(newCandidates.map((c) => c.company_name)).size
+        } companies`,
+      );
       try {
         await supabase
           .from("pipeline_sessions")
@@ -234,8 +239,18 @@ export function usePipelineSession() {
 
         // Build payload. Note: ashby_candidate_id and ashby_job_id are part of the
         // unique key (session_id, ashby_candidate_id, ashby_job_id) — ensure non-null.
+        const droppedNoIds: Array<{ candidate_name: string; company_name: string }> = [];
         const candidatesToUpsert = newCandidates
-          .filter((c) => c.candidate_id && c.job_id)
+          .filter((c) => {
+            const ok = !!c.candidate_id && !!c.job_id;
+            if (!ok) {
+              droppedNoIds.push({
+                candidate_name: c.candidate_name ?? "(no name)",
+                company_name: c.company_name ?? "(unknown)",
+              });
+            }
+            return ok;
+          })
           .map((c) => ({
             user_id: user.id,
             session_id: sessionId,
@@ -263,6 +278,17 @@ export function usePipelineSession() {
             current_stage_interviews: cleanOptionalText(c.current_stage_interviews),
             last_activity_at: cleanTimestamp(c.last_activity_at),
           }));
+
+        if (droppedNoIds.length > 0) {
+          console.warn(
+            `[saveSession] dropped ${droppedNoIds.length} candidates missing candidate_id or job_id:`,
+            droppedNoIds.slice(0, 20),
+          );
+        }
+        console.log(
+          `[saveSession] payload ready: ${candidatesToUpsert.length} rows after id filter`,
+        );
+
 
         
         const incomingKeys = new Set(
