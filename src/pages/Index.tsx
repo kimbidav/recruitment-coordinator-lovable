@@ -65,6 +65,35 @@ const Index = () => {
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [slackThreadFor, setSlackThreadFor] = useState<Candidate | null>(null);
   const [emailFor, setEmailFor] = useState<Candidate | null>(null);
+  const [ashbyClientNames, setAshbyClientNames] = useState<string[]>([]);
+
+  // Load the authoritative set of companies known to exist in the user's Ashby
+  // workspace. This is cumulative across every past fetch — never deleted —
+  // so a company stays "Ashby" even if it has zero active candidates today.
+  useEffect(() => {
+    if (!user) {
+      setAshbyClientNames([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from("ashby_known_clients")
+        .select("client_name")
+        .eq("user_id", user.id);
+      if (cancelled) return;
+      if (error) {
+        console.warn("Failed to load ashby_known_clients:", error.message);
+        setAshbyClientNames([]);
+        return;
+      }
+      setAshbyClientNames((data ?? []).map((r) => r.client_name).filter(Boolean));
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-pull after each save (lastUpdated changes when saveSession finishes).
+  }, [user?.id, lastUpdated]);
 
   const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
     saveSession(uploadedCandidates);
