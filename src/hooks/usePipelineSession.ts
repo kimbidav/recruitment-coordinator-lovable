@@ -5,7 +5,29 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 const PAGE_SIZE = 1000;
-const INSERT_CHUNK = 500;
+// Keep chunks SMALL. PostgREST + supabase-js have payload + timeout limits, and
+// a single oversized bulk upsert is the historical reason hundreds of candidates
+// silently fail to persist. 50 rows ≈ a few KB so even big interview summaries fit.
+const INSERT_CHUNK = 50;
+// Bounded concurrency for row-by-row fallback. Fully sequential is too slow
+// (300+ roundtrips), fully parallel triggers Supabase rate limiting.
+const ROW_CONCURRENCY = 4;
+
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      await worker(items[i], i);
+    }
+  });
+  await Promise.all(runners);
+}
 
 const cleanRequiredText = (value: string | null | undefined, fallback: string) => {
   const trimmed = value?.trim();
