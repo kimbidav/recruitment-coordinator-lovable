@@ -25,19 +25,12 @@ async function fetchWithTimeout(input: string, init: RequestInit = {}, ms = 12_0
   }
 }
 
+// Shared with src/lib/companyMatch.ts — keep these two in sync.
 const COMPANY_NOISE = new Set([
-  "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a","technologies","tech",
+  "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a",
+  "technologies","tech","research","legal","engineering","engineers","eng","ds",
 ]);
-function companyKey(s: string): string {
-  return (s || "")
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean)
-    .filter((t) => !COMPANY_NOISE.has(t))
-    .join("");
-}
+const TRAILING_SUFFIXES = ["labs","lab","legal","technologies","tech","research","engineering","engineers","eng","ds"];
 function companyTokens(s: string): string[] {
   return (s || "")
     .toLowerCase()
@@ -46,6 +39,41 @@ function companyTokens(s: string): string[] {
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
     .filter((t) => !COMPANY_NOISE.has(t));
+}
+function companyKey(s: string): string {
+  return companyTokens(s).join("");
+}
+function companyAliases(s: string): Set<string> {
+  const tokens = companyTokens(s);
+  const aliases = new Set<string>();
+  const collapsed = tokens.join("");
+  if (collapsed) aliases.add(collapsed);
+  if (tokens[0] && tokens[0].length >= 4) aliases.add(tokens[0]);
+  if (tokens.length >= 2) aliases.add(tokens.slice(0, 2).join(""));
+  if (tokens.length === 1) {
+    const single = tokens[0];
+    for (const suffix of TRAILING_SUFFIXES) {
+      if (single.endsWith(suffix) && single.length - suffix.length >= 4) {
+        aliases.add(single.slice(0, -suffix.length));
+      }
+    }
+  }
+  return aliases;
+}
+function companiesMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const aA = companyAliases(a);
+  const bA = companyAliases(b);
+  for (const x of aA) if (bA.has(x)) return true;
+  const aKey = companyKey(a);
+  const bKey = companyKey(b);
+  if (aKey && bKey) {
+    const shorter = Math.min(aKey.length, bKey.length);
+    if (shorter >= 5 && (aKey.startsWith(bKey) || bKey.startsWith(aKey))) return true;
+  }
+  const [aF] = companyTokens(a);
+  const [bF] = companyTokens(b);
+  return !!aF && aF === bF && aF.length >= 5;
 }
 function firstName(full: string): string {
   return (full || "").trim().split(/\s+/)[0] || full;
@@ -757,6 +785,8 @@ Deno.serve(async (req) => {
     // a row without ashby_candidate_id → SLACK-only loop for that person at that client.
     // The same candidate can appear in both buckets across different clients.
     const ashbyByCompany = new Map<string, number | null>(); // normalized client -> latest ms, for batch fallback
+    const ashbyRawNames: string[] = []; // raw company names ever seen as Ashby (deduped)
+    const ashbyRawSeen = new Set<string>();
     const ashbyByPair = new Map<string, { tracked: boolean; latest: number | null }>(); // `${normCompany}::${normName}`
     const normalizeName = (raw: string): string => {
       if (!raw) return "";
@@ -775,6 +805,11 @@ Deno.serve(async (req) => {
       const prev = ashbyByCompany.get(key);
       if (prev === undefined) ashbyByCompany.set(key, latest);
       else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(key, latest);
+      const trimmed = (rawName || "").trim();
+      if (trimmed && !ashbyRawSeen.has(trimmed)) {
+        ashbyRawSeen.add(trimmed);
+        ashbyRawNames.push(trimmed);
+      }
     };
     {
       const { data: candRows } = await admin
@@ -805,10 +840,14 @@ Deno.serve(async (req) => {
             latest: latest != null && (prev.latest == null || latest > prev.latest) ? latest : prev.latest,
           });
         }
+        // EVERY company that has an Ashby-sourced candidate row counts as an Ashby
+        // company — even if the SPECIFIC pair (company, candidate) wasn't tracked.
+        // This is what makes Slack-only candidates at known Ashby companies route
+        // to the Ashby pipeline.
         if (tracked) mergeAshby(r.company_name, latest);
       }
     }
-    // Also include any client ever seen in an Ashby fetch, even with no current candidates — batch fallback only.
+    // Also include any client ever seen in an Ashby fetch, even with no current candidates.
     {
       const { data: knownRows } = await admin
         .from("ashby_known_clients")
@@ -821,10 +860,14 @@ Deno.serve(async (req) => {
     const lookupAshbyClient = (rawCompany: string): number | null | undefined => {
       const key = normalizeCompany(rawCompany);
       if (!key) return undefined;
+      // 1. Exact normalized-key hit
       if (ashbyByCompany.has(key)) return ashbyByCompany.get(key)!;
-      for (const [k, v] of ashbyByCompany) {
-        if (!k) continue;
-        if (k.includes(key) || key.includes(k)) return v;
+      // 2. Centralized fuzzy match against every raw Ashby client name
+      for (const raw of ashbyRawNames) {
+        if (companiesMatch(rawCompany, raw)) {
+          const k2 = normalizeCompany(raw);
+          if (ashbyByCompany.has(k2)) return ashbyByCompany.get(k2)!;
+        }
       }
       return undefined;
     };
@@ -845,18 +888,25 @@ Deno.serve(async (req) => {
       ashby_stale: boolean;
       ashby_days_since_activity: number | null;
     } => {
-      // Per-loop decision: if we have a candidates row for this exact (client, candidate),
-      // its ashby_candidate_id is authoritative — do NOT fall through to client-level lookup.
+      // COMPANY-LEVEL classification first: if this company is known to Ashby
+      // (any past fetch ever included it, or there's any Ashby-tracked candidate
+      // row for it) then EVERY candidate at this company routes to the Ashby
+      // pipeline, including Slack-only submissions. This matches the dashboard.
+      const companyHit = lookupAshbyClient(companyName);
+      const companyIsAshby = companyHit !== undefined;
+
       if (candidateName) {
+        // Per-pair override: if we have an Ashby row for THIS exact pair, use
+        // its real latest-activity timestamp. Otherwise fall back to the
+        // company-level decision above.
         const pair = ashbyByPair.get(pairKey(companyName, candidateName));
-        if (pair) return pair.tracked ? buildFlags(pair.latest) : { ...NOT_TRACKED };
-        // No row for this pair yet (fresh Slack submission, not synced from Ashby) → Slack.
+        if (pair?.tracked) return buildFlags(pair.latest);
+        if (companyIsAshby) return buildFlags(companyHit ?? null);
         return { ...NOT_TRACKED };
       }
-      // Batch case (no single candidate): fall back to client-level fuzzy match.
-      const hit = lookupAshbyClient(companyName);
-      if (hit === undefined) return { ...NOT_TRACKED };
-      return buildFlags(hit);
+      // Batch case (no single candidate): company-level only.
+      if (companyIsAshby) return buildFlags(companyHit ?? null);
+      return { ...NOT_TRACKED };
     };
 
     for (const sub of batch) {

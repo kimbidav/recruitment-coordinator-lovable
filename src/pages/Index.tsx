@@ -29,6 +29,7 @@ import {
   slackStatusToDecision,
   slackStatusToPipelineStage,
 } from "@/lib/slackParse";
+import { companiesMatch, isAshbyCompany } from "@/lib/companyMatch";
 
 const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
 const PENDING_ONBOARDING_KEY = "pendingOnboarding";
@@ -64,6 +65,35 @@ const Index = () => {
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [slackThreadFor, setSlackThreadFor] = useState<Candidate | null>(null);
   const [emailFor, setEmailFor] = useState<Candidate | null>(null);
+  const [ashbyClientNames, setAshbyClientNames] = useState<string[]>([]);
+
+  // Load the authoritative set of companies known to exist in the user's Ashby
+  // workspace. This is cumulative across every past fetch — never deleted —
+  // so a company stays "Ashby" even if it has zero active candidates today.
+  useEffect(() => {
+    if (!user) {
+      setAshbyClientNames([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from("ashby_known_clients")
+        .select("client_name")
+        .eq("user_id", user.id);
+      if (cancelled) return;
+      if (error) {
+        console.warn("Failed to load ashby_known_clients:", error.message);
+        setAshbyClientNames([]);
+        return;
+      }
+      setAshbyClientNames((data ?? []).map((r) => r.client_name).filter(Boolean));
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-pull after each save (lastUpdated changes when saveSession finishes).
+  }, [user?.id, lastUpdated]);
 
   const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
     saveSession(uploadedCandidates);
@@ -135,62 +165,20 @@ const Index = () => {
 
     const userLabel = canonicalizeSubmitter(user?.email ?? "Me");
 
-    // Lenient company matching for Ashby vs Slack aliases.
-    // We need to collapse variants like:
-    // - "Listen Labs" <-> "Listenlabs"
-    // - "Crosby" <-> "Crosby Legal"
-    // - "Valon Tech" <-> "Valon Eng Ds"
-    // while still keeping obviously different companies separate.
-    const COMPANY_NOISE = new Set([
-      "inc", "llc", "ltd", "co", "corp", "company",
-      "labs", "lab", "ai", "io", "hq", "the", "a",
-      "legal", "technologies", "tech", "engineering", "engineers", "eng", "ds",
-    ]);
-    const companyTokens = (s: string): string[] => {
-      return (s || "")
-        .toLowerCase()
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .split(/[^a-z0-9]+/)
-        .filter(Boolean)
-        .filter((t) => !COMPANY_NOISE.has(t));
-    };
-    const companyKey = (s: string): string => companyTokens(s).join("");
-    const companyAliases = (s: string): string[] => {
-      const tokens = companyTokens(s);
-      const aliases = new Set<string>();
-      const collapsed = tokens.join("");
-
-      if (collapsed) aliases.add(collapsed);
-      if (tokens[0] && tokens[0].length >= 4) aliases.add(tokens[0]);
-      if (tokens.length >= 2) aliases.add(tokens.slice(0, 2).join(""));
-
-      if (tokens.length === 1) {
-        const single = tokens[0];
-        for (const suffix of ["labs", "lab", "legal", "technologies", "tech", "engineering", "engineers", "eng", "ds"]) {
-          if (single.endsWith(suffix) && single.length - suffix.length >= 4) {
-            aliases.add(single.slice(0, -suffix.length));
-          }
-        }
-      }
-
-      return Array.from(aliases);
-    };
-    const companiesMatch = (a: string, b: string): boolean => {
-      const aAliases = companyAliases(a);
-      const bAliases = companyAliases(b);
-
-      if (aAliases.some((alias) => bAliases.includes(alias))) return true;
-
-      const aKey = companyKey(a);
-      const bKey = companyKey(b);
-      const shorter = Math.min(aKey.length, bKey.length);
-      if (shorter >= 5 && (aKey.startsWith(bKey) || bKey.startsWith(aKey))) return true;
-
-      const [aFirst] = companyTokens(a);
-      const [bFirst] = companyTokens(b);
-      return !!aFirst && aFirst === bFirst && aFirst.length >= 5;
-    };
+    // Company-level classification driven by the authoritative ashby_known_clients
+    // set (cumulative across every past fetch). Every distinct company across
+    // Ashby + Slack is either an "Ashby company" or a "Slack-only company".
+    // Per-candidate source then inherits from the company, with an override:
+    // a candidate seen in BOTH the Ashby fetch and a Slack thread is tagged "both".
+    const ashbyCompanySet = new Set<string>(ashbyClientNames);
+    // Also treat any company currently returned from the Ashby fetch as Ashby,
+    // even if ashby_known_clients hasn't been refreshed yet on this page load.
+    for (const c of candidates) {
+      const name = (c.company_name ?? "").trim();
+      if (name) ashbyCompanySet.add(name);
+    }
+    const companyIsAshby = (companyName: string): boolean =>
+      isAshbyCompany(companyName, ashbyCompanySet);
 
     // Build candidate-name -> [slack rows] indexes, then match Ashby rows that
     // share BOTH a name (fuzzy) AND a fuzzy company-key match. We do NOT
@@ -198,10 +186,7 @@ const Index = () => {
     // pipelines and each row should only show its own thread.
     //
     // Name matching is intentionally fuzzy: people often appear in Slack with
-    // their full legal name ("Pau Perng-Hwa Kung") and in Ashby with a short
-    // form ("Pau Kung"), or vice versa. We accept a match when first+last
-    // tokens line up (or first-initial + last token), in addition to exact
-    // normalized equality.
+    // their full legal name and in Ashby with a short form, or vice versa.
     const nameTokens = (s: string): string[] =>
       normalizeMatchKey(s || "")
         .split(" ")
@@ -239,7 +224,6 @@ const Index = () => {
 
     const matchedSlackIds = new Set<string>();
     const enriched: Candidate[] = candidates.map((c) => {
-      // Pool candidates across exact, first+last, and initial+last buckets.
       const buckets: (typeof slackSubs)[] = [
         slackByCandidateName.get(normalizeMatchKey(c.candidate_name)) ?? [],
         slackByFirstLast.get(firstLastKey(c.candidate_name) ?? "") ?? [],
@@ -251,7 +235,6 @@ const Index = () => {
         seen.add(s.id);
         return true;
       });
-      // Pick the most recent unmatched Slack submission whose company matches.
       const matches = pool
         .filter((s) => companiesMatch(s.client_name, c.company_name))
         .filter((s) => !matchedSlackIds.has(s.id))
@@ -275,44 +258,53 @@ const Index = () => {
           },
         };
       }
-      return { ...c, source: c.source || "ashby" };
+      // Ashby fetch row with no Slack match → "ashby" (company is Ashby by definition).
+      return { ...c, source: "ashby" };
     });
 
     const slackOnly: Candidate[] = slackSubs
       .filter((s) => !matchedSlackIds.has(s.id))
-      .map((s) => ({
-        company_name: s.client_name,
-        job_title: "—",
-        job_id: `slack:${s.channel_id}`,
-        candidate_name: s.candidate_name || "(name needs review)",
-        candidate_id: `slack:${s.channel_id}:${s.message_ts}`,
-        pipeline_stage: slackStatusToPipelineStage(s.status),
-        decision_status: slackStatusToDecision(s.status),
-        stage_type: "",
-        current_stage_index: s.status === "accepted" ? 1 : 0,
-        total_stages: 1,
-        stage_progress: s.status === "accepted" ? "1/1" : "0/1",
-        last_activity_at: s.submitted_at,
-        days_in_stage: Math.max(
-          0,
-          Math.floor((Date.now() - new Date(s.submitted_at).getTime()) / 86_400_000),
-        ),
-        needs_scheduling: false,
-        credited_to: userLabel,
-        source: "slack",
-        feedback_count: 0,
-        slack_meta: {
-          status: s.status,
-          submitted_at: s.submitted_at,
-          channel_id: s.channel_id,
-          message_ts: s.message_ts,
-          linkedin_url: s.linkedin_url,
-          needs_review: s.needs_review,
-        },
-      }));
+      .map((s) => {
+        // Slack-only candidate. If the COMPANY exists in Ashby (per
+        // ashby_known_clients), we still surface it but the per-candidate
+        // source stays "slack" because we have no Ashby record for THIS
+        // person. Other rows for the same company will be tagged "ashby"
+        // or "both", so the company-level classification reads correctly.
+        const _isAshby = companyIsAshby(s.client_name);
+        return {
+          company_name: s.client_name,
+          job_title: "—",
+          job_id: `slack:${s.channel_id}`,
+          candidate_name: s.candidate_name || "(name needs review)",
+          candidate_id: `slack:${s.channel_id}:${s.message_ts}`,
+          pipeline_stage: slackStatusToPipelineStage(s.status),
+          decision_status: slackStatusToDecision(s.status),
+          stage_type: "",
+          current_stage_index: s.status === "accepted" ? 1 : 0,
+          total_stages: 1,
+          stage_progress: s.status === "accepted" ? "1/1" : "0/1",
+          last_activity_at: s.submitted_at,
+          days_in_stage: Math.max(
+            0,
+            Math.floor((Date.now() - new Date(s.submitted_at).getTime()) / 86_400_000),
+          ),
+          needs_scheduling: false,
+          credited_to: userLabel,
+          source: "slack",
+          feedback_count: 0,
+          slack_meta: {
+            status: s.status,
+            submitted_at: s.submitted_at,
+            channel_id: s.channel_id,
+            message_ts: s.message_ts,
+            linkedin_url: s.linkedin_url,
+            needs_review: s.needs_review,
+          },
+        };
+      });
 
     return [...enriched, ...slackOnly];
-  }, [candidates, slackSubs, user?.email]);
+  }, [candidates, slackSubs, user?.email, ashbyClientNames]);
 
   const companies = useMemo(
     () => [...new Set(mergedCandidates.map((c) => c.company_name))].sort(),
