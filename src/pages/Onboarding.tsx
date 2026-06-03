@@ -156,7 +156,8 @@ const Onboarding = () => {
             done={status.ashbyConnected}
             action={
               <AshbyFetchButton
-                onUpload={() => {
+                onUpload={(candidates) => {
+                  void saveSession(candidates);
                   void status.refresh();
                 }}
               />
