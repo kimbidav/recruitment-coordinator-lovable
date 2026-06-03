@@ -25,19 +25,12 @@ async function fetchWithTimeout(input: string, init: RequestInit = {}, ms = 12_0
   }
 }
 
+// Shared with src/lib/companyMatch.ts — keep these two in sync.
 const COMPANY_NOISE = new Set([
-  "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a","technologies","tech",
+  "inc","llc","ltd","co","corp","company","labs","lab","ai","io","hq","the","a",
+  "technologies","tech","research","legal","engineering","engineers","eng","ds",
 ]);
-function companyKey(s: string): string {
-  return (s || "")
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean)
-    .filter((t) => !COMPANY_NOISE.has(t))
-    .join("");
-}
+const TRAILING_SUFFIXES = ["labs","lab","legal","technologies","tech","research","engineering","engineers","eng","ds"];
 function companyTokens(s: string): string[] {
   return (s || "")
     .toLowerCase()
@@ -46,6 +39,41 @@ function companyTokens(s: string): string[] {
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
     .filter((t) => !COMPANY_NOISE.has(t));
+}
+function companyKey(s: string): string {
+  return companyTokens(s).join("");
+}
+function companyAliases(s: string): Set<string> {
+  const tokens = companyTokens(s);
+  const aliases = new Set<string>();
+  const collapsed = tokens.join("");
+  if (collapsed) aliases.add(collapsed);
+  if (tokens[0] && tokens[0].length >= 4) aliases.add(tokens[0]);
+  if (tokens.length >= 2) aliases.add(tokens.slice(0, 2).join(""));
+  if (tokens.length === 1) {
+    const single = tokens[0];
+    for (const suffix of TRAILING_SUFFIXES) {
+      if (single.endsWith(suffix) && single.length - suffix.length >= 4) {
+        aliases.add(single.slice(0, -suffix.length));
+      }
+    }
+  }
+  return aliases;
+}
+function companiesMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const aA = companyAliases(a);
+  const bA = companyAliases(b);
+  for (const x of aA) if (bA.has(x)) return true;
+  const aKey = companyKey(a);
+  const bKey = companyKey(b);
+  if (aKey && bKey) {
+    const shorter = Math.min(aKey.length, bKey.length);
+    if (shorter >= 5 && (aKey.startsWith(bKey) || bKey.startsWith(aKey))) return true;
+  }
+  const [aF] = companyTokens(a);
+  const [bF] = companyTokens(b);
+  return !!aF && aF === bF && aF.length >= 5;
 }
 function firstName(full: string): string {
   return (full || "").trim().split(/\s+/)[0] || full;
