@@ -27,7 +27,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Candidate } from "@/data/candidates";
-import { ASHBY_AUTOMATION_API_BASE, readErrorPayload } from "@/lib/ashbyAutomation";
+import { ASHBY_AUTOMATION_API_BASE } from "@/lib/ashbyAutomation";
 import {
   getStoredAshbyCookie,
   setStoredAshbyCookie,
@@ -340,7 +340,9 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         return;
       }
 
-      toast.error("Ashby sync is still running. Leave this page open and try again in a minute.");
+      toast.message("Ashby sync is still running in the background.", {
+        description: "You can leave this tab open while the sync finishes.",
+      });
     } catch (err) {
       console.error("Ashby fetch error:", err);
       const message =
