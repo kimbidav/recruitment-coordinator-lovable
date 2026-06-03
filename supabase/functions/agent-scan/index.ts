@@ -785,6 +785,8 @@ Deno.serve(async (req) => {
     // a row without ashby_candidate_id → SLACK-only loop for that person at that client.
     // The same candidate can appear in both buckets across different clients.
     const ashbyByCompany = new Map<string, number | null>(); // normalized client -> latest ms, for batch fallback
+    const ashbyRawNames: string[] = []; // raw company names ever seen as Ashby (deduped)
+    const ashbyRawSeen = new Set<string>();
     const ashbyByPair = new Map<string, { tracked: boolean; latest: number | null }>(); // `${normCompany}::${normName}`
     const normalizeName = (raw: string): string => {
       if (!raw) return "";
@@ -803,6 +805,11 @@ Deno.serve(async (req) => {
       const prev = ashbyByCompany.get(key);
       if (prev === undefined) ashbyByCompany.set(key, latest);
       else if (latest != null && (prev == null || latest > prev)) ashbyByCompany.set(key, latest);
+      const trimmed = (rawName || "").trim();
+      if (trimmed && !ashbyRawSeen.has(trimmed)) {
+        ashbyRawSeen.add(trimmed);
+        ashbyRawNames.push(trimmed);
+      }
     };
     {
       const { data: candRows } = await admin
@@ -833,10 +840,14 @@ Deno.serve(async (req) => {
             latest: latest != null && (prev.latest == null || latest > prev.latest) ? latest : prev.latest,
           });
         }
+        // EVERY company that has an Ashby-sourced candidate row counts as an Ashby
+        // company — even if the SPECIFIC pair (company, candidate) wasn't tracked.
+        // This is what makes Slack-only candidates at known Ashby companies route
+        // to the Ashby pipeline.
         if (tracked) mergeAshby(r.company_name, latest);
       }
     }
-    // Also include any client ever seen in an Ashby fetch, even with no current candidates — batch fallback only.
+    // Also include any client ever seen in an Ashby fetch, even with no current candidates.
     {
       const { data: knownRows } = await admin
         .from("ashby_known_clients")
@@ -849,10 +860,14 @@ Deno.serve(async (req) => {
     const lookupAshbyClient = (rawCompany: string): number | null | undefined => {
       const key = normalizeCompany(rawCompany);
       if (!key) return undefined;
+      // 1. Exact normalized-key hit
       if (ashbyByCompany.has(key)) return ashbyByCompany.get(key)!;
-      for (const [k, v] of ashbyByCompany) {
-        if (!k) continue;
-        if (k.includes(key) || key.includes(k)) return v;
+      // 2. Centralized fuzzy match against every raw Ashby client name
+      for (const raw of ashbyRawNames) {
+        if (companiesMatch(rawCompany, raw)) {
+          const k2 = normalizeCompany(raw);
+          if (ashbyByCompany.has(k2)) return ashbyByCompany.get(k2)!;
+        }
       }
       return undefined;
     };
