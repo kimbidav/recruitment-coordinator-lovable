@@ -201,7 +201,7 @@ const Index = () => {
       const nameKey = normalizeMatchKey(s.candidate_name || "");
       if (nameKey) pushInto(slackByCandidateName, nameKey, s);
       pushInto(slackByFirstLast, firstLastKey(s.candidate_name || ""), s);
-      pushInto(slackByInitialLast, lastInitialKey(s.candidate_name || ""), s);
+      pushInto(slackByInitialLast, initialLastKey(s.candidate_name || ""), s);
     }
 
     const matchedSlackIds = new Set<string>();
