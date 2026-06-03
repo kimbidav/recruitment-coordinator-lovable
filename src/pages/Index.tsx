@@ -159,27 +159,70 @@ const Index = () => {
       return tokens.join("");
     };
 
-    // Build candidate-name -> [slack rows] index, then match Ashby rows that
-    // share both the candidate name AND a fuzzy company-key match. We do NOT
+    // Build candidate-name -> [slack rows] indexes, then match Ashby rows that
+    // share BOTH a name (fuzzy) AND a fuzzy company-key match. We do NOT
     // attach Slack threads across companies — a candidate may be in multiple
     // pipelines and each row should only show its own thread.
+    //
+    // Name matching is intentionally fuzzy: people often appear in Slack with
+    // their full legal name ("Pau Perng-Hwa Kung") and in Ashby with a short
+    // form ("Pau Kung"), or vice versa. We accept a match when first+last
+    // tokens line up (or first-initial + last token), in addition to exact
+    // normalized equality.
+    const nameTokens = (s: string): string[] =>
+      normalizeMatchKey(s || "")
+        .split(" ")
+        .filter((t) => t.length > 0);
+    const firstLastKey = (s: string): string | null => {
+      const toks = nameTokens(s);
+      if (toks.length < 2) return null;
+      return `${toks[0]}::${toks[toks.length - 1]}`;
+    };
+    const initialLastKey = (s: string): string | null => {
+      const toks = nameTokens(s);
+      if (toks.length < 2) return null;
+      return `${toks[0][0]}::${toks[toks.length - 1]}`;
+    };
+
     const slackByCandidateName = new Map<string, typeof slackSubs>();
+    const slackByFirstLast = new Map<string, typeof slackSubs>();
+    const slackByInitialLast = new Map<string, typeof slackSubs>();
+    const pushInto = (
+      m: Map<string, typeof slackSubs>,
+      key: string | null,
+      s: (typeof slackSubs)[number],
+    ) => {
+      if (!key) return;
+      const arr = m.get(key) ?? [];
+      arr.push(s);
+      m.set(key, arr);
+    };
     for (const s of slackSubs) {
       const nameKey = normalizeMatchKey(s.candidate_name || "");
-      if (!nameKey) continue;
-      const arr = slackByCandidateName.get(nameKey) ?? [];
-      arr.push(s);
-      slackByCandidateName.set(nameKey, arr);
+      if (nameKey) pushInto(slackByCandidateName, nameKey, s);
+      pushInto(slackByFirstLast, firstLastKey(s.candidate_name || ""), s);
+      pushInto(slackByInitialLast, initialLastKey(s.candidate_name || ""), s);
     }
 
     const matchedSlackIds = new Set<string>();
     const enriched: Candidate[] = candidates.map((c) => {
-      const candidates_for_name =
-        slackByCandidateName.get(normalizeMatchKey(c.candidate_name)) ?? [];
       const ashbyCompanyKey = companyKey(c.company_name);
-      // Pick the most recent Slack submission whose company key matches.
-      const matches = candidates_for_name
+      // Pool candidates across exact, first+last, and initial+last buckets.
+      const buckets: (typeof slackSubs)[] = [
+        slackByCandidateName.get(normalizeMatchKey(c.candidate_name)) ?? [],
+        slackByFirstLast.get(firstLastKey(c.candidate_name) ?? "") ?? [],
+        slackByInitialLast.get(initialLastKey(c.candidate_name) ?? "") ?? [],
+      ];
+      const seen = new Set<string>();
+      const pool = buckets.flat().filter((s) => {
+        if (seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      });
+      // Pick the most recent unmatched Slack submission whose company matches.
+      const matches = pool
         .filter((s) => companyKey(s.client_name) === ashbyCompanyKey)
+        .filter((s) => !matchedSlackIds.has(s.id))
         .sort(
           (a, b) =>
             new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime(),
