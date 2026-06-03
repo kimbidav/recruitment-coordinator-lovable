@@ -584,7 +584,9 @@ export function usePipelineSession() {
         }
 
         if (missing.length === 0) {
-          toast.success(`Saved ${saved} candidates in ${(elapsedMs / 1000).toFixed(1)}s`);
+          toast.success(
+            `${deleteMissing ? "Saved" : "Merged"} ${saved} candidates in ${(elapsedMs / 1000).toFixed(1)}s`,
+          );
         } else {
           // Group missing by company for a more useful toast.
           const byCompany = new Map<string, number>();
@@ -597,7 +599,7 @@ export function usePipelineSession() {
             .map(([co, n]) => `${co} (${n})`)
             .join(", ");
           toast.warning(
-            `Saved ${saved}/${dedupedRows.length}. ${missing.length} missing — ${summary}${
+            `${deleteMissing ? "Saved" : "Merged"} ${saved}/${dedupedRows.length}. ${missing.length} missing — ${summary}${
               byCompany.size > 3 ? "…" : ""
             }. Full report stored.`,
             { duration: 15000 },
