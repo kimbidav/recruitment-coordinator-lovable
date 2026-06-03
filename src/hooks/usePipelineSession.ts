@@ -5,7 +5,29 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 const PAGE_SIZE = 1000;
-const INSERT_CHUNK = 500;
+// Keep chunks SMALL. PostgREST + supabase-js have payload + timeout limits, and
+// a single oversized bulk upsert is the historical reason hundreds of candidates
+// silently fail to persist. 50 rows ≈ a few KB so even big interview summaries fit.
+const INSERT_CHUNK = 50;
+// Bounded concurrency for row-by-row fallback. Fully sequential is too slow
+// (300+ roundtrips), fully parallel triggers Supabase rate limiting.
+const ROW_CONCURRENCY = 4;
+
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      await worker(items[i], i);
+    }
+  });
+  await Promise.all(runners);
+}
 
 const cleanRequiredText = (value: string | null | undefined, fallback: string) => {
   const trimmed = value?.trim();
@@ -226,86 +248,107 @@ export function usePipelineSession() {
             last_activity_at: cleanTimestamp(c.last_activity_at),
           }));
 
-        const incoming = candidatesToUpsert.length;
+        
         const incomingKeys = new Set(
           candidatesToUpsert.map((c) => candidateKey(c.ashby_candidate_id, c.ashby_job_id)),
         );
 
-        // Idempotent bulk upsert with row-by-row fallback. PostgreSQL's INSERT
+        // Idempotent upsert with row-by-row fallback. PostgreSQL's INSERT
         // ... ON CONFLICT fails the ENTIRE batch on any single-row error
-        // (e.g. NOT NULL violation, check constraint, oversized payload). Before
-        // the fallback was added, a single bad row from upstream would silently
-        // drop every other row in the same chunk — exactly the bug behind the
-        // "Reducto candidates never showing up in Ashby" report.
-        const upsertFailures: Array<{ chunkStart: number; size: number; error: string }> = [];
-        for (let i = 0; i < candidatesToUpsert.length; i += INSERT_CHUNK) {
-          const chunk = candidatesToUpsert.slice(i, i + INSERT_CHUNK);
-          const { error } = await supabase
-            .from("candidates")
-            .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
-          if (error) {
-            console.error(`Bulk upsert chunk ${i}-${i + chunk.length} failed, retrying row-by-row:`, error.message);
-            // Fall back: insert rows individually so good rows still persist
-            // and only the offending row(s) get logged + reported as missing.
-            for (let j = 0; j < chunk.length; j++) {
-              const row = chunk[j];
+        // (NOT NULL, oversized payload, duplicate keys in the same VALUES
+        // list, request timeout). Before small chunks + bounded fallback,
+        // a single bad row would silently drop every other row in the same
+        // chunk — the bug behind "only 38 of 373 candidates persisted"
+        // across Reducto / Luminai / Trajectory / Factory / etc.
+        const upsertFailures: Array<{
+          candidate_name: string;
+          company_name: string;
+          ashby_candidate_id: string;
+          ashby_job_id: string;
+          reason: string;
+        }> = [];
+
+        // Pre-dedupe by key. Duplicates in a single bulk VALUES list cause
+        // "ON CONFLICT DO UPDATE command cannot affect row a second time"
+        // and fail the whole chunk. Keep the LAST occurrence (latest state).
+        const byKey = new Map<string, (typeof candidatesToUpsert)[number]>();
+        for (const row of candidatesToUpsert) {
+          byKey.set(candidateKey(row.ashby_candidate_id, row.ashby_job_id), row);
+        }
+        const dedupedRows = Array.from(byKey.values());
+
+        const upsertSingle = async (row: (typeof candidatesToUpsert)[number]) => {
+          let lastErr: { message?: string; details?: string; hint?: string; code?: string } | null = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
               const { error: rowErr } = await supabase
                 .from("candidates")
                 .upsert([row], { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
-              if (rowErr) {
-                console.error(
-                  `Row upsert failed for ${row.candidate_name} @ ${row.company_name}:`,
-                  {
-                    message: rowErr.message,
-                    details: rowErr.details,
-                    hint: rowErr.hint,
-                    code: rowErr.code,
-                    row,
-                  },
-                );
-                upsertFailures.push({ chunkStart: i + j, size: 1, error: rowErr.message });
-              }
+              if (!rowErr) return;
+              lastErr = rowErr;
+              // Don't retry deterministic schema errors (NOT NULL, CHECK, FK).
+              if (rowErr.code && /^23/.test(rowErr.code)) break;
+            } catch (e) {
+              lastErr = { message: (e as Error)?.message ?? "thrown" };
             }
+            await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+          }
+          console.error(
+            `Row upsert failed for ${row.candidate_name} @ ${row.company_name}:`,
+            { ...lastErr, row },
+          );
+          upsertFailures.push({
+            candidate_name: row.candidate_name,
+            company_name: row.company_name,
+            ashby_candidate_id: row.ashby_candidate_id,
+            ashby_job_id: row.ashby_job_id,
+            reason: lastErr?.message ?? "unknown",
+          });
+        };
+
+        // First pass: small bulk chunks. On any chunk failure, fall back to
+        // row-by-row with bounded concurrency for just that chunk.
+        for (let i = 0; i < dedupedRows.length; i += INSERT_CHUNK) {
+          const chunk = dedupedRows.slice(i, i + INSERT_CHUNK);
+          let bulkErr: unknown = null;
+          try {
+            const { error } = await supabase
+              .from("candidates")
+              .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
+            bulkErr = error;
+          } catch (e) {
+            bulkErr = e;
+          }
+          if (bulkErr) {
+            const msg = (bulkErr as { message?: string })?.message ?? String(bulkErr);
+            console.warn(`Bulk chunk ${i}-${i + chunk.length} failed (${msg}); falling back row-by-row.`);
+            await runWithConcurrency(chunk, ROW_CONCURRENCY, upsertSingle);
           }
         }
 
 
         // Read back what's in the DB after upsert to know real saved IDs and reconcile.
-        const savedRows = await selectAll<{
-          id: string;
-          ashby_candidate_id: string | null;
-          ashby_job_id: string | null;
-        }>((from, to) =>
-          supabase
-            .from("candidates")
-            .select("id, ashby_candidate_id, ashby_job_id")
-            .eq("session_id", sessionId)
-            .range(from, to) as unknown as PromiseLike<{
-            data: { id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }[] | null;
-            error: unknown;
-          }>,
-        );
-
-        // Sync semantics: delete rows that are no longer in the incoming payload.
-        const idsToDelete = savedRows
-          .filter((r) => {
-            if (!r.ashby_candidate_id || !r.ashby_job_id) return true;
-            return !incomingKeys.has(candidateKey(r.ashby_candidate_id, r.ashby_job_id));
-          })
-          .map((r) => r.id);
-
-        if (idsToDelete.length > 0) {
-          for (let i = 0; i < idsToDelete.length; i += INSERT_CHUNK) {
-            const chunk = idsToDelete.slice(i, i + INSERT_CHUNK);
-            const { error: delErr } = await supabase
+        let savedRows: { id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }[] = [];
+        try {
+          savedRows = await selectAll<{
+            id: string;
+            ashby_candidate_id: string | null;
+            ashby_job_id: string | null;
+          }>((from, to) =>
+            supabase
               .from("candidates")
-              .delete()
-              .in("id", chunk);
-            if (delErr) console.error("Stale delete chunk failed:", delErr.message);
-          }
+              .select("id, ashby_candidate_id, ashby_job_id")
+              .eq("session_id", sessionId)
+              .range(from, to) as unknown as PromiseLike<{
+              data: { id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }[] | null;
+              error: unknown;
+            }>,
+          );
+        } catch (e) {
+          console.error("Reading back saved rows failed:", e);
         }
 
-        // Build id-by-key from the freshly-read saved rows (excludes deleted stale ones).
+        // Build id-by-key from the freshly-read saved rows.
         const idByKey = new Map<string, string>();
         const savedKeys = new Set<string>();
         for (const row of savedRows) {
@@ -314,6 +357,36 @@ export function usePipelineSession() {
             if (incomingKeys.has(key)) {
               idByKey.set(key, row.id);
               savedKeys.add(key);
+            }
+          }
+        }
+
+        // Sync semantics: delete rows that are no longer in the incoming
+        // payload. Only delete stale rows — never delete rows whose upsert
+        // just failed (they'd vanish from the DB until the next successful
+        // fetch, which is exactly the bug we're trying to prevent).
+        const failedKeys = new Set(
+          upsertFailures.map((f) => candidateKey(f.ashby_candidate_id, f.ashby_job_id)),
+        );
+        const idsToDelete = savedRows
+          .filter((r) => {
+            if (!r.ashby_candidate_id || !r.ashby_job_id) return true;
+            const key = candidateKey(r.ashby_candidate_id, r.ashby_job_id);
+            return !incomingKeys.has(key) && !failedKeys.has(key);
+          })
+          .map((r) => r.id);
+
+        if (idsToDelete.length > 0) {
+          for (let i = 0; i < idsToDelete.length; i += INSERT_CHUNK) {
+            const chunk = idsToDelete.slice(i, i + INSERT_CHUNK);
+            try {
+              const { error: delErr } = await supabase
+                .from("candidates")
+                .delete()
+                .in("id", chunk);
+              if (delErr) console.error("Stale delete chunk failed:", delErr.message);
+            } catch (e) {
+              console.error("Stale delete threw:", e);
             }
           }
         }
@@ -333,7 +406,7 @@ export function usePipelineSession() {
           const rowId = idByKey.get(candidateKey(c.candidate_id, c.job_id));
           if (!rowId || !c.interview_events) continue;
           for (const ev of c.interview_events) {
-            if (!ev.start_time || !ev.id) continue; // need ashby_event_id for conflict target
+            if (!ev.start_time || !ev.id) continue;
             eventsToUpsert.push({
               user_id: user.id,
               candidate_row_id: rowId,
@@ -348,54 +421,72 @@ export function usePipelineSession() {
 
         for (let i = 0; i < eventsToUpsert.length; i += INSERT_CHUNK) {
           const chunk = eventsToUpsert.slice(i, i + INSERT_CHUNK);
-          const { error: evErr } = await supabase
-            .from("interview_events")
-            .upsert(chunk as unknown as never, {
-              onConflict: "candidate_row_id,ashby_event_id",
-            });
-          if (evErr) console.error(`Event upsert chunk ${i} failed:`, evErr.message);
+          try {
+            const { error: evErr } = await supabase
+              .from("interview_events")
+              .upsert(chunk as unknown as never, {
+                onConflict: "candidate_row_id,ashby_event_id",
+              });
+            if (evErr) console.error(`Event upsert chunk ${i} failed:`, evErr.message);
+          } catch (e) {
+            console.error(`Event upsert chunk ${i} threw:`, e);
+          }
         }
 
         setCandidates(newCandidates);
         setLastUpdated(new Date().toISOString());
 
-        // Reconciliation: list missing candidates by name and persist a save report.
-        const missing = candidatesToUpsert
+        // Reconciliation: anything in the incoming payload that's not in the
+        // DB readback is missing. Merge with explicit per-row failures so we
+        // can surface the actual error reason in the saved report.
+        const failureByKey = new Map(
+          upsertFailures.map((f) => [candidateKey(f.ashby_candidate_id, f.ashby_job_id), f.reason]),
+        );
+        const missing = dedupedRows
           .filter((c) => !savedKeys.has(candidateKey(c.ashby_candidate_id, c.ashby_job_id)))
           .map((c) => ({
             candidate_name: c.candidate_name,
             company_name: c.company_name,
             ashby_candidate_id: c.ashby_candidate_id,
             ashby_job_id: c.ashby_job_id,
+            reason:
+              failureByKey.get(candidateKey(c.ashby_candidate_id, c.ashby_job_id)) ??
+              "not in DB readback",
           }));
 
-        const saved = incoming - missing.length;
+        const saved = dedupedRows.length - missing.length;
         const elapsedMs = Math.round(performance.now() - t0);
 
         // Persist auditable report (best-effort; don't block UX on failure).
-        void supabase
-          .from("pipeline_save_reports")
-          .insert({
+        try {
+          const { error } = await supabase.from("pipeline_save_reports").insert({
             user_id: user.id,
             session_id: sessionId,
-            expected_count: incoming,
+            expected_count: dedupedRows.length,
             saved_count: saved,
             missing,
-          })
-          .then(({ error }) => {
-            if (error) console.warn("save report insert failed:", error.message);
           });
+          if (error) console.warn("save report insert failed:", error.message);
+        } catch (e) {
+          console.warn("save report insert threw:", e);
+        }
 
-        if (missing.length === 0 && upsertFailures.length === 0) {
+        if (missing.length === 0) {
           toast.success(`Saved ${saved} candidates in ${(elapsedMs / 1000).toFixed(1)}s`);
         } else {
-          const sample = missing
+          // Group missing by company for a more useful toast.
+          const byCompany = new Map<string, number>();
+          for (const m of missing) {
+            byCompany.set(m.company_name, (byCompany.get(m.company_name) ?? 0) + 1);
+          }
+          const summary = Array.from(byCompany.entries())
+            .sort((a, b) => b[1] - a[1])
             .slice(0, 3)
-            .map((d) => `${d.candidate_name} (${d.company_name})`)
+            .map(([co, n]) => `${co} (${n})`)
             .join(", ");
           toast.warning(
-            `Saved ${saved}/${incoming} candidates. ${missing.length} missing${
-              sample ? `: ${sample}${missing.length > 3 ? "…" : ""}` : ""
+            `Saved ${saved}/${dedupedRows.length}. ${missing.length} missing — ${summary}${
+              byCompany.size > 3 ? "…" : ""
             }. Full report stored.`,
             { duration: 15000 },
           );
