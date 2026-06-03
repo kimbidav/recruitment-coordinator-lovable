@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 
 export type FetchJobStatus = "pending" | "running" | "succeeded" | "failed" | "partial";
 
@@ -13,7 +14,7 @@ export interface FetchJob {
   orgs_failed: number | null;
   candidate_count: number | null;
   error_message: string | null;
-  result_payload?: unknown;
+  result_payload?: Json | null;
   result_received_at?: string | null;
   updated_at: string;
 }
