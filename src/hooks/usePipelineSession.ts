@@ -328,41 +328,27 @@ export function usePipelineSession() {
 
 
         // Read back what's in the DB after upsert to know real saved IDs and reconcile.
-        const savedRows = await selectAll<{
-          id: string;
-          ashby_candidate_id: string | null;
-          ashby_job_id: string | null;
-        }>((from, to) =>
-          supabase
-            .from("candidates")
-            .select("id, ashby_candidate_id, ashby_job_id")
-            .eq("session_id", sessionId)
-            .range(from, to) as unknown as PromiseLike<{
-            data: { id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }[] | null;
-            error: unknown;
-          }>,
-        );
-
-        // Sync semantics: delete rows that are no longer in the incoming payload.
-        const idsToDelete = savedRows
-          .filter((r) => {
-            if (!r.ashby_candidate_id || !r.ashby_job_id) return true;
-            return !incomingKeys.has(candidateKey(r.ashby_candidate_id, r.ashby_job_id));
-          })
-          .map((r) => r.id);
-
-        if (idsToDelete.length > 0) {
-          for (let i = 0; i < idsToDelete.length; i += INSERT_CHUNK) {
-            const chunk = idsToDelete.slice(i, i + INSERT_CHUNK);
-            const { error: delErr } = await supabase
+        let savedRows: { id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }[] = [];
+        try {
+          savedRows = await selectAll<{
+            id: string;
+            ashby_candidate_id: string | null;
+            ashby_job_id: string | null;
+          }>((from, to) =>
+            supabase
               .from("candidates")
-              .delete()
-              .in("id", chunk);
-            if (delErr) console.error("Stale delete chunk failed:", delErr.message);
-          }
+              .select("id, ashby_candidate_id, ashby_job_id")
+              .eq("session_id", sessionId)
+              .range(from, to) as unknown as PromiseLike<{
+              data: { id: string; ashby_candidate_id: string | null; ashby_job_id: string | null }[] | null;
+              error: unknown;
+            }>,
+          );
+        } catch (e) {
+          console.error("Reading back saved rows failed:", e);
         }
 
-        // Build id-by-key from the freshly-read saved rows (excludes deleted stale ones).
+        // Build id-by-key from the freshly-read saved rows.
         const idByKey = new Map<string, string>();
         const savedKeys = new Set<string>();
         for (const row of savedRows) {
@@ -371,6 +357,36 @@ export function usePipelineSession() {
             if (incomingKeys.has(key)) {
               idByKey.set(key, row.id);
               savedKeys.add(key);
+            }
+          }
+        }
+
+        // Sync semantics: delete rows that are no longer in the incoming
+        // payload. Only delete stale rows — never delete rows whose upsert
+        // just failed (they'd vanish from the DB until the next successful
+        // fetch, which is exactly the bug we're trying to prevent).
+        const failedKeys = new Set(
+          upsertFailures.map((f) => candidateKey(f.ashby_candidate_id, f.ashby_job_id)),
+        );
+        const idsToDelete = savedRows
+          .filter((r) => {
+            if (!r.ashby_candidate_id || !r.ashby_job_id) return true;
+            const key = candidateKey(r.ashby_candidate_id, r.ashby_job_id);
+            return !incomingKeys.has(key) && !failedKeys.has(key);
+          })
+          .map((r) => r.id);
+
+        if (idsToDelete.length > 0) {
+          for (let i = 0; i < idsToDelete.length; i += INSERT_CHUNK) {
+            const chunk = idsToDelete.slice(i, i + INSERT_CHUNK);
+            try {
+              const { error: delErr } = await supabase
+                .from("candidates")
+                .delete()
+                .in("id", chunk);
+              if (delErr) console.error("Stale delete chunk failed:", delErr.message);
+            } catch (e) {
+              console.error("Stale delete threw:", e);
             }
           }
         }
@@ -390,7 +406,7 @@ export function usePipelineSession() {
           const rowId = idByKey.get(candidateKey(c.candidate_id, c.job_id));
           if (!rowId || !c.interview_events) continue;
           for (const ev of c.interview_events) {
-            if (!ev.start_time || !ev.id) continue; // need ashby_event_id for conflict target
+            if (!ev.start_time || !ev.id) continue;
             eventsToUpsert.push({
               user_id: user.id,
               candidate_row_id: rowId,
@@ -405,54 +421,72 @@ export function usePipelineSession() {
 
         for (let i = 0; i < eventsToUpsert.length; i += INSERT_CHUNK) {
           const chunk = eventsToUpsert.slice(i, i + INSERT_CHUNK);
-          const { error: evErr } = await supabase
-            .from("interview_events")
-            .upsert(chunk as unknown as never, {
-              onConflict: "candidate_row_id,ashby_event_id",
-            });
-          if (evErr) console.error(`Event upsert chunk ${i} failed:`, evErr.message);
+          try {
+            const { error: evErr } = await supabase
+              .from("interview_events")
+              .upsert(chunk as unknown as never, {
+                onConflict: "candidate_row_id,ashby_event_id",
+              });
+            if (evErr) console.error(`Event upsert chunk ${i} failed:`, evErr.message);
+          } catch (e) {
+            console.error(`Event upsert chunk ${i} threw:`, e);
+          }
         }
 
         setCandidates(newCandidates);
         setLastUpdated(new Date().toISOString());
 
-        // Reconciliation: list missing candidates by name and persist a save report.
-        const missing = candidatesToUpsert
+        // Reconciliation: anything in the incoming payload that's not in the
+        // DB readback is missing. Merge with explicit per-row failures so we
+        // can surface the actual error reason in the saved report.
+        const failureByKey = new Map(
+          upsertFailures.map((f) => [candidateKey(f.ashby_candidate_id, f.ashby_job_id), f.reason]),
+        );
+        const missing = dedupedRows
           .filter((c) => !savedKeys.has(candidateKey(c.ashby_candidate_id, c.ashby_job_id)))
           .map((c) => ({
             candidate_name: c.candidate_name,
             company_name: c.company_name,
             ashby_candidate_id: c.ashby_candidate_id,
             ashby_job_id: c.ashby_job_id,
+            reason:
+              failureByKey.get(candidateKey(c.ashby_candidate_id, c.ashby_job_id)) ??
+              "not in DB readback",
           }));
 
-        const saved = incoming - missing.length;
+        const saved = dedupedRows.length - missing.length;
         const elapsedMs = Math.round(performance.now() - t0);
 
         // Persist auditable report (best-effort; don't block UX on failure).
-        void supabase
-          .from("pipeline_save_reports")
-          .insert({
+        try {
+          const { error } = await supabase.from("pipeline_save_reports").insert({
             user_id: user.id,
             session_id: sessionId,
-            expected_count: incoming,
+            expected_count: dedupedRows.length,
             saved_count: saved,
             missing,
-          })
-          .then(({ error }) => {
-            if (error) console.warn("save report insert failed:", error.message);
           });
+          if (error) console.warn("save report insert failed:", error.message);
+        } catch (e) {
+          console.warn("save report insert threw:", e);
+        }
 
-        if (missing.length === 0 && upsertFailures.length === 0) {
+        if (missing.length === 0) {
           toast.success(`Saved ${saved} candidates in ${(elapsedMs / 1000).toFixed(1)}s`);
         } else {
-          const sample = missing
+          // Group missing by company for a more useful toast.
+          const byCompany = new Map<string, number>();
+          for (const m of missing) {
+            byCompany.set(m.company_name, (byCompany.get(m.company_name) ?? 0) + 1);
+          }
+          const summary = Array.from(byCompany.entries())
+            .sort((a, b) => b[1] - a[1])
             .slice(0, 3)
-            .map((d) => `${d.candidate_name} (${d.company_name})`)
+            .map(([co, n]) => `${co} (${n})`)
             .join(", ");
           toast.warning(
-            `Saved ${saved}/${incoming} candidates. ${missing.length} missing${
-              sample ? `: ${sample}${missing.length > 3 ? "…" : ""}` : ""
+            `Saved ${saved}/${dedupedRows.length}. ${missing.length} missing — ${summary}${
+              byCompany.size > 3 ? "…" : ""
             }. Full report stored.`,
             { duration: 15000 },
           );
