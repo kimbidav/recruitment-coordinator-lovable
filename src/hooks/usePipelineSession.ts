@@ -570,9 +570,13 @@ export function usePipelineSession() {
           );
         }
       } catch (error) {
-        console.error("Error saving session:", error);
-        toast.error("Failed to save pipeline");
+        const msg =
+          (error as { message?: string })?.message ??
+          (typeof error === "string" ? error : JSON.stringify(error));
+        console.error("[saveSession] FATAL — aborted before save report:", error);
+        toast.error(`Save failed: ${msg}`, { duration: 30000 });
       }
+
     },
     [sessionId, user]
   );
