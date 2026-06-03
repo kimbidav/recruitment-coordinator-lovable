@@ -248,7 +248,7 @@ export function usePipelineSession() {
             last_activity_at: cleanTimestamp(c.last_activity_at),
           }));
 
-        const incoming = candidatesToUpsert.length;
+        
         const incomingKeys = new Set(
           candidatesToUpsert.map((c) => candidateKey(c.ashby_candidate_id, c.ashby_job_id)),
         );
