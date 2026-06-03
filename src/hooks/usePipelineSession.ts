@@ -226,6 +226,11 @@ export function usePipelineSession() {
         return;
       }
       const t0 = performance.now();
+      console.log(
+        `[saveSession] starting with ${newCandidates.length} candidates from ${
+          new Set(newCandidates.map((c) => c.company_name)).size
+        } companies`,
+      );
       try {
         await supabase
           .from("pipeline_sessions")
@@ -234,8 +239,18 @@ export function usePipelineSession() {
 
         // Build payload. Note: ashby_candidate_id and ashby_job_id are part of the
         // unique key (session_id, ashby_candidate_id, ashby_job_id) — ensure non-null.
+        const droppedNoIds: Array<{ candidate_name: string; company_name: string }> = [];
         const candidatesToUpsert = newCandidates
-          .filter((c) => c.candidate_id && c.job_id)
+          .filter((c) => {
+            const ok = !!c.candidate_id && !!c.job_id;
+            if (!ok) {
+              droppedNoIds.push({
+                candidate_name: c.candidate_name ?? "(no name)",
+                company_name: c.company_name ?? "(unknown)",
+              });
+            }
+            return ok;
+          })
           .map((c) => ({
             user_id: user.id,
             session_id: sessionId,
@@ -263,6 +278,17 @@ export function usePipelineSession() {
             current_stage_interviews: cleanOptionalText(c.current_stage_interviews),
             last_activity_at: cleanTimestamp(c.last_activity_at),
           }));
+
+        if (droppedNoIds.length > 0) {
+          console.warn(
+            `[saveSession] dropped ${droppedNoIds.length} candidates missing candidate_id or job_id:`,
+            droppedNoIds.slice(0, 20),
+          );
+        }
+        console.log(
+          `[saveSession] payload ready: ${candidatesToUpsert.length} rows after id filter`,
+        );
+
 
         
         const incomingKeys = new Set(
@@ -329,6 +355,8 @@ export function usePipelineSession() {
         // upsert returned `error: null` even when some/all rows weren't
         // persisted (no error thrown, no rows in DB), and we trusted that
         // success was global.
+        let totalBulkOk = 0;
+        let totalFallback = 0;
         for (let i = 0; i < dedupedRows.length; i += INSERT_CHUNK) {
           const chunk = dedupedRows.slice(i, i + INSERT_CHUNK);
           let bulkErr: { message?: string } | null = null;
@@ -345,12 +373,13 @@ export function usePipelineSession() {
           }
           if (bulkErr) {
             console.warn(
-              `Bulk chunk ${i}-${i + chunk.length} errored (${bulkErr.message}); falling back row-by-row.`,
+              `[saveSession] bulk chunk ${i}-${i + chunk.length} errored: ${bulkErr.message}; falling back row-by-row.`,
             );
+            const before = upsertFailures.length;
             await runWithConcurrency(chunk, ROW_CONCURRENCY, upsertSingle);
+            totalFallback += chunk.length - (upsertFailures.length - before);
             continue;
           }
-          // No error, but verify: which keys actually came back?
           const returnedKeys = new Set(
             returned
               .filter((r) => r.ashby_candidate_id && r.ashby_job_id)
@@ -359,13 +388,20 @@ export function usePipelineSession() {
           const dropped = chunk.filter(
             (row) => !returnedKeys.has(candidateKey(row.ashby_candidate_id, row.ashby_job_id)),
           );
+          totalBulkOk += chunk.length - dropped.length;
           if (dropped.length > 0) {
             console.warn(
-              `Bulk chunk ${i}-${i + chunk.length} silently dropped ${dropped.length}/${chunk.length} rows; falling back row-by-row.`,
+              `[saveSession] bulk chunk ${i}-${i + chunk.length} silently dropped ${dropped.length}/${chunk.length} rows; falling back row-by-row.`,
             );
+            const before = upsertFailures.length;
             await runWithConcurrency(dropped, ROW_CONCURRENCY, upsertSingle);
+            totalFallback += dropped.length - (upsertFailures.length - before);
           }
         }
+        console.log(
+          `[saveSession] upsert pass complete: bulk_ok=${totalBulkOk} fallback_ok=${totalFallback} failures=${upsertFailures.length}`,
+        );
+
 
 
 
@@ -534,9 +570,13 @@ export function usePipelineSession() {
           );
         }
       } catch (error) {
-        console.error("Error saving session:", error);
-        toast.error("Failed to save pipeline");
+        const msg =
+          (error as { message?: string })?.message ??
+          (typeof error === "string" ? error : JSON.stringify(error));
+        console.error("[saveSession] FATAL — aborted before save report:", error);
+        toast.error(`Save failed: ${msg}`, { duration: 30000 });
       }
+
     },
     [sessionId, user]
   );
