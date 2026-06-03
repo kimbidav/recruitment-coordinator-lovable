@@ -226,6 +226,26 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         return;
       }
 
+      // Per-company diagnostics: log every company in the raw Ashby response
+      // so we can immediately tell whether Finch Legal / Listen Labs / Valon
+      // / etc. are missing UPSTREAM (extractor) vs lost during save (DB).
+      const byCompany = new Map<string, number>();
+      for (const c of candidates) {
+        const name = (c.company_name ?? "").trim() || "(unknown)";
+        byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
+      }
+      const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
+      console.log(
+        `[Ashby fetch] ${candidates.length} candidates across ${byCompany.size} companies:`,
+      );
+      console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
+      (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
+        candidates,
+        stats,
+        byCompany: Object.fromEntries(breakdown),
+        at: new Date().toISOString(),
+      };
+
       complete();
       await new Promise((r) => setTimeout(r, 400));
       setStoredAshbyCookie(cookieToUse);
