@@ -33,10 +33,11 @@ import {
   setStoredAshbyCookie,
   clearStoredAshbyCookie,
 } from "@/lib/ashbyCookie";
-import { createFetchJob, updateFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
+import { getFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
 
 const PROGRESS_STEPS = [
   { at: 0, label: "Connecting to Ashby..." },
@@ -92,7 +93,7 @@ function useSimulatedProgress(active: boolean) {
 }
 
 interface AshbyFetchButtonProps {
-  onUpload: (candidates: Candidate[]) => void;
+  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
 }
 
 interface ExtractionStats {
@@ -146,6 +147,126 @@ function detectOS(): "mac" | "win" {
   if (typeof navigator === "undefined") return "mac";
   const p = navigator.platform || navigator.userAgent || "";
   return /Mac|iPhone|iPad/i.test(p) ? "mac" : "win";
+}
+
+function harvestClientNames(candidates: Candidate[], stats: ExtractionStats): string[] {
+  const clientNames = Array.from(
+    new Set(
+      candidates
+        .map((c) => (c.company_name ?? "").trim())
+        .filter((n) => n.length > 0),
+    ),
+  );
+  const statsAny = stats as unknown as Record<string, unknown>;
+  const harvestFromValue = (v: unknown) => {
+    if (!v) return;
+    if (typeof v === "string") {
+      const name = v.trim();
+      if (name && !clientNames.includes(name)) clientNames.push(name);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const item of v) harvestFromValue(item);
+      return;
+    }
+    if (typeof v === "object") {
+      const obj = v as Record<string, unknown>;
+      for (const k of ["name", "org_name", "organization", "org", "client_name", "company_name"]) {
+        if (typeof obj[k] === "string") {
+          harvestFromValue(obj[k]);
+          return;
+        }
+      }
+    }
+  };
+  for (const key of ["orgs", "org_names", "per_org", "orgs_breakdown", "organizations"]) {
+    harvestFromValue(statsAny[key]);
+  }
+  for (const [k, v] of Object.entries(statsAny)) {
+    if (v && typeof v === "object" && !Array.isArray(v) && /^[A-Z]/.test(k) && k.length < 80) {
+      if (!clientNames.includes(k)) clientNames.push(k);
+    }
+  }
+  return clientNames;
+}
+
+async function persistKnownClients(userId: string, clientNames: string[]) {
+  if (!clientNames.length) return;
+  const rows = clientNames.map((client_name) => ({
+    user_id: userId,
+    client_name,
+    last_seen_at: new Date().toISOString(),
+  }));
+  await supabase.from("ashby_known_clients").upsert(rows, { onConflict: "user_id,client_name" });
+  const { data: knownAll } = await supabase
+    .from("ashby_known_clients")
+    .select("client_name, last_seen_at")
+    .eq("user_id", userId)
+    .order("client_name");
+  console.log(
+    `[Ashby fetch] harvested ${clientNames.length} companies this run; ${knownAll?.length ?? 0} total Ashby companies known:`,
+  );
+  console.table((knownAll ?? []).map((r) => ({ company: r.client_name, last_seen: r.last_seen_at })));
+}
+
+async function applyFetchResult(args: {
+  cookie: string;
+  data: unknown;
+  userId?: string;
+  complete: () => void;
+  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
+  closeDialog: () => void;
+  clearInput: () => void;
+}) {
+  const { cookie, data, userId, complete, onUpload, closeDialog, clearInput } = args;
+  const { candidates, stats } = parseAshbyResponse(data);
+  const orgsTotal = stats.orgs_total;
+  const orgsFetched = stats.orgs_fetched;
+  const orgsFailed = stats.orgs_failed ?? 0;
+  const partial = !!(orgsTotal && orgsFetched !== undefined && orgsFailed > 0);
+
+  if (candidates.length === 0) {
+    toast.error("No candidates returned from Ashby");
+    return;
+  }
+
+  const byCompany = new Map<string, number>();
+  for (const c of candidates) {
+    const name = (c.company_name ?? "").trim() || "(unknown)";
+    byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
+  }
+  const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
+  console.log(`[Ashby fetch] ${candidates.length} candidates across ${byCompany.size} companies:`);
+  console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
+  (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
+    candidates,
+    stats,
+    byCompany: Object.fromEntries(breakdown),
+    at: new Date().toISOString(),
+  };
+
+  complete();
+  await new Promise((r) => setTimeout(r, 400));
+  setStoredAshbyCookie(cookie);
+  onUpload(candidates, { deleteMissing: !partial });
+
+  if (userId) {
+    await persistKnownClients(userId, harvestClientNames(candidates, stats));
+  }
+
+  if (partial) {
+    toast.warning(
+      `Merged ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed. Older synced candidates were kept intact.`,
+      { duration: 15000 },
+    );
+  } else if (orgsTotal && orgsFetched !== undefined) {
+    toast.success(`Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs`);
+  } else {
+    toast.success(`Loaded ${candidates.length} candidates from Ashby`);
+  }
+
+  closeDialog();
+  clearInput();
 }
 
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
