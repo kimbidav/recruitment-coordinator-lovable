@@ -140,23 +140,61 @@ const Index = () => {
       ashbyByKey.set(candidateMatchKey(c.company_name, c.candidate_name), c);
     }
 
-    // Lenient company key: lowercase, strip diacritics + non-alphanumerics,
-    // drop common corporate suffixes ("inc", "llc", "co", "labs", "ai", "io",
-    // "hq", "the"). This lets "Listen Labs" match Slack's "listen-labs" or
-    // "listenlabs" while still keeping different companies separate.
+    // Lenient company matching for Ashby vs Slack aliases.
+    // We need to collapse variants like:
+    // - "Listen Labs" <-> "Listenlabs"
+    // - "Crosby" <-> "Crosby Legal"
+    // - "Valon Tech" <-> "Valon Eng Ds"
+    // while still keeping obviously different companies separate.
     const COMPANY_NOISE = new Set([
       "inc", "llc", "ltd", "co", "corp", "company",
       "labs", "lab", "ai", "io", "hq", "the", "a",
+      "legal", "technologies", "tech", "engineering", "engineers", "eng", "ds",
     ]);
-    const companyKey = (s: string): string => {
-      const tokens = (s || "")
+    const companyTokens = (s: string): string[] => {
+      return (s || "")
         .toLowerCase()
         .normalize("NFKD")
         .replace(/[\u0300-\u036f]/g, "")
         .split(/[^a-z0-9]+/)
         .filter(Boolean)
         .filter((t) => !COMPANY_NOISE.has(t));
-      return tokens.join("");
+    };
+    const companyKey = (s: string): string => companyTokens(s).join("");
+    const companyAliases = (s: string): string[] => {
+      const tokens = companyTokens(s);
+      const aliases = new Set<string>();
+      const collapsed = tokens.join("");
+
+      if (collapsed) aliases.add(collapsed);
+      if (tokens[0] && tokens[0].length >= 4) aliases.add(tokens[0]);
+      if (tokens.length >= 2) aliases.add(tokens.slice(0, 2).join(""));
+
+      if (tokens.length === 1) {
+        const single = tokens[0];
+        for (const suffix of ["labs", "lab", "legal", "technologies", "tech", "engineering", "engineers", "eng", "ds"]) {
+          if (single.endsWith(suffix) && single.length - suffix.length >= 4) {
+            aliases.add(single.slice(0, -suffix.length));
+          }
+        }
+      }
+
+      return Array.from(aliases);
+    };
+    const companiesMatch = (a: string, b: string): boolean => {
+      const aAliases = companyAliases(a);
+      const bAliases = companyAliases(b);
+
+      if (aAliases.some((alias) => bAliases.includes(alias))) return true;
+
+      const aKey = companyKey(a);
+      const bKey = companyKey(b);
+      const shorter = Math.min(aKey.length, bKey.length);
+      if (shorter >= 5 && (aKey.startsWith(bKey) || bKey.startsWith(aKey))) return true;
+
+      const [aFirst] = companyTokens(a);
+      const [bFirst] = companyTokens(b);
+      return !!aFirst && aFirst === bFirst && aFirst.length >= 5;
     };
 
     // Build candidate-name -> [slack rows] indexes, then match Ashby rows that
@@ -221,7 +259,7 @@ const Index = () => {
       });
       // Pick the most recent unmatched Slack submission whose company matches.
       const matches = pool
-        .filter((s) => companyKey(s.client_name) === ashbyCompanyKey)
+        .filter((s) => companiesMatch(s.client_name, c.company_name))
         .filter((s) => !matchedSlackIds.has(s.id))
         .sort(
           (a, b) =>
