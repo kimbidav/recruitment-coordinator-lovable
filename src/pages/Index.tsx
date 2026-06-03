@@ -95,8 +95,11 @@ const Index = () => {
     // Re-pull after each save (lastUpdated changes when saveSession finishes).
   }, [user?.id, lastUpdated]);
 
-  const handleCsvUpload = (uploadedCandidates: Candidate[]) => {
-    saveSession(uploadedCandidates);
+  const handleCsvUpload = (
+    uploadedCandidates: Candidate[],
+    options?: { deleteMissing?: boolean },
+  ) => {
+    saveSession(uploadedCandidates, options);
     setCompanyFilter([]);
     setStageFilter([]);
     setStatusFilter([]);
