@@ -306,25 +306,51 @@ export function usePipelineSession() {
           });
         };
 
-        // First pass: small bulk chunks. On any chunk failure, fall back to
-        // row-by-row with bounded concurrency for just that chunk.
+        // First pass: small bulk chunks with `.select()` so PostgREST RETURNS
+        // the persisted rows. We then RECONCILE the chunk: any input row whose
+        // key is missing from the response goes through row-by-row fallback.
+        // This is the fix for the silent-drop bug — previously the chunk
+        // upsert returned `error: null` even when some/all rows weren't
+        // persisted (no error thrown, no rows in DB), and we trusted that
+        // success was global.
         for (let i = 0; i < dedupedRows.length; i += INSERT_CHUNK) {
           const chunk = dedupedRows.slice(i, i + INSERT_CHUNK);
-          let bulkErr: unknown = null;
+          let bulkErr: { message?: string } | null = null;
+          let returned: { ashby_candidate_id: string | null; ashby_job_id: string | null }[] = [];
           try {
-            const { error } = await supabase
+            const { data, error } = await supabase
               .from("candidates")
-              .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
-            bulkErr = error;
+              .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" })
+              .select("ashby_candidate_id, ashby_job_id");
+            bulkErr = error as { message?: string } | null;
+            returned = data ?? [];
           } catch (e) {
-            bulkErr = e;
+            bulkErr = { message: (e as Error)?.message ?? "thrown" };
           }
           if (bulkErr) {
-            const msg = (bulkErr as { message?: string })?.message ?? String(bulkErr);
-            console.warn(`Bulk chunk ${i}-${i + chunk.length} failed (${msg}); falling back row-by-row.`);
+            console.warn(
+              `Bulk chunk ${i}-${i + chunk.length} errored (${bulkErr.message}); falling back row-by-row.`,
+            );
             await runWithConcurrency(chunk, ROW_CONCURRENCY, upsertSingle);
+            continue;
+          }
+          // No error, but verify: which keys actually came back?
+          const returnedKeys = new Set(
+            returned
+              .filter((r) => r.ashby_candidate_id && r.ashby_job_id)
+              .map((r) => candidateKey(r.ashby_candidate_id!, r.ashby_job_id!)),
+          );
+          const dropped = chunk.filter(
+            (row) => !returnedKeys.has(candidateKey(row.ashby_candidate_id, row.ashby_job_id)),
+          );
+          if (dropped.length > 0) {
+            console.warn(
+              `Bulk chunk ${i}-${i + chunk.length} silently dropped ${dropped.length}/${chunk.length} rows; falling back row-by-row.`,
+            );
+            await runWithConcurrency(dropped, ROW_CONCURRENCY, upsertSingle);
           }
         }
+
 
 
         // Read back what's in the DB after upsert to know real saved IDs and reconcile.
