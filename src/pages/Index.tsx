@@ -25,7 +25,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Users, Loader2, Clock, LogOut, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  candidateMatchKey,
   normalizeMatchKey,
   slackStatusToDecision,
   slackStatusToPipelineStage,
@@ -135,10 +134,6 @@ const Index = () => {
     };
 
     const userLabel = canonicalizeSubmitter(user?.email ?? "Me");
-    const ashbyByKey = new Map<string, Candidate>();
-    for (const c of candidates) {
-      ashbyByKey.set(candidateMatchKey(c.company_name, c.candidate_name), c);
-    }
 
     // Lenient company matching for Ashby vs Slack aliases.
     // We need to collapse variants like:
@@ -244,7 +239,6 @@ const Index = () => {
 
     const matchedSlackIds = new Set<string>();
     const enriched: Candidate[] = candidates.map((c) => {
-      const ashbyCompanyKey = companyKey(c.company_name);
       // Pool candidates across exact, first+last, and initial+last buckets.
       const buckets: (typeof slackSubs)[] = [
         slackByCandidateName.get(normalizeMatchKey(c.candidate_name)) ?? [],
