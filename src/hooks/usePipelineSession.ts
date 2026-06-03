@@ -514,6 +514,35 @@ export function usePipelineSession() {
         setCandidates(newCandidates);
         setLastUpdated(new Date().toISOString());
 
+        // Persist every distinct company we just saw as an Ashby-known client.
+        // This is the authoritative "is this company in Ashby?" list used by
+        // the dashboard and agent-scan; it's cumulative — never deleted —
+        // so once a company is known to Ashby it stays Ashby forever.
+        try {
+          const distinctCompanies = Array.from(
+            new Set(
+              newCandidates
+                .map((c) => (c.company_name ?? "").trim())
+                .filter((n) => n.length > 0),
+            ),
+          );
+          if (distinctCompanies.length > 0) {
+            const rows = distinctCompanies.map((client_name) => ({
+              user_id: user.id,
+              client_name,
+              last_seen_at: new Date().toISOString(),
+            }));
+            const { error: knownErr } = await supabase
+              .from("ashby_known_clients")
+              .upsert(rows, { onConflict: "user_id,client_name" });
+            if (knownErr) {
+              console.warn("[saveSession] ashby_known_clients upsert failed:", knownErr.message);
+            }
+          }
+        } catch (e) {
+          console.warn("[saveSession] ashby_known_clients upsert threw:", e);
+        }
+
         // Reconciliation: anything in the incoming payload that's not in the
         // DB readback is missing. Merge with explicit per-row failures so we
         // can surface the actual error reason in the saved report.
