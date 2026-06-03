@@ -355,6 +355,8 @@ export function usePipelineSession() {
         // upsert returned `error: null` even when some/all rows weren't
         // persisted (no error thrown, no rows in DB), and we trusted that
         // success was global.
+        let totalBulkOk = 0;
+        let totalFallback = 0;
         for (let i = 0; i < dedupedRows.length; i += INSERT_CHUNK) {
           const chunk = dedupedRows.slice(i, i + INSERT_CHUNK);
           let bulkErr: { message?: string } | null = null;
@@ -371,12 +373,13 @@ export function usePipelineSession() {
           }
           if (bulkErr) {
             console.warn(
-              `Bulk chunk ${i}-${i + chunk.length} errored (${bulkErr.message}); falling back row-by-row.`,
+              `[saveSession] bulk chunk ${i}-${i + chunk.length} errored: ${bulkErr.message}; falling back row-by-row.`,
             );
+            const before = upsertFailures.length;
             await runWithConcurrency(chunk, ROW_CONCURRENCY, upsertSingle);
+            totalFallback += chunk.length - (upsertFailures.length - before);
             continue;
           }
-          // No error, but verify: which keys actually came back?
           const returnedKeys = new Set(
             returned
               .filter((r) => r.ashby_candidate_id && r.ashby_job_id)
@@ -385,13 +388,20 @@ export function usePipelineSession() {
           const dropped = chunk.filter(
             (row) => !returnedKeys.has(candidateKey(row.ashby_candidate_id, row.ashby_job_id)),
           );
+          totalBulkOk += chunk.length - dropped.length;
           if (dropped.length > 0) {
             console.warn(
-              `Bulk chunk ${i}-${i + chunk.length} silently dropped ${dropped.length}/${chunk.length} rows; falling back row-by-row.`,
+              `[saveSession] bulk chunk ${i}-${i + chunk.length} silently dropped ${dropped.length}/${chunk.length} rows; falling back row-by-row.`,
             );
+            const before = upsertFailures.length;
             await runWithConcurrency(dropped, ROW_CONCURRENCY, upsertSingle);
+            totalFallback += dropped.length - (upsertFailures.length - before);
           }
         }
+        console.log(
+          `[saveSession] upsert pass complete: bulk_ok=${totalBulkOk} fallback_ok=${totalFallback} failures=${upsertFailures.length}`,
+        );
+
 
 
 
