@@ -7,6 +7,33 @@ import { toast } from "sonner";
 const PAGE_SIZE = 1000;
 const INSERT_CHUNK = 500;
 
+const cleanRequiredText = (value: string | null | undefined, fallback: string) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+};
+
+const cleanOptionalText = (value: string | null | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+};
+
+const cleanInteger = (value: unknown, fallback = 0) => {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) ? parsed : fallback;
+};
+
+const cleanNumber = (value: unknown) => {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const cleanTimestamp = (value: string | null | undefined) => {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+};
+
 // Fetch ALL rows for a query, page by page, so we never silently hit Supabase's 1000-row cap.
 async function selectAll<T>(
   builder: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
@@ -178,25 +205,25 @@ export function usePipelineSession() {
             ashby_job_id: c.job_id,
             // NOT NULL columns — coerce empty/missing upstream values to safe defaults
             // so a single sparse row from Ashby cannot fail the whole batch.
-            candidate_name: (c.candidate_name && c.candidate_name.trim()) || "(no name)",
-            company_name: (c.company_name && c.company_name.trim()) || "(unknown company)",
-            job_title: (c.job_title && c.job_title.trim()) || "—",
-            pipeline_stage: (c.pipeline_stage && c.pipeline_stage.trim()) || "Unknown",
-            decision_status: (c.decision_status && c.decision_status.trim()) || "Active",
-            credited_to: (c.credited_to && c.credited_to.trim()) || "(unknown)",
-            current_stage_index: typeof c.current_stage_index === "number" ? c.current_stage_index : 0,
-            total_stages: typeof c.total_stages === "number" ? c.total_stages : 0,
-            days_in_stage: c.days_in_stage ?? 0,
-            needs_scheduling: c.needs_scheduling ?? false,
-            feedback_count: c.feedback_count ?? 0,
-            latest_recommendation: c.latest_recommendation ?? null,
-            latest_feedback_author: c.latest_feedback_author ?? null,
-            latest_feedback_date: c.latest_feedback_date ?? null,
-            current_stage_avg_score: c.current_stage_avg_score ?? null,
-            current_stage_date: c.current_stage_date ?? null,
-            interview_history_summary: c.interview_history_summary ?? null,
-            current_stage_interviews: c.current_stage_interviews ?? null,
-            last_activity_at: c.last_activity_at ?? null,
+            candidate_name: cleanRequiredText(c.candidate_name, "(no name)"),
+            company_name: cleanRequiredText(c.company_name, "(unknown company)"),
+            job_title: cleanRequiredText(c.job_title, "—"),
+            pipeline_stage: cleanRequiredText(c.pipeline_stage, "Unknown"),
+            decision_status: cleanRequiredText(c.decision_status, "Active"),
+            credited_to: cleanRequiredText(c.credited_to, "(unknown)"),
+            current_stage_index: cleanInteger(c.current_stage_index, 0),
+            total_stages: cleanInteger(c.total_stages, 0),
+            days_in_stage: cleanInteger(c.days_in_stage, 0),
+            needs_scheduling: typeof c.needs_scheduling === "boolean" ? c.needs_scheduling : false,
+            feedback_count: cleanInteger(c.feedback_count, 0),
+            latest_recommendation: cleanOptionalText(c.latest_recommendation),
+            latest_feedback_author: cleanOptionalText(c.latest_feedback_author),
+            latest_feedback_date: cleanTimestamp(c.latest_feedback_date),
+            current_stage_avg_score: cleanNumber(c.current_stage_avg_score),
+            current_stage_date: cleanTimestamp(c.current_stage_date),
+            interview_history_summary: cleanOptionalText(c.interview_history_summary),
+            current_stage_interviews: cleanOptionalText(c.current_stage_interviews),
+            last_activity_at: cleanTimestamp(c.last_activity_at),
           }));
 
         const incoming = candidatesToUpsert.length;
@@ -228,7 +255,13 @@ export function usePipelineSession() {
               if (rowErr) {
                 console.error(
                   `Row upsert failed for ${row.candidate_name} @ ${row.company_name}:`,
-                  rowErr.message,
+                  {
+                    message: rowErr.message,
+                    details: rowErr.details,
+                    hint: rowErr.hint,
+                    code: rowErr.code,
+                    row,
+                  },
                 );
                 upsertFailures.push({ chunkStart: i + j, size: 1, error: rowErr.message });
               }
