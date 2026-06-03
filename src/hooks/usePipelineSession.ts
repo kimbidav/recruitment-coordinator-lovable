@@ -29,14 +29,29 @@ async function runWithConcurrency<T>(
   await Promise.all(runners);
 }
 
-const cleanRequiredText = (value: string | null | undefined, fallback: string) => {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+// Coerce any unknown value to a string before trimming. Ashby occasionally returns
+// numeric/boolean/object values where we expect text (e.g. latest_recommendation as
+// a number, or a nested object). A naive `.trim()` would throw and abort the entire
+// save — the bug behind "fetch finishes, no candidates persisted, no save report".
+const toStringSafe = (value: unknown): string => {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
 };
 
-const cleanOptionalText = (value: string | null | undefined) => {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : null;
+const cleanRequiredText = (value: unknown, fallback: string) => {
+  const trimmed = toStringSafe(value).trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+};
+
+const cleanOptionalText = (value: unknown) => {
+  const trimmed = toStringSafe(value).trim();
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 const cleanInteger = (value: unknown, fallback = 0) => {
@@ -49,12 +64,13 @@ const cleanNumber = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const cleanTimestamp = (value: string | null | undefined) => {
-  const trimmed = value?.trim();
+const cleanTimestamp = (value: unknown) => {
+  const trimmed = toStringSafe(value).trim();
   if (!trimmed) return null;
   const parsed = Date.parse(trimmed);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 };
+
 
 // Fetch ALL rows for a query, page by page, so we never silently hit Supabase's 1000-row cap.
 async function selectAll<T>(
