@@ -888,18 +888,25 @@ Deno.serve(async (req) => {
       ashby_stale: boolean;
       ashby_days_since_activity: number | null;
     } => {
-      // Per-loop decision: if we have a candidates row for this exact (client, candidate),
-      // its ashby_candidate_id is authoritative — do NOT fall through to client-level lookup.
+      // COMPANY-LEVEL classification first: if this company is known to Ashby
+      // (any past fetch ever included it, or there's any Ashby-tracked candidate
+      // row for it) then EVERY candidate at this company routes to the Ashby
+      // pipeline, including Slack-only submissions. This matches the dashboard.
+      const companyHit = lookupAshbyClient(companyName);
+      const companyIsAshby = companyHit !== undefined;
+
       if (candidateName) {
+        // Per-pair override: if we have an Ashby row for THIS exact pair, use
+        // its real latest-activity timestamp. Otherwise fall back to the
+        // company-level decision above.
         const pair = ashbyByPair.get(pairKey(companyName, candidateName));
-        if (pair) return pair.tracked ? buildFlags(pair.latest) : { ...NOT_TRACKED };
-        // No row for this pair yet (fresh Slack submission, not synced from Ashby) → Slack.
+        if (pair?.tracked) return buildFlags(pair.latest);
+        if (companyIsAshby) return buildFlags(companyHit ?? null);
         return { ...NOT_TRACKED };
       }
-      // Batch case (no single candidate): fall back to client-level fuzzy match.
-      const hit = lookupAshbyClient(companyName);
-      if (hit === undefined) return { ...NOT_TRACKED };
-      return buildFlags(hit);
+      // Batch case (no single candidate): company-level only.
+      if (companyIsAshby) return buildFlags(companyHit ?? null);
+      return { ...NOT_TRACKED };
     };
 
     for (const sub of batch) {
