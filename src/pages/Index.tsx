@@ -29,6 +29,7 @@ import {
   slackStatusToDecision,
   slackStatusToPipelineStage,
 } from "@/lib/slackParse";
+import { companiesMatch, isAshbyCompany } from "@/lib/companyMatch";
 
 const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
 const PENDING_ONBOARDING_KEY = "pendingOnboarding";
