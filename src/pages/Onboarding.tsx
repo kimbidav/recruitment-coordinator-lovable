@@ -10,6 +10,7 @@ import { SlackConnectButton } from "@/components/SlackConnectButton";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
+import { usePipelineSession } from "@/hooks/usePipelineSession";
 
 const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
 const PENDING_ONBOARDING_KEY = "pendingOnboarding";
