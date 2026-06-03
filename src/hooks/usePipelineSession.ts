@@ -94,6 +94,10 @@ async function selectAll<T>(
 // Same person on multiple jobs must NOT collapse — include job_id.
 const candidateKey = (candidateId: string, jobId: string) => `${candidateId}::${jobId}`;
 
+interface SaveSessionOptions {
+  deleteMissing?: boolean;
+}
+
 export function usePipelineSession() {
   const { user } = useAuth();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -220,11 +224,12 @@ export function usePipelineSession() {
   };
 
   const saveSession = useCallback(
-    async (newCandidates: Candidate[]) => {
+    async (newCandidates: Candidate[], options: SaveSessionOptions = {}) => {
       if (!user || !sessionId) {
         toast.error("Not signed in");
         return;
       }
+      const deleteMissing = options.deleteMissing ?? true;
       const t0 = performance.now();
       console.log(
         `[saveSession] starting with ${newCandidates.length} candidates from ${
@@ -454,7 +459,7 @@ export function usePipelineSession() {
           })
           .map((r) => r.id);
 
-        if (idsToDelete.length > 0) {
+        if (deleteMissing && idsToDelete.length > 0) {
           for (let i = 0; i < idsToDelete.length; i += INSERT_CHUNK) {
             const chunk = idsToDelete.slice(i, i + INSERT_CHUNK);
             try {
