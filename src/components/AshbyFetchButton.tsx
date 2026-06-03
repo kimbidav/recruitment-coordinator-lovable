@@ -298,9 +298,47 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
 
   const validation = validateToken(cookie);
 
+  const pollJobUntilComplete = async (jobId: string, cookieToUse: string) => {
+    const pollStartedAt = Date.now();
+    while (Date.now() - pollStartedAt < 390_000) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const job = await getFetchJob(jobId);
+      if (!job) continue;
+
+      if (job.status === "running") continue;
+
+      if (job.status === "failed") {
+        if ((job.error_message ?? "").includes("401")) {
+          clearStoredAshbyCookie();
+          setOpen(true);
+          toast.error("Ashby session expired. Paste a fresh cookie.");
+        } else {
+          toast.error(job.error_message ?? "Failed to fetch from Ashby.");
+        }
+        return;
+      }
+
+      await applyFetchResult({
+        cookie: cookieToUse,
+        data: job.result_payload,
+        userId: user?.id,
+        complete,
+        onUpload,
+        closeDialog: () => setOpen(false),
+        clearInput: () => setCookie(""),
+      });
+      return;
+    }
+
+    toast.message("Ashby sync is still running in the background.", {
+      description: "Click Sync from Ashby again to resume watching progress.",
+    });
+  };
+
   const runFetch = async (cookieToUse: string) => {
     setLoading(true);
     try {
+      setStoredAshbyCookie(cookieToUse);
       const { data, error } = await supabase.functions.invoke("ashby-sync", {
         body: { cookie: cookieToUse },
       });
@@ -308,41 +346,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
 
       const jobId = (data as { job?: { id?: string } } | null)?.job?.id;
       if (!jobId) throw new Error("Failed to start Ashby sync");
-
-      const pollStartedAt = Date.now();
-      while (Date.now() - pollStartedAt < 390_000) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const job = await getFetchJob(jobId);
-        if (!job) continue;
-
-        if (job.status === "running") continue;
-
-        if (job.status === "failed") {
-          if ((job.error_message ?? "").includes("401")) {
-            clearStoredAshbyCookie();
-            setOpen(true);
-            toast.error("Ashby session expired. Paste a fresh cookie.");
-          } else {
-            toast.error(job.error_message ?? "Failed to fetch from Ashby.");
-          }
-          return;
-        }
-
-        await applyFetchResult({
-          cookie: cookieToUse,
-          data: job.result_payload,
-          userId: user?.id,
-          complete,
-          onUpload,
-          closeDialog: () => setOpen(false),
-          clearInput: () => setCookie(""),
-        });
-        return;
-      }
-
-      toast.message("Ashby sync is still running in the background.", {
-        description: "You can leave this tab open while the sync finishes.",
-      });
+      await pollJobUntilComplete(jobId, cookieToUse);
     } catch (err) {
       console.error("Ashby fetch error:", err);
       const message =
@@ -360,7 +364,19 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const handleClick = () => {
     const stored = getStoredAshbyCookie();
     if (stored) {
-      void runFetch(stored);
+      void (async () => {
+        const runningJob = user ? await getLatestRunningJob(user.id) : null;
+        if (runningJob) {
+          setLoading(true);
+          try {
+            await pollJobUntilComplete(runningJob.id, stored);
+          } finally {
+            setLoading(false);
+          }
+          return;
+        }
+        await runFetch(stored);
+      })();
     } else {
       setOpen(true);
     }
