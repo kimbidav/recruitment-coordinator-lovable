@@ -176,14 +176,16 @@ export function usePipelineSession() {
             session_id: sessionId,
             ashby_candidate_id: c.candidate_id,
             ashby_job_id: c.job_id,
-            candidate_name: c.candidate_name,
-            company_name: c.company_name,
-            job_title: c.job_title,
-            pipeline_stage: c.pipeline_stage,
-            decision_status: c.decision_status,
-            credited_to: c.credited_to,
-            current_stage_index: c.current_stage_index,
-            total_stages: c.total_stages,
+            // NOT NULL columns — coerce empty/missing upstream values to safe defaults
+            // so a single sparse row from Ashby cannot fail the whole batch.
+            candidate_name: (c.candidate_name && c.candidate_name.trim()) || "(no name)",
+            company_name: (c.company_name && c.company_name.trim()) || "(unknown company)",
+            job_title: (c.job_title && c.job_title.trim()) || "—",
+            pipeline_stage: (c.pipeline_stage && c.pipeline_stage.trim()) || "Unknown",
+            decision_status: (c.decision_status && c.decision_status.trim()) || "Active",
+            credited_to: (c.credited_to && c.credited_to.trim()) || "(unknown)",
+            current_stage_index: typeof c.current_stage_index === "number" ? c.current_stage_index : 0,
+            total_stages: typeof c.total_stages === "number" ? c.total_stages : 0,
             days_in_stage: c.days_in_stage ?? 0,
             needs_scheduling: c.needs_scheduling ?? false,
             feedback_count: c.feedback_count ?? 0,
@@ -202,7 +204,12 @@ export function usePipelineSession() {
           candidatesToUpsert.map((c) => candidateKey(c.ashby_candidate_id, c.ashby_job_id)),
         );
 
-        // Idempotent bulk upsert — no destructive delete, no row-by-row fallback.
+        // Idempotent bulk upsert with row-by-row fallback. PostgreSQL's INSERT
+        // ... ON CONFLICT fails the ENTIRE batch on any single-row error
+        // (e.g. NOT NULL violation, check constraint, oversized payload). Before
+        // the fallback was added, a single bad row from upstream would silently
+        // drop every other row in the same chunk — exactly the bug behind the
+        // "Reducto candidates never showing up in Ashby" report.
         const upsertFailures: Array<{ chunkStart: number; size: number; error: string }> = [];
         for (let i = 0; i < candidatesToUpsert.length; i += INSERT_CHUNK) {
           const chunk = candidatesToUpsert.slice(i, i + INSERT_CHUNK);
@@ -210,10 +217,25 @@ export function usePipelineSession() {
             .from("candidates")
             .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
           if (error) {
-            console.error(`Upsert chunk ${i}-${i + chunk.length} failed:`, error.message);
-            upsertFailures.push({ chunkStart: i, size: chunk.length, error: error.message });
+            console.error(`Bulk upsert chunk ${i}-${i + chunk.length} failed, retrying row-by-row:`, error.message);
+            // Fall back: insert rows individually so good rows still persist
+            // and only the offending row(s) get logged + reported as missing.
+            for (let j = 0; j < chunk.length; j++) {
+              const row = chunk[j];
+              const { error: rowErr } = await supabase
+                .from("candidates")
+                .upsert([row], { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
+              if (rowErr) {
+                console.error(
+                  `Row upsert failed for ${row.candidate_name} @ ${row.company_name}:`,
+                  rowErr.message,
+                );
+                upsertFailures.push({ chunkStart: i + j, size: 1, error: rowErr.message });
+              }
+            }
           }
         }
+
 
         // Read back what's in the DB after upsert to know real saved IDs and reconcile.
         const savedRows = await selectAll<{
