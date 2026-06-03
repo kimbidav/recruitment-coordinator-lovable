@@ -93,9 +93,15 @@ export function AgentActionCard({ card, drafting, closing, onReplySlack, onEmail
         </div>
       )}
 
-      {p.signal_summary && (
-        <p className="text-sm text-muted-foreground">{p.signal_summary}</p>
-      )}
+      {p.signal_summary && (() => {
+        const SENTINELS = new Set(["llm_error", "no_llm", "no_tool_call", "parse_error"]);
+        const raw = p.signal_summary.trim();
+        const display = SENTINELS.has(raw)
+          ? "Couldn't analyze scheduling signal — will retry on next scan."
+          : p.signal_summary;
+        return <p className="text-sm text-muted-foreground">{display}</p>;
+      })()}
+
 
       {(p.signals && p.signals.length > 0) ? (
         <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1.5">
