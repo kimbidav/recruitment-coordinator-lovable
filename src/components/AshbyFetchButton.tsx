@@ -306,6 +306,22 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           await supabase
             .from("ashby_known_clients")
             .upsert(rows, { onConflict: "user_id,client_name" });
+
+          // Diagnostic: print the FULL cumulative Ashby company list so you can
+          // confirm Finch Legal / Listen Labs / Valon / etc. were harvested.
+          const { data: knownAll } = await supabase
+            .from("ashby_known_clients")
+            .select("client_name, last_seen_at")
+            .eq("user_id", user.id)
+            .order("client_name");
+          console.log(
+            `[Ashby fetch] harvested ${clientNames.length} companies this run; ` +
+              `${knownAll?.length ?? 0} total Ashby companies known:`,
+          );
+          console.table((knownAll ?? []).map((r) => ({
+            company: r.client_name,
+            last_seen: r.last_seen_at,
+          })));
         }
       }
 
