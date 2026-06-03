@@ -253,41 +253,76 @@ export function usePipelineSession() {
           candidatesToUpsert.map((c) => candidateKey(c.ashby_candidate_id, c.ashby_job_id)),
         );
 
-        // Idempotent bulk upsert with row-by-row fallback. PostgreSQL's INSERT
+        // Idempotent upsert with row-by-row fallback. PostgreSQL's INSERT
         // ... ON CONFLICT fails the ENTIRE batch on any single-row error
-        // (e.g. NOT NULL violation, check constraint, oversized payload). Before
-        // the fallback was added, a single bad row from upstream would silently
-        // drop every other row in the same chunk — exactly the bug behind the
-        // "Reducto candidates never showing up in Ashby" report.
-        const upsertFailures: Array<{ chunkStart: number; size: number; error: string }> = [];
-        for (let i = 0; i < candidatesToUpsert.length; i += INSERT_CHUNK) {
-          const chunk = candidatesToUpsert.slice(i, i + INSERT_CHUNK);
-          const { error } = await supabase
-            .from("candidates")
-            .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
-          if (error) {
-            console.error(`Bulk upsert chunk ${i}-${i + chunk.length} failed, retrying row-by-row:`, error.message);
-            // Fall back: insert rows individually so good rows still persist
-            // and only the offending row(s) get logged + reported as missing.
-            for (let j = 0; j < chunk.length; j++) {
-              const row = chunk[j];
+        // (NOT NULL, oversized payload, duplicate keys in the same VALUES
+        // list, request timeout). Before small chunks + bounded fallback,
+        // a single bad row would silently drop every other row in the same
+        // chunk — the bug behind "only 38 of 373 candidates persisted"
+        // across Reducto / Luminai / Trajectory / Factory / etc.
+        const upsertFailures: Array<{
+          candidate_name: string;
+          company_name: string;
+          ashby_candidate_id: string;
+          ashby_job_id: string;
+          reason: string;
+        }> = [];
+
+        // Pre-dedupe by key. Duplicates in a single bulk VALUES list cause
+        // "ON CONFLICT DO UPDATE command cannot affect row a second time"
+        // and fail the whole chunk. Keep the LAST occurrence (latest state).
+        const byKey = new Map<string, (typeof candidatesToUpsert)[number]>();
+        for (const row of candidatesToUpsert) {
+          byKey.set(candidateKey(row.ashby_candidate_id, row.ashby_job_id), row);
+        }
+        const dedupedRows = Array.from(byKey.values());
+
+        const upsertSingle = async (row: (typeof candidatesToUpsert)[number]) => {
+          let lastErr: { message?: string; details?: string; hint?: string; code?: string } | null = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
               const { error: rowErr } = await supabase
                 .from("candidates")
                 .upsert([row], { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
-              if (rowErr) {
-                console.error(
-                  `Row upsert failed for ${row.candidate_name} @ ${row.company_name}:`,
-                  {
-                    message: rowErr.message,
-                    details: rowErr.details,
-                    hint: rowErr.hint,
-                    code: rowErr.code,
-                    row,
-                  },
-                );
-                upsertFailures.push({ chunkStart: i + j, size: 1, error: rowErr.message });
-              }
+              if (!rowErr) return;
+              lastErr = rowErr;
+              // Don't retry deterministic schema errors (NOT NULL, CHECK, FK).
+              if (rowErr.code && /^23/.test(rowErr.code)) break;
+            } catch (e) {
+              lastErr = { message: (e as Error)?.message ?? "thrown" };
             }
+            await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+          }
+          console.error(
+            `Row upsert failed for ${row.candidate_name} @ ${row.company_name}:`,
+            { ...lastErr, row },
+          );
+          upsertFailures.push({
+            candidate_name: row.candidate_name,
+            company_name: row.company_name,
+            ashby_candidate_id: row.ashby_candidate_id,
+            ashby_job_id: row.ashby_job_id,
+            reason: lastErr?.message ?? "unknown",
+          });
+        };
+
+        // First pass: small bulk chunks. On any chunk failure, fall back to
+        // row-by-row with bounded concurrency for just that chunk.
+        for (let i = 0; i < dedupedRows.length; i += INSERT_CHUNK) {
+          const chunk = dedupedRows.slice(i, i + INSERT_CHUNK);
+          let bulkErr: unknown = null;
+          try {
+            const { error } = await supabase
+              .from("candidates")
+              .upsert(chunk, { onConflict: "session_id,ashby_candidate_id,ashby_job_id" });
+            bulkErr = error;
+          } catch (e) {
+            bulkErr = e;
+          }
+          if (bulkErr) {
+            const msg = (bulkErr as { message?: string })?.message ?? String(bulkErr);
+            console.warn(`Bulk chunk ${i}-${i + chunk.length} failed (${msg}); falling back row-by-row.`);
+            await runWithConcurrency(chunk, ROW_CONCURRENCY, upsertSingle);
           }
         }
 
