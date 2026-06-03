@@ -66,6 +66,7 @@ const Onboarding = () => {
   const { user, loading: authLoading, signOut } = useAuth();
   const navigate = useNavigate();
   const status = useOnboardingStatus();
+  const { saveSession } = usePipelineSession();
 
   useEffect(() => {
     document.title = "Welcome — Candidate Pipeline";
