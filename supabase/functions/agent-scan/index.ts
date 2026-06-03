@@ -398,8 +398,8 @@ Output:
 - candidate_email: best guess of the candidate's email from headers (not the recruiter), else null.
 - evidence: one short sentence quoting the snippet that drove your decision.`;
 
-  const body = {
-    model: "google/gemini-2.5-pro",
+  const makeBody = (model: string) => ({
+    model,
     messages: [{ role: "user", content: prompt }],
     tools: [{
       type: "function",
@@ -420,17 +420,25 @@ Output:
       },
     }],
     tool_choice: { type: "function", function: { name: "report_scheduling" } },
-  };
+  });
 
-  const r = await fetchWithTimeout(LOVABLE_AI_URL, {
+  const callModel = (model: string) => fetchWithTimeout(LOVABLE_AI_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(makeBody(model)),
   });
+
+  let r = await callModel("google/gemini-2.5-pro");
+  if (!r.ok && (r.status === 429 || r.status >= 500)) {
+    console.warn("scheduling llm primary failed", r.status, "— retrying with gemini-2.5-flash");
+    await new Promise((res) => setTimeout(res, 500));
+    r = await callModel("google/gemini-2.5-flash");
+  }
   if (!r.ok) {
     console.error("llm err", r.status, await r.text());
     return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "llm_error" };
   }
+
   const j = await r.json();
   const tc = j.choices?.[0]?.message?.tool_calls?.[0];
   if (!tc) return { outcome: "not_scheduled", scheduled_time: null, suggested_followup_at: null, candidate_email: null, evidence: "no_tool_call" };
