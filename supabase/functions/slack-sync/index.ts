@@ -222,11 +222,18 @@ Deno.serve(async (req) => {
     // our own Slack and there's no shared Connect channel / Ashby instance).
     // Plain internal channels (eng-recruiting-general, eng-candidate-review, etc.)
     // are NOT client channels.
+    //
+    // Hard-exclude list: some channels can appear as `is_ext_shared=true` because
+    // Slack Connect was used to invite an external partner, but they're really
+    // internal recruiting ops channels and should NEVER produce candidate rows.
+    const EXCLUDED_NAME_RE = /^(eng[-_]?recruiting|eng[-_]?candidate|recruiting[-_]general|hiring[-_]general)/i;
     const candidateChannels = channels.filter(
       (c) =>
         !c.is_archived &&
+        !EXCLUDED_NAME_RE.test(c.name ?? "") &&
         (c.is_ext_shared === true || /^internal[-_]/i.test(c.name ?? "")),
     );
+
 
 
     // Load existing mappings to preserve user overrides
