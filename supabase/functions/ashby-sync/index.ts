@@ -24,18 +24,35 @@ function parseAshbyResponse(data: unknown): { candidates: unknown[]; stats: Reco
   return { candidates: [], stats: {} };
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function runSync(args: {
   admin: ReturnType<typeof createClient>;
   jobId: string;
   cookie: string;
+  includeEnrichment: boolean;
 }) {
-  const { admin, jobId, cookie } = args;
+  const { admin, jobId, cookie, includeEnrichment } = args;
+  // Enrichment takes much longer (it walks every candidate's interview/feedback history).
+  const timeoutMs = includeEnrichment ? 300_000 : 240_000;
   try {
-    const res = await fetch(`${ASHBY_AUTOMATION_API_BASE}/api/extract`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cookie, force: true }),
-    });
+    const res = await fetchWithTimeout(
+      `${ASHBY_AUTOMATION_API_BASE}/api/extract`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cookie, force: true, include_enrichment: includeEnrichment }),
+      },
+      timeoutMs,
+    );
 
     if (res.status === 401) {
       await admin.from("fetch_jobs").update({
@@ -79,7 +96,12 @@ async function runSync(args: {
       error_message: candidates.length === 0 ? "No candidates returned" : null,
     }).eq("id", jobId);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const isAbort = error instanceof DOMException && error.name === "AbortError";
+    const message = isAbort
+      ? `Ashby extractor timed out after ${Math.round(timeoutMs / 1000)}s (${includeEnrichment ? "enrichment" : "basic"} phase). The Railway service may be cold-starting — retry in a moment.`
+      : error instanceof Error
+        ? error.message
+        : "Unknown error";
     console.error("ashby-sync background error", message);
     await admin.from("fetch_jobs").update({
       status: "failed",
@@ -128,6 +150,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const cookie = typeof body.cookie === "string" ? body.cookie.trim() : "";
+    const includeEnrichment = body.include_enrichment === true;
     if (!cookie) return json({ error: "cookie required" }, 400);
 
     const { data: job, error: insertErr } = await admin
@@ -139,7 +162,7 @@ Deno.serve(async (req) => {
       return json({ error: insertErr?.message ?? "Failed to create job" }, 500);
     }
 
-    EdgeRuntime.waitUntil(runSync({ admin, jobId: job.id, cookie }));
+    EdgeRuntime.waitUntil(runSync({ admin, jobId: job.id, cookie, includeEnrichment }));
     return json({ job });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
