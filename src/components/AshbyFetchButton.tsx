@@ -274,10 +274,23 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [staleJobNotified, setStaleJobNotified] = useState(false);
   const { progress, label, complete } = useSimulatedProgress(loading);
   const os = useMemo(detectOS, []);
   const devtoolsKey = os === "mac" ? "⌘⌥I" : "F12";
+
+  const describeFetchFailure = (message?: string | null) => {
+    const trimmed = message?.trim();
+    if (!trimmed) return "Ashby fetch failed before any candidates were returned.";
+    if (trimmed.includes("401")) {
+      return "Your Ashby session expired during the fetch. Copy a fresh token from the same Ashby tab and try again.";
+    }
+    if (trimmed.toLowerCase().includes("upstream error")) {
+      return "The Ashby fetch service hit an upstream error before candidates were returned. This usually means the session went stale mid-run, so grab a fresh token from the same signed-in Ashby tab and retry.";
+    }
+    return trimmed;
+  };
 
   // On mount: warn if a previous fetch is still marked running (likely stalled).
   useEffect(() => {
@@ -308,12 +321,15 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       if (job.status === "running") continue;
 
       if (job.status === "failed") {
+        const failureMessage = describeFetchFailure(job.error_message);
+        setFetchError(failureMessage);
+        setCookie(cookieToUse);
+        setOpen(true);
         if ((job.error_message ?? "").includes("401")) {
           clearStoredAshbyCookie();
-          setOpen(true);
           toast.error("Ashby session expired. Paste a fresh cookie.");
         } else {
-          toast.error(job.error_message ?? "Failed to fetch from Ashby.");
+          toast.error(failureMessage);
         }
         return;
       }
@@ -330,12 +346,15 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       return;
     }
 
+    setFetchError("Ashby sync is still running in the background. Leave your signed-in Ashby tab alone, then click Sync from Ashby again in a minute to resume watching it.");
+    setOpen(true);
     toast.message("Ashby sync is still running in the background.", {
       description: "Click Sync from Ashby again to resume watching progress.",
     });
   };
 
   const runFetch = async (cookieToUse: string) => {
+    setFetchError(null);
     setLoading(true);
     try {
       setStoredAshbyCookie(cookieToUse);
@@ -355,7 +374,11 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
           : err instanceof Error && err.message
             ? err.message
             : "Failed to fetch from Ashby.";
-      toast.error(message);
+      const failureMessage = describeFetchFailure(message);
+      setFetchError(failureMessage);
+      setCookie(cookieToUse);
+      setOpen(true);
+      toast.error(failureMessage);
     } finally {
       setLoading(false);
     }
@@ -398,6 +421,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       return;
     }
     setCookie(cleaned);
+    setFetchError(null);
     void runFetch(cleaned);
   };
 
@@ -556,6 +580,13 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
               </p>
             </CollapsibleContent>
           </Collapsible>
+
+          {fetchError && !loading && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-foreground">
+              <p className="font-medium text-destructive">Fetch didn’t complete.</p>
+              <p className="mt-1 text-muted-foreground">{fetchError}</p>
+            </div>
+          )}
 
           {loading && (
             <div className="space-y-3 py-1">
