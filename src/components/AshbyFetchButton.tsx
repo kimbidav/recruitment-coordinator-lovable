@@ -366,7 +366,10 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
     if (stored) {
       void (async () => {
         const runningJob = user ? await getLatestRunningJob(user.id) : null;
-        if (runningJob) {
+        const isFresh =
+          runningJob &&
+          Date.now() - new Date(runningJob.started_at).getTime() < 10 * 60_000;
+        if (runningJob && isFresh) {
           setLoading(true);
           try {
             await pollJobUntilComplete(runningJob.id, stored);
@@ -381,6 +384,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
       setOpen(true);
     }
   };
+
 
   const handleDialogSubmit = () => {
     const cleaned = normalizeTokenInput(cookie);
