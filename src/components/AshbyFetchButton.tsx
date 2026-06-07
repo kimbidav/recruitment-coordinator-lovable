@@ -393,7 +393,10 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         onUpload,
         closeDialog: () => setOpen(false),
         clearInput: () => setCookie(""),
+        phase: "basic",
       });
+      // Fire-and-forget the slow enrichment phase so the user sees data immediately.
+      void runEnrichmentPhase({ cookie: cookieToUse, userId: user?.id, onUpload });
       return;
     }
 
