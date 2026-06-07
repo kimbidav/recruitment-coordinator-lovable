@@ -413,7 +413,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
     try {
       setStoredAshbyCookie(cookieToUse);
       const { data, error } = await supabase.functions.invoke("ashby-sync", {
-        body: { cookie: cookieToUse },
+        body: { cookie: cookieToUse, include_enrichment: false },
       });
       if (error) throw error;
 
