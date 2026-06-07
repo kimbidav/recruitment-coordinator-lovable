@@ -48,10 +48,14 @@ async function runSync(args: {
 
     if (!res.ok) {
       const text = await res.text();
+      const errorMessage = [
+        `Ashby extractor request failed (${res.status})`,
+        text?.trim() ? `: ${text.trim()}` : "",
+      ].join("");
       await admin.from("fetch_jobs").update({
         status: "failed",
         finished_at: new Date().toISOString(),
-        error_message: (text || `Request failed (${res.status})`).slice(0, 1000),
+        error_message: errorMessage.slice(0, 1000),
       }).eq("id", jobId);
       return;
     }
