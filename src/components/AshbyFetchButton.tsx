@@ -217,8 +217,9 @@ async function applyFetchResult(args: {
   onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
   closeDialog: () => void;
   clearInput: () => void;
+  phase?: "basic" | "enriched";
 }) {
-  const { cookie, data, userId, complete, onUpload, closeDialog, clearInput } = args;
+  const { cookie, data, userId, complete, onUpload, closeDialog, clearInput, phase = "basic" } = args;
   const { candidates, stats } = parseAshbyResponse(data);
   const orgsTotal = stats.orgs_total;
   const orgsFetched = stats.orgs_fetched;
@@ -226,7 +227,7 @@ async function applyFetchResult(args: {
   const partial = !!(orgsTotal && orgsFetched !== undefined && orgsFailed > 0);
 
   if (candidates.length === 0) {
-    toast.error("No candidates returned from Ashby");
+    if (phase === "basic") toast.error("No candidates returned from Ashby");
     return;
   }
 
@@ -236,12 +237,13 @@ async function applyFetchResult(args: {
     byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
   }
   const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
-  console.log(`[Ashby fetch] ${candidates.length} candidates across ${byCompany.size} companies:`);
+  console.log(`[Ashby fetch:${phase}] ${candidates.length} candidates across ${byCompany.size} companies:`);
   console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
   (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
     candidates,
     stats,
     byCompany: Object.fromEntries(breakdown),
+    phase,
     at: new Date().toISOString(),
   };
 
@@ -254,7 +256,9 @@ async function applyFetchResult(args: {
     await persistKnownClients(userId, harvestClientNames(candidates, stats));
   }
 
-  if (partial) {
+  if (phase === "enriched") {
+    toast.success(`Enrichment complete — feedback and interview dates loaded for ${candidates.length} candidates.`);
+  } else if (partial) {
     toast.warning(
       `Merged ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed. Older synced candidates were kept intact.`,
       { duration: 15000 },
@@ -265,8 +269,55 @@ async function applyFetchResult(args: {
     toast.success(`Loaded ${candidates.length} candidates from Ashby`);
   }
 
-  closeDialog();
-  clearInput();
+  if (phase === "basic") {
+    closeDialog();
+    clearInput();
+  }
+}
+
+/** Kick off the slow enrichment phase in the background after the fast basic phase has rendered. */
+async function runEnrichmentPhase(args: {
+  cookie: string;
+  userId?: string;
+  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
+}) {
+  const { cookie, userId, onUpload } = args;
+  try {
+    toast.message("Pulling interview feedback and stage dates in the background…", { duration: 5000 });
+    const { data, error } = await supabase.functions.invoke("ashby-sync", {
+      body: { cookie, include_enrichment: true },
+    });
+    if (error) throw error;
+    const enrichmentJobId = (data as { job?: { id?: string } } | null)?.job?.id;
+    if (!enrichmentJobId) throw new Error("Failed to start enrichment");
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 360_000) {
+      await new Promise((r) => setTimeout(r, 4000));
+      const job = await getFetchJob(enrichmentJobId);
+      if (!job || job.status === "running") continue;
+      if (job.status === "failed") {
+        console.error("Ashby enrichment failed:", job.error_message);
+        toast.error("Loaded basic Ashby data, but enrichment did not finish.");
+        return;
+      }
+      await applyFetchResult({
+        cookie,
+        data: job.result_payload,
+        userId,
+        complete: () => {},
+        onUpload,
+        closeDialog: () => {},
+        clearInput: () => {},
+        phase: "enriched",
+      });
+      return;
+    }
+    toast.message("Enrichment is still running. It'll appear next time you sync.");
+  } catch (err) {
+    console.error("Ashby enrichment error:", err);
+    toast.error("Loaded basic Ashby data, but enrichment did not finish.");
+  }
 }
 
 export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
@@ -342,7 +393,10 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         onUpload,
         closeDialog: () => setOpen(false),
         clearInput: () => setCookie(""),
+        phase: "basic",
       });
+      // Fire-and-forget the slow enrichment phase so the user sees data immediately.
+      void runEnrichmentPhase({ cookie: cookieToUse, userId: user?.id, onUpload });
       return;
     }
 
@@ -359,7 +413,7 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
     try {
       setStoredAshbyCookie(cookieToUse);
       const { data, error } = await supabase.functions.invoke("ashby-sync", {
-        body: { cookie: cookieToUse },
+        body: { cookie: cookieToUse, include_enrichment: false },
       });
       if (error) throw error;
 
