@@ -119,7 +119,8 @@ async function runSync(args: {
     const orgsTotal = typeof stats.orgs_total === "number" ? stats.orgs_total : null;
     const orgsFetched = typeof stats.orgs_fetched === "number" ? stats.orgs_fetched : null;
     const orgsFailed = typeof stats.orgs_failed === "number" ? stats.orgs_failed : 0;
-    const status: FetchJobStatus = orgsTotal && orgsFetched !== null && orgsFailed > 0 ? "partial" : "succeeded";
+    const partialFlag = (stats as { partial?: boolean }).partial === true;
+    const status: FetchJobStatus = partialFlag || orgsFailed > 0 ? "partial" : "succeeded";
 
     await admin.from("fetch_jobs").update({
       status,
