@@ -129,9 +129,9 @@ function mergeOneCandidate(existing: Candidate, incoming: Candidate): Candidate 
     if (key === "interview_events") continue;
     const v = incoming[key];
     if (ALWAYS_OVERWRITE.has(key)) {
-      (out as Record<string, unknown>)[key as string] = v as unknown;
+      (out as unknown as Record<string, unknown>)[key as string] = v as unknown;
     } else if (isMeaningful(v)) {
-      (out as Record<string, unknown>)[key as string] = v as unknown;
+      (out as unknown as Record<string, unknown>)[key as string] = v as unknown;
     }
   }
   out.interview_events = mergeInterviewEvents(existing.interview_events, incoming.interview_events);
