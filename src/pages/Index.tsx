@@ -35,7 +35,7 @@ const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
 const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 const Index = () => {
-  const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
+  const { candidates, lastUpdated, isLoading, saveSession, mergeAshbyFetch, markCandidateClosed } = usePipelineSession();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
