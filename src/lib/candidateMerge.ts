@@ -105,7 +105,7 @@ export function mergeInterviewEvents(
             }
             merged.interviewers = Array.from(byName.values());
           } else {
-            (merged as Record<string, unknown>)[key as string] = v;
+            (merged as unknown as Record<string, unknown>)[key as string] = v;
           }
         }
       }
