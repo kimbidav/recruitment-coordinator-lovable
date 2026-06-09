@@ -93,7 +93,8 @@ function useSimulatedProgress(active: boolean) {
 }
 
 interface AshbyFetchButtonProps {
-  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
+  /** Accumulate-and-merge handler: stored candidates are never deleted; per-field merge. */
+  onMergeFetch: (candidates: Candidate[]) => Promise<void>;
 }
 
 interface ExtractionStats {
@@ -214,17 +215,19 @@ async function applyFetchResult(args: {
   data: unknown;
   userId?: string;
   complete: () => void;
-  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
+  onMergeFetch: (candidates: Candidate[]) => Promise<void>;
   closeDialog: () => void;
   clearInput: () => void;
   phase?: "basic" | "enriched";
 }) {
-  const { cookie, data, userId, complete, onUpload, closeDialog, clearInput, phase = "basic" } = args;
+  const { cookie, data, userId, complete, onMergeFetch, closeDialog, clearInput, phase = "basic" } = args;
   const { candidates, stats } = parseAshbyResponse(data);
   const orgsTotal = stats.orgs_total;
   const orgsFetched = stats.orgs_fetched;
   const orgsFailed = stats.orgs_failed ?? 0;
-  const partial = !!(orgsTotal && orgsFetched !== undefined && orgsFailed > 0);
+  const statsAny = stats as unknown as { partial?: boolean };
+  // R7: partial if extractor self-declares partial OR any org failed.
+  const partial = statsAny.partial === true || orgsFailed > 0;
 
   if (candidates.length === 0) {
     if (phase === "basic") toast.error("No candidates returned from Ashby");
@@ -237,36 +240,39 @@ async function applyFetchResult(args: {
     byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
   }
   const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
-  console.log(`[Ashby fetch:${phase}] ${candidates.length} candidates across ${byCompany.size} companies:`);
+  console.log(`[Ashby fetch:${phase}] ${candidates.length} candidates across ${byCompany.size} companies (partial=${partial}):`);
   console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
   (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
     candidates,
     stats,
     byCompany: Object.fromEntries(breakdown),
     phase,
+    partial,
     at: new Date().toISOString(),
   };
 
   complete();
   await new Promise((r) => setTimeout(r, 400));
   setStoredAshbyCookie(cookie);
-  onUpload(candidates, { deleteMissing: !partial });
+  // R1/R8: ALWAYS merge. Stored rows the fetch didn't return are kept.
+  await onMergeFetch(candidates);
 
   if (userId) {
     await persistKnownClients(userId, harvestClientNames(candidates, stats));
   }
 
   if (phase === "enriched") {
-    toast.success(`Enrichment complete — feedback and interview dates loaded for ${candidates.length} candidates.`);
+    toast.success(`Enrichment complete — feedback and interview rounds merged for ${candidates.length} candidates.`);
   } else if (partial) {
+    // R7 non-blocking partial banner.
     toast.warning(
-      `Merged ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs — ${orgsFailed} org(s) failed. Older synced candidates were kept intact.`,
+      `Partial Ashby fetch — ${orgsFailed} org(s) failed${orgsTotal ? ` (${orgsFetched ?? "?"}/${orgsTotal})` : ""}. Showing accumulated data; re-run to fill gaps.`,
       { duration: 15000 },
     );
   } else if (orgsTotal && orgsFetched !== undefined) {
-    toast.success(`Loaded ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs`);
+    toast.success(`Merged ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs`);
   } else {
-    toast.success(`Loaded ${candidates.length} candidates from Ashby`);
+    toast.success(`Merged ${candidates.length} candidates from Ashby`);
   }
 
   if (phase === "basic") {
@@ -279,9 +285,9 @@ async function applyFetchResult(args: {
 async function runEnrichmentPhase(args: {
   cookie: string;
   userId?: string;
-  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
+  onMergeFetch: (candidates: Candidate[]) => Promise<void>;
 }) {
-  const { cookie, userId, onUpload } = args;
+  const { cookie, userId, onMergeFetch } = args;
   try {
     toast.message("Pulling interview feedback and stage dates in the background…", { duration: 5000 });
     const { data, error } = await supabase.functions.invoke("ashby-sync", {
@@ -306,7 +312,7 @@ async function runEnrichmentPhase(args: {
         data: job.result_payload,
         userId,
         complete: () => {},
-        onUpload,
+        onMergeFetch,
         closeDialog: () => {},
         clearInput: () => {},
         phase: "enriched",
@@ -320,7 +326,8 @@ async function runEnrichmentPhase(args: {
   }
 }
 
-export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
+
+export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
@@ -390,13 +397,13 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         data: job.result_payload,
         userId: user?.id,
         complete,
-        onUpload,
+        onMergeFetch,
         closeDialog: () => setOpen(false),
         clearInput: () => setCookie(""),
         phase: "basic",
       });
       // Fire-and-forget the slow enrichment phase so the user sees data immediately.
-      void runEnrichmentPhase({ cookie: cookieToUse, userId: user?.id, onUpload });
+      void runEnrichmentPhase({ cookie: cookieToUse, userId: user?.id, onMergeFetch });
       return;
     }
 

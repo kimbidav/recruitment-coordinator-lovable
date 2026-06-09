@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Candidate, InterviewEvent } from "@/data/candidates";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { mergeCandidates } from "@/lib/candidateMerge";
 
 const PAGE_SIZE = 1000;
 // Keep chunks SMALL. PostgREST + supabase-js have payload + timeout limits, and
@@ -101,6 +102,8 @@ interface SaveSessionOptions {
 export function usePipelineSession() {
   const { user } = useAuth();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const candidatesRef = useRef<Candidate[]>([]);
+  useEffect(() => { candidatesRef.current = candidates; }, [candidates]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -666,12 +669,28 @@ export function usePipelineSession() {
     [sessionId, user],
   );
 
+  // Ashby-specific path: ACCUMULATE incoming fetches into stored data.
+  // Never deletes; merges per-field; protects enriched rows from thin re-fetches.
+  // See src/lib/candidateMerge.ts for rules.
+  const mergeAshbyFetch = useCallback(
+    async (incoming: Candidate[]) => {
+      const existing = candidatesRef.current;
+      const { merged, stats } = mergeCandidates(existing, incoming);
+      console.log(
+        `[Ashby merge] +${stats.added} new, ~${stats.updated} updated, =${stats.kept} kept, ↧${stats.downgradeSkipped} downgrade-skipped, total=${stats.total} (incoming=${incoming.length}, existing=${existing.length})`,
+      );
+      await saveSession(merged, { deleteMissing: false });
+    },
+    [saveSession],
+  );
+
   return {
     candidates,
     sessionId,
     lastUpdated,
     isLoading,
     saveSession,
+    mergeAshbyFetch,
     clearSession,
     markCandidateClosed,
   };

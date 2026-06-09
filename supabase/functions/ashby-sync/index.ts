@@ -43,13 +43,50 @@ async function runSync(args: {
   const { admin, jobId, cookie, includeEnrichment } = args;
   // Enrichment takes much longer (it walks every candidate's interview/feedback history).
   const timeoutMs = includeEnrichment ? 300_000 : 240_000;
+  // R6: when enrichment is requested, ask the extractor for the FULL payload —
+  // interview plan, scheduled/future interviews, scorecards, feed, notes, emails.
+  // Without these flags, interview loops and feedback simply never come back, and
+  // no client-side merge can recover data that was never fetched.
+  const extractBody: Record<string, unknown> = {
+    cookie,
+    force: true,
+    include_enrichment: includeEnrichment,
+  };
+  if (includeEnrichment) {
+    Object.assign(extractBody, {
+      include_pipeline_context: true,
+      include_stage_history: true,
+      include_feed: true,
+      include_notes: true,
+      include_emails: true,
+      include_interview_plan: true,
+      include_interview_schedule: true,
+      include_future_interviews: true,
+      include_scorecards: true,
+      include_all_interviews: true,
+      requested_sections: [
+        "candidate",
+        "application",
+        "current_stage",
+        "stage_history",
+        "interview_progress",
+        "interview_plan",
+        "scheduled_interviews",
+        "future_interviews",
+        "scorecards",
+        "feed",
+        "notes",
+        "emails",
+      ],
+    });
+  }
   try {
     const res = await fetchWithTimeout(
       `${ASHBY_AUTOMATION_API_BASE}/api/extract`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cookie, force: true, include_enrichment: includeEnrichment }),
+        body: JSON.stringify(extractBody),
       },
       timeoutMs,
     );
@@ -82,7 +119,8 @@ async function runSync(args: {
     const orgsTotal = typeof stats.orgs_total === "number" ? stats.orgs_total : null;
     const orgsFetched = typeof stats.orgs_fetched === "number" ? stats.orgs_fetched : null;
     const orgsFailed = typeof stats.orgs_failed === "number" ? stats.orgs_failed : 0;
-    const status: FetchJobStatus = orgsTotal && orgsFetched !== null && orgsFailed > 0 ? "partial" : "succeeded";
+    const partialFlag = (stats as { partial?: boolean }).partial === true;
+    const status: FetchJobStatus = partialFlag || orgsFailed > 0 ? "partial" : "succeeded";
 
     await admin.from("fetch_jobs").update({
       status,
