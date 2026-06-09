@@ -66,7 +66,7 @@ const Onboarding = () => {
   const { user, loading: authLoading, signOut } = useAuth();
   const navigate = useNavigate();
   const status = useOnboardingStatus();
-  const { saveSession } = usePipelineSession();
+  const { mergeAshbyFetch } = usePipelineSession();
 
   useEffect(() => {
     document.title = "Welcome — Candidate Pipeline";
@@ -156,8 +156,8 @@ const Onboarding = () => {
             done={status.ashbyConnected}
             action={
               <AshbyFetchButton
-                onUpload={(candidates, options) => {
-                  void saveSession(candidates, options);
+                onMergeFetch={async (candidates) => {
+                  await mergeAshbyFetch(candidates);
                   void status.refresh();
                 }}
               />
