@@ -669,12 +669,28 @@ export function usePipelineSession() {
     [sessionId, user],
   );
 
+  // Ashby-specific path: ACCUMULATE incoming fetches into stored data.
+  // Never deletes; merges per-field; protects enriched rows from thin re-fetches.
+  // See src/lib/candidateMerge.ts for rules.
+  const mergeAshbyFetch = useCallback(
+    async (incoming: Candidate[]) => {
+      const existing = candidatesRef.current;
+      const { merged, stats } = mergeCandidates(existing, incoming);
+      console.log(
+        `[Ashby merge] +${stats.added} new, ~${stats.updated} updated, =${stats.kept} kept, ↧${stats.downgradeSkipped} downgrade-skipped, total=${stats.total} (incoming=${incoming.length}, existing=${existing.length})`,
+      );
+      await saveSession(merged, { deleteMissing: false });
+    },
+    [saveSession],
+  );
+
   return {
     candidates,
     sessionId,
     lastUpdated,
     isLoading,
     saveSession,
+    mergeAshbyFetch,
     clearSession,
     markCandidateClosed,
   };
