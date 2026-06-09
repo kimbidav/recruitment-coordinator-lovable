@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Candidate, InterviewEvent } from "@/data/candidates";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { mergeCandidates } from "@/lib/candidateMerge";
 
 const PAGE_SIZE = 1000;
 // Keep chunks SMALL. PostgREST + supabase-js have payload + timeout limits, and
