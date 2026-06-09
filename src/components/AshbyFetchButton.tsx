@@ -327,7 +327,7 @@ async function runEnrichmentPhase(args: {
 }
 
 
-export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
+export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
@@ -397,13 +397,13 @@ export function AshbyFetchButton({ onUpload }: AshbyFetchButtonProps) {
         data: job.result_payload,
         userId: user?.id,
         complete,
-        onUpload,
+        onMergeFetch,
         closeDialog: () => setOpen(false),
         clearInput: () => setCookie(""),
         phase: "basic",
       });
       // Fire-and-forget the slow enrichment phase so the user sees data immediately.
-      void runEnrichmentPhase({ cookie: cookieToUse, userId: user?.id, onUpload });
+      void runEnrichmentPhase({ cookie: cookieToUse, userId: user?.id, onMergeFetch });
       return;
     }
 
