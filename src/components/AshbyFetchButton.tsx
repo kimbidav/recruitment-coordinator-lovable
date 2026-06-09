@@ -93,7 +93,8 @@ function useSimulatedProgress(active: boolean) {
 }
 
 interface AshbyFetchButtonProps {
-  onUpload: (candidates: Candidate[], options?: { deleteMissing?: boolean }) => void;
+  /** Accumulate-and-merge handler: stored candidates are never deleted; per-field merge. */
+  onMergeFetch: (candidates: Candidate[]) => Promise<void>;
 }
 
 interface ExtractionStats {
