@@ -416,7 +416,7 @@ const Index = () => {
             <div className="flex items-center gap-2 flex-wrap">
               <GoogleCalendarSync candidates={filteredCandidates} />
               <SlackConnectButton onSynced={reloadSlack} />
-              <AshbyFetchButton onUpload={handleCsvUpload} />
+              <AshbyFetchButton onMergeFetch={mergeAshbyFetch} />
               <CsvUpload onUpload={handleCsvUpload} />
               {user && (
                 <Button
