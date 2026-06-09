@@ -102,6 +102,8 @@ interface SaveSessionOptions {
 export function usePipelineSession() {
   const { user } = useAuth();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const candidatesRef = useRef<Candidate[]>([]);
+  useEffect(() => { candidatesRef.current = candidates; }, [candidates]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
