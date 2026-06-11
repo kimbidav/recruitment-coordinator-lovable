@@ -344,12 +344,16 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
       if (job.status === "failed") {
         const failureMessage = describeFetchFailure(job.error_message);
         setFetchError(failureMessage);
-        setCookie(cookieToUse);
         setOpen(true);
-        if ((job.error_message ?? "").includes("401")) {
+        // The extractor's mid-run failure says "Session expired or invalid.
+        // Please paste a fresh cookie" (no literal "401") — match broadly so
+        // a dead stored token gets cleared instead of being re-sent forever.
+        if (/401|session expired|expired or invalid/i.test(job.error_message ?? "")) {
           clearStoredAshbyCookie();
+          setCookie("");
           toast.error("Ashby session expired. Paste a fresh cookie.");
         } else {
+          setCookie(cookieToUse);
           toast.error(failureMessage);
         }
         return;
@@ -407,8 +411,13 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
             : "Failed to fetch from Ashby.";
       const failureMessage = describeFetchFailure(message);
       setFetchError(failureMessage);
-      setCookie(cookieToUse);
       setOpen(true);
+      if (/401|session expired|expired or invalid/i.test(message)) {
+        clearStoredAshbyCookie();
+        setCookie("");
+      } else {
+        setCookie(cookieToUse);
+      }
       toast.error(failureMessage);
     } finally {
       setLoading(false);
