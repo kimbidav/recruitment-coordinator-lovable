@@ -93,9 +93,10 @@ export function CandidateTable({
       let bVal: string | number;
 
       if (sortField === "progress") {
-        // Sort by percentage of completion (current/total)
-        aVal = a.current_stage_index / a.total_stages;
-        bVal = b.current_stage_index / b.total_stages;
+        // Sort by percentage of completion (current/total); rows with no
+        // stage data sort as 0 instead of NaN (NaN breaks the comparator).
+        aVal = a.total_stages > 0 ? a.current_stage_index / a.total_stages : 0;
+        bVal = b.total_stages > 0 ? b.current_stage_index / b.total_stages : 0;
       } else if (sortField === "last_activity_at") {
         aVal = new Date(a.last_activity_at).getTime();
         bVal = new Date(b.last_activity_at).getTime();

@@ -86,9 +86,58 @@ Deno.serve(async (req) => {
       }).eq("user_id", userId);
     }
 
+    // Dedup against events already on the calendar: same title on the same
+    // day = already synced. Without this, every click re-creates the whole
+    // batch as duplicates.
+    const existingKeys = new Set<string>();
+    try {
+      const times = events
+        .map((ev) => new Date(ev.start_time).getTime())
+        .filter((t) => !isNaN(t));
+      if (times.length > 0) {
+        const timeMin = new Date(Math.min(...times) - 86_400_000).toISOString();
+        const timeMax = new Date(Math.max(...times) + 86_400_000).toISOString();
+        const listRes = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events?` +
+            new URLSearchParams({
+              timeMin,
+              timeMax,
+              singleEvents: "true",
+              maxResults: "2500",
+            }),
+          { headers: { Authorization: `Bearer ${accessToken}` } },
+        );
+        if (listRes.ok) {
+          const listJson = await listRes.json();
+          for (const item of listJson.items ?? []) {
+            const summary: string = item.summary ?? "";
+            const start: string = item.start?.dateTime ?? item.start?.date ?? "";
+            if (!summary || !start) continue;
+            // Google may echo dateTime back in the calendar's timezone, so
+            // normalize to the UTC date before comparing.
+            const t = new Date(start).getTime();
+            const day = isNaN(t) ? start.slice(0, 10) : new Date(t).toISOString().slice(0, 10);
+            existingKeys.add(`${summary}|${day}`);
+          }
+        }
+      }
+    } catch {
+      // Dedup is best-effort; if the listing fails we still create events.
+    }
+
     let created = 0;
+    let skipped = 0;
     const errors: string[] = [];
     for (const ev of events) {
+      const evTime = new Date(ev.start_time).getTime();
+      const evDay = isNaN(evTime)
+        ? ev.start_time.slice(0, 10)
+        : new Date(evTime).toISOString().slice(0, 10);
+      const key = `${ev.interview_title}|${evDay}`;
+      if (existingKeys.has(key)) {
+        skipped++;
+        continue;
+      }
       try {
         const res = await fetch(
           "https://www.googleapis.com/calendar/v3/calendars/primary/events",
@@ -119,9 +168,12 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({
       success: true,
       created,
+      skipped,
       total: events.length,
       errors,
-      message: `Created ${created}/${events.length} calendar events`,
+      message: skipped > 0
+        ? `Created ${created} calendar events (${skipped} already existed)`
+        : `Created ${created}/${events.length} calendar events`,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";

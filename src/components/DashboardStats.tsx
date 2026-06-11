@@ -12,9 +12,9 @@ export function DashboardStats({ candidates }: DashboardStatsProps) {
     c.decision_status.toLowerCase().includes("needs") || 
     c.decision_status.toLowerCase().includes("waiting")
   ).length;
-  const avgDaysInStage = Math.round(
-    candidates.reduce((acc, c) => acc + c.days_in_stage, 0) / candidates.length
-  );
+  const avgDaysInStage = candidates.length > 0
+    ? Math.round(candidates.reduce((acc, c) => acc + (c.days_in_stage || 0), 0) / candidates.length)
+    : 0;
 
   const stats = [
     {

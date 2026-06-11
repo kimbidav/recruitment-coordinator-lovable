@@ -64,3 +64,39 @@ export async function getFetchJob(id: string): Promise<FetchJob | null> {
   }
   return (data as FetchJob | null) ?? null;
 }
+
+export interface FetchJobProgress {
+  completed: number;
+  total: number;
+  current_org: string;
+}
+
+/** Live sweep progress reported by the extractor, stashed on the running job row. */
+export function getJobProgress(job: FetchJob | null): FetchJobProgress | null {
+  const payload = job?.result_payload as { progress?: unknown } | null | undefined;
+  const p = payload?.progress as Partial<FetchJobProgress> | null | undefined;
+  if (!p || typeof p.total !== "number" || p.total <= 0) return null;
+  return {
+    completed: typeof p.completed === "number" ? p.completed : 0,
+    total: p.total,
+    current_org: typeof p.current_org === "string" ? p.current_org : "",
+  };
+}
+
+/**
+ * Ask the ashby-sync edge function to check the extractor and advance the job.
+ * This is the poll the UI should use while a job is running — reading the row
+ * directly never advances it (nothing else talks to the extractor).
+ */
+export async function pollFetchJob(id: string): Promise<FetchJob | null> {
+  const { data, error } = await supabase.functions.invoke("ashby-sync", {
+    body: { poll_job_id: id },
+  });
+  if (error) {
+    console.error("pollFetchJob failed:", error.message);
+    // Network blip or edge hiccup — fall back to the row as-is so the
+    // caller keeps polling instead of aborting the watch.
+    return getFetchJob(id);
+  }
+  return ((data as { job?: FetchJob } | null)?.job as FetchJob | null) ?? null;
+}

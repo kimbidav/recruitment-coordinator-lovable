@@ -33,7 +33,12 @@ import {
   setStoredAshbyCookie,
   clearStoredAshbyCookie,
 } from "@/lib/ashbyCookie";
-import { getFetchJob, getLatestRunningJob } from "@/lib/fetchJobs";
+import {
+  getJobProgress,
+  getLatestRunningJob,
+  pollFetchJob,
+  type FetchJobProgress,
+} from "@/lib/fetchJobs";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -218,19 +223,18 @@ async function applyFetchResult(args: {
   onMergeFetch: (candidates: Candidate[]) => Promise<void>;
   closeDialog: () => void;
   clearInput: () => void;
-  phase?: "basic" | "enriched";
 }) {
-  const { cookie, data, userId, complete, onMergeFetch, closeDialog, clearInput, phase = "basic" } = args;
+  const { cookie, data, userId, complete, onMergeFetch, closeDialog, clearInput } = args;
   const { candidates, stats } = parseAshbyResponse(data);
   const orgsTotal = stats.orgs_total;
   const orgsFetched = stats.orgs_fetched;
   const orgsFailed = stats.orgs_failed ?? 0;
-  const statsAny = stats as unknown as { partial?: boolean };
-  // R7: partial if extractor self-declares partial OR any org failed.
-  const partial = statsAny.partial === true || orgsFailed > 0;
+  const statsAny = stats as unknown as { complete?: boolean };
+  // Partial if the extractor says the sweep didn't complete OR any org failed.
+  const partial = statsAny.complete === false || orgsFailed > 0;
 
   if (candidates.length === 0) {
-    if (phase === "basic") toast.error("No candidates returned from Ashby");
+    toast.error("No candidates returned from Ashby");
     return;
   }
 
@@ -240,13 +244,12 @@ async function applyFetchResult(args: {
     byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
   }
   const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
-  console.log(`[Ashby fetch:${phase}] ${candidates.length} candidates across ${byCompany.size} companies (partial=${partial}):`);
+  console.log(`[Ashby fetch] ${candidates.length} candidates across ${byCompany.size} companies (partial=${partial}):`);
   console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
   (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
     candidates,
     stats,
     byCompany: Object.fromEntries(breakdown),
-    phase,
     partial,
     at: new Date().toISOString(),
   };
@@ -254,17 +257,16 @@ async function applyFetchResult(args: {
   complete();
   await new Promise((r) => setTimeout(r, 400));
   setStoredAshbyCookie(cookie);
-  // R1/R8: ALWAYS merge. Stored rows the fetch didn't return are kept.
+  // ALWAYS merge. Stored rows the fetch didn't return are kept, and interview /
+  // feedback enrichment accumulates across runs — the extractor enriches as many
+  // candidates as fit its per-run budget, so repeated syncs fill in the rest.
   await onMergeFetch(candidates);
 
   if (userId) {
     await persistKnownClients(userId, harvestClientNames(candidates, stats));
   }
 
-  if (phase === "enriched") {
-    toast.success(`Enrichment complete — feedback and interview rounds merged for ${candidates.length} candidates.`);
-  } else if (partial) {
-    // R7 non-blocking partial banner.
+  if (partial) {
     toast.warning(
       `Partial Ashby fetch — ${orgsFailed} org(s) failed${orgsTotal ? ` (${orgsFetched ?? "?"}/${orgsTotal})` : ""}. Showing accumulated data; re-run to fill gaps.`,
       { duration: 15000 },
@@ -275,55 +277,8 @@ async function applyFetchResult(args: {
     toast.success(`Merged ${candidates.length} candidates from Ashby`);
   }
 
-  if (phase === "basic") {
-    closeDialog();
-    clearInput();
-  }
-}
-
-/** Kick off the slow enrichment phase in the background after the fast basic phase has rendered. */
-async function runEnrichmentPhase(args: {
-  cookie: string;
-  userId?: string;
-  onMergeFetch: (candidates: Candidate[]) => Promise<void>;
-}) {
-  const { cookie, userId, onMergeFetch } = args;
-  try {
-    toast.message("Pulling interview feedback and stage dates in the background…", { duration: 5000 });
-    const { data, error } = await supabase.functions.invoke("ashby-sync", {
-      body: { cookie, include_enrichment: true },
-    });
-    if (error) throw error;
-    const enrichmentJobId = (data as { job?: { id?: string } } | null)?.job?.id;
-    if (!enrichmentJobId) throw new Error("Failed to start enrichment");
-
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < 360_000) {
-      await new Promise((r) => setTimeout(r, 4000));
-      const job = await getFetchJob(enrichmentJobId);
-      if (!job || job.status === "running") continue;
-      if (job.status === "failed") {
-        console.error("Ashby enrichment failed:", job.error_message);
-        toast.error("Loaded basic Ashby data, but enrichment did not finish.");
-        return;
-      }
-      await applyFetchResult({
-        cookie,
-        data: job.result_payload,
-        userId,
-        complete: () => {},
-        onMergeFetch,
-        closeDialog: () => {},
-        clearInput: () => {},
-        phase: "enriched",
-      });
-      return;
-    }
-    toast.message("Enrichment is still running. It'll appear next time you sync.");
-  } catch (err) {
-    console.error("Ashby enrichment error:", err);
-    toast.error("Loaded basic Ashby data, but enrichment did not finish.");
-  }
+  closeDialog();
+  clearInput();
 }
 
 
@@ -334,6 +289,7 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [staleJobNotified, setStaleJobNotified] = useState(false);
+  const [liveProgress, setLiveProgress] = useState<FetchJobProgress | null>(null);
   const { progress, label, complete } = useSimulatedProgress(loading);
   const os = useMemo(detectOS, []);
   const devtoolsKey = os === "mac" ? "⌘⌥I" : "F12";
@@ -351,13 +307,14 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
   };
 
   // On mount: warn if a previous fetch is still marked running (likely stalled).
+  // Full sweeps can legitimately take 15-20 min, so only flag truly old jobs.
   useEffect(() => {
     if (!user || staleJobNotified) return;
     void (async () => {
       const job = await getLatestRunningJob(user.id);
       if (!job) return;
       const ageMin = (Date.now() - new Date(job.started_at).getTime()) / 60_000;
-      if (ageMin > 10) {
+      if (ageMin > 30) {
         toast.warning(
           `A previous Ashby fetch from ${ageMin.toFixed(0)} min ago is still marked running. It may have stalled — re-run when ready.`,
           { duration: 12000 },
@@ -369,14 +326,20 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
 
   const validation = validateToken(cookie);
 
+  // A full org sweep takes up to ~20 min on slow days; the extractor keeps its
+  // job for 30 min, so watch for 25. Each poll goes through the edge function,
+  // which is what actually advances the job (it checks the extractor's status).
   const pollJobUntilComplete = async (jobId: string, cookieToUse: string) => {
     const pollStartedAt = Date.now();
-    while (Date.now() - pollStartedAt < 390_000) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const job = await getFetchJob(jobId);
+    while (Date.now() - pollStartedAt < 1_500_000) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const job = await pollFetchJob(jobId);
       if (!job) continue;
 
-      if (job.status === "running") continue;
+      if (job.status === "running") {
+        setLiveProgress(getJobProgress(job));
+        continue;
+      }
 
       if (job.status === "failed") {
         const failureMessage = describeFetchFailure(job.error_message);
@@ -400,10 +363,7 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
         onMergeFetch,
         closeDialog: () => setOpen(false),
         clearInput: () => setCookie(""),
-        phase: "basic",
       });
-      // Fire-and-forget the slow enrichment phase so the user sees data immediately.
-      void runEnrichmentPhase({ cookie: cookieToUse, userId: user?.id, onMergeFetch });
       return;
     }
 
@@ -420,9 +380,19 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
     try {
       setStoredAshbyCookie(cookieToUse);
       const { data, error } = await supabase.functions.invoke("ashby-sync", {
-        body: { cookie: cookieToUse, include_enrichment: false },
+        body: { cookie: cookieToUse },
       });
-      if (error) throw error;
+      if (error) {
+        // invoke() hides the response body on non-2xx; surface the real
+        // message (e.g. "Ashby session expired (401)") instead of the generic
+        // "Edge Function returned a non-2xx status code".
+        const ctx = (error as { context?: Response }).context;
+        if (ctx && typeof ctx.json === "function") {
+          const body = await ctx.json().catch(() => null);
+          if (body?.error) throw new Error(body.error);
+        }
+        throw error;
+      }
 
       const jobId = (data as { job?: { id?: string } } | null)?.job?.id;
       if (!jobId) throw new Error("Failed to start Ashby sync");
@@ -442,6 +412,7 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
       toast.error(failureMessage);
     } finally {
       setLoading(false);
+      setLiveProgress(null);
     }
   };
 
@@ -449,16 +420,19 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
     const stored = getStoredAshbyCookie();
     if (stored) {
       void (async () => {
+        // Re-attach to a sweep that's still running (e.g. after a page reload)
+        // instead of starting a second one.
         const runningJob = user ? await getLatestRunningJob(user.id) : null;
         const isFresh =
           runningJob &&
-          Date.now() - new Date(runningJob.started_at).getTime() < 10 * 60_000;
+          Date.now() - new Date(runningJob.started_at).getTime() < 30 * 60_000;
         if (runningJob && isFresh) {
           setLoading(true);
           try {
             await pollJobUntilComplete(runningJob.id, stored);
           } finally {
             setLoading(false);
+            setLiveProgress(null);
           }
           return;
         }
@@ -510,7 +484,13 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
         ) : (
           <Download className="h-4 w-4" />
         )}
-        {loading ? "Syncing..." : hasStoredCookie ? "Sync from Ashby" : "Connect Ashby"}
+        {loading
+          ? liveProgress
+            ? `Syncing ${liveProgress.completed}/${liveProgress.total} orgs...`
+            : "Syncing..."
+          : hasStoredCookie
+            ? "Sync from Ashby"
+            : "Connect Ashby"}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -661,10 +641,15 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
                   </p>
                 </div>
               </div>
-              <Progress value={progress} className="h-2" />
+              <Progress
+                value={liveProgress ? Math.round((liveProgress.completed / liveProgress.total) * 100) : progress}
+                className="h-2"
+              />
               <p className="text-xs text-muted-foreground flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                {label}
+                {liveProgress
+                  ? `Sweeping orgs (${liveProgress.completed}/${liveProgress.total})${liveProgress.current_org ? `: ${liveProgress.current_org}` : ""}`
+                  : label}
               </p>
             </div>
           )}
