@@ -138,6 +138,11 @@ function statusFromReactions(reactions: SlackReaction[] | undefined): string {
   return "submitted";
 }
 
+// Slack rate-limits aggressively (conversations.history is Tier 3, and apps
+// created after May 2025 get much lower limits). A 429 mid-scan used to silently
+// drop the rest of a channel; instead honor Retry-After (capped) a few times.
+const RATE_LIMIT_MAX_WAIT_MS = 30_000;
+
 async function slackGet(
   path: string,
   token: string,
@@ -145,12 +150,23 @@ async function slackGet(
 ): Promise<Record<string, unknown>> {
   const url = new URL(`${SLACK_API}/${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(`Slack ${path} failed: ${data.error ?? "unknown"}`);
-  return data;
+
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const retryAfterSec = Number(res.headers.get("Retry-After")) || 10;
+    const data = await res.json().catch(() => ({ ok: false, error: `http_${res.status}` }));
+    const rateLimited = res.status === 429 || data.error === "ratelimited";
+    if (rateLimited && attempt < 3) {
+      await new Promise((r) =>
+        setTimeout(r, Math.min(retryAfterSec * 1000, RATE_LIMIT_MAX_WAIT_MS)),
+      );
+      continue;
+    }
+    if (!data.ok) throw new Error(`Slack ${path} failed: ${data.error ?? "unknown"}`);
+    return data;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -239,13 +255,14 @@ Deno.serve(async (req) => {
     // Load existing mappings to preserve user overrides
     const { data: existingMappings } = await supabase
       .from("slack_channel_mappings")
-      .select("channel_id, client_name, enabled")
+      .select("channel_id, client_name, enabled, last_synced_at")
       .eq("user_id", userId);
-    const existingByChannel = new Map<string, { client_name: string; enabled: boolean }>();
+    const existingByChannel = new Map<string, { client_name: string; enabled: boolean; last_synced_at: string | null }>();
     for (const m of existingMappings ?? []) {
       existingByChannel.set(m.channel_id as string, {
         client_name: m.client_name as string,
         enabled: m.enabled as boolean,
+        last_synced_at: (m.last_synced_at as string | null) ?? null,
       });
     }
 
@@ -280,21 +297,46 @@ Deno.serve(async (req) => {
       if (disableErr) console.error("disable stale mappings error:", disableErr.message);
     }
 
-    // 2) For each enabled channel, fetch parent messages by this user
-    const enabledChannels = candidateChannels.filter((c) => {
-      const m = existingByChannel.get(c.id);
-      return m ? m.enabled : true;
-    });
+    // 2) For each enabled channel, fetch parent messages by this user.
+    // Scan stalest-first so that when we hit the time budget, the channels we
+    // skipped are the freshest ones — repeated syncs round-robin through all.
+    const enabledChannels = candidateChannels
+      .filter((c) => {
+        const m = existingByChannel.get(c.id);
+        return m ? m.enabled : true;
+      })
+      .sort((a, b) => {
+        const ta = existingByChannel.get(a.id)?.last_synced_at;
+        const tb = existingByChannel.get(b.id)?.last_synced_at;
+        return (ta ? new Date(ta).getTime() : 0) - (tb ? new Date(tb).getTime() : 0);
+      });
+
+    // Stop scanning well before the edge-function wall clock (~400s) so we
+    // always get to save what we found. Rate-limit waits make long scans real.
+    const scanStartedAt = Date.now();
+    const SCAN_BUDGET_MS = 240_000;
+    const channelsRemaining: string[] = [];
 
     const submissionsUpsert: Array<Record<string, unknown>> = [];
     let messagesSeen = 0;
 
     for (const channel of enabledChannels) {
+      if (Date.now() - scanStartedAt > SCAN_BUDGET_MS) {
+        channelsRemaining.push(channel.name);
+        continue;
+      }
       const clientName =
         existingByChannel.get(channel.id)?.client_name ?? inferClientName(channel.name);
 
+      let channelComplete = true;
       let chCursor = "";
       for (let i = 0; i < 20; i++) {
+        if (Date.now() - scanStartedAt > SCAN_BUDGET_MS) {
+          // Mid-channel bail: don't bump last_synced_at so the next sync
+          // re-scans this channel from the top.
+          channelComplete = false;
+          break;
+        }
         let data: Record<string, unknown>;
         try {
           data = await slackGet("conversations.history", token, {
@@ -343,12 +385,15 @@ Deno.serve(async (req) => {
         if (!chCursor) break;
       }
 
-      // Update last_synced_at for this channel
-      await supabase
-        .from("slack_channel_mappings")
-        .update({ last_synced_at: new Date().toISOString() })
-        .eq("user_id", userId)
-        .eq("channel_id", channel.id);
+      if (channelComplete) {
+        await supabase
+          .from("slack_channel_mappings")
+          .update({ last_synced_at: new Date().toISOString() })
+          .eq("user_id", userId)
+          .eq("channel_id", channel.id);
+      } else {
+        channelsRemaining.push(channel.name);
+      }
     }
 
     // Upsert submissions in chunks
@@ -368,10 +413,12 @@ Deno.serve(async (req) => {
       JSON.stringify({
         ok: true,
         channels_discovered: candidateChannels.length,
-        channels_scanned: enabledChannels.length,
+        channels_scanned: enabledChannels.length - channelsRemaining.length,
         messages_seen: messagesSeen,
         submissions_saved: submissionsSaved,
         missing_name_count: missingNameCount,
+        partial: channelsRemaining.length > 0,
+        channels_remaining: channelsRemaining,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

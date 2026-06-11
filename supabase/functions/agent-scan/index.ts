@@ -704,29 +704,51 @@ Deno.serve(async (req) => {
 
     const isFirstInvocation = !cursor;
     const existingByKey = new Map<string, { id: string; status: string }>();
+    // Cards the user explicitly dismissed/resolved. Without this, every scan
+    // re-created an open card for a submission the user just dismissed — the
+    // "cards keep coming back" bug. Dismissed = never recreate; resolved =
+    // recreate only after a cooldown (the stall may genuinely re-emerge).
+    const userClosedByKey = new Map<string, { status: string; updated_at: string }>();
+    const indexCards = (cards: Array<{ id: string; slack_submission_id: string | null; kind: string; status: string; updated_at: string }> | null) => {
+      for (const c of cards ?? []) {
+        const key = `${c.slack_submission_id}::${c.kind}`;
+        if (c.status === "open" || c.status === "snoozed") {
+          existingByKey.set(key, { id: c.id, status: c.status });
+        } else if (c.status === "dismissed" || c.status === "resolved") {
+          const prev = userClosedByKey.get(key);
+          if (!prev || new Date(c.updated_at).getTime() > new Date(prev.updated_at).getTime()) {
+            userClosedByKey.set(key, { status: c.status, updated_at: c.updated_at });
+          }
+        }
+      }
+    };
     if (isFirstInvocation) {
       const { data: existingCards } = await admin
         .from("agent_action_cards")
-        .select("id, slack_submission_id, kind, status")
-        .eq("user_id", userId)
-        .in("status", ["open", "snoozed"]);
-      for (const c of existingCards ?? []) {
-        existingByKey.set(`${c.slack_submission_id}::${c.kind}`, { id: c.id, status: c.status });
-      }
+        .select("id, slack_submission_id, kind, status, updated_at")
+        .eq("user_id", userId);
+      indexCards(existingCards);
     } else {
       const ids = batch.map((s) => s.id);
       if (ids.length) {
         const { data: existingCards } = await admin
           .from("agent_action_cards")
-          .select("id, slack_submission_id, kind, status")
+          .select("id, slack_submission_id, kind, status, updated_at")
           .eq("user_id", userId)
-          .in("slack_submission_id", ids)
-          .in("status", ["open", "snoozed"]);
-        for (const c of existingCards ?? []) {
-          existingByKey.set(`${c.slack_submission_id}::${c.kind}`, { id: c.id, status: c.status });
-        }
+          .in("slack_submission_id", ids);
+        indexCards(existingCards);
       }
     }
+    const RESOLVED_RECREATE_COOLDOWN_MS = 3 * 86400000;
+    const userSuppression = (key: string): string | null => {
+      const closed = userClosedByKey.get(key);
+      if (!closed) return null;
+      if (closed.status === "dismissed") return "user_dismissed";
+      if (Date.now() - new Date(closed.updated_at).getTime() < RESOLVED_RECREATE_COOLDOWN_MS) {
+        return "recently_resolved_by_user";
+      }
+      return null;
+    };
     const stillRelevant = new Set<string>();
     // Track sub-level outcomes for batch grouping at the end
     const stallsByClient = new Map<string, Array<{
@@ -1260,8 +1282,18 @@ Deno.serve(async (req) => {
             suggested_slack_message: slackMsg,
             ...ashbyFlagsFor(company, candidateName),
           };
-          stillRelevant.add(`${sub.id}::${snoozeKind}`);
-          const existing = existingByKey.get(`${sub.id}::${snoozeKind}`);
+          const snoozeKey = `${sub.id}::${snoozeKind}`;
+          const existing = existingByKey.get(snoozeKey);
+          const closedReason = existing ? null : userSuppression(snoozeKey);
+          if (closedReason) {
+            await admin.from("agent_scan_items").insert({
+              user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+              candidate_name: candidateName, client_name: company,
+              outcome: "suppressed", reason: closedReason, signal,
+            });
+            continue;
+          }
+          stillRelevant.add(snoozeKey);
           if (existing) {
             await admin.from("agent_action_cards").update({
               payload: snoozePayload, status: "snoozed", snooze_until: snoozeUntil,
@@ -1278,7 +1310,9 @@ Deno.serve(async (req) => {
             candidate_name: candidateName, client_name: company,
             outcome: "snoozed_until_scheduled",
             reason: suppressedReason ?? "scheduled_future",
-            signal,
+            // card_kind makes the final-page auto-resolve able to reconstruct
+            // the exact card key (the reason string is not reliable for that).
+            signal: { ...signal, card_kind: snoozeKind },
           });
           continue;
         }
@@ -1297,6 +1331,19 @@ Deno.serve(async (req) => {
           ...ashbyFlagsFor(company, candidateName),
         };
 
+        const cardKey = `${sub.id}::${kind}`;
+        const existing = existingByKey.get(cardKey);
+        // Respect the user's dismiss/resolve: don't resurrect the card.
+        const closedReason = existing ? null : userSuppression(cardKey);
+        if (closedReason) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "suppressed", reason: closedReason, signal,
+          });
+          continue;
+        }
+
         // Hold intro_stall for batching — partition by ashby vs slack so each batch is single-bucket.
         if (kind === "intro_stall" && company) {
           const trackedHere = (payload as { ashby_tracked?: boolean }).ashby_tracked === true;
@@ -1306,8 +1353,7 @@ Deno.serve(async (req) => {
           // We'll write the card below tentatively; batch sweep may roll it up.
         }
 
-        stillRelevant.add(`${sub.id}::${kind}`);
-        const existing = existingByKey.get(`${sub.id}::${kind}`);
+        stillRelevant.add(cardKey);
         let outcome: string;
         if (existing) {
           await admin.from("agent_action_cards").update({
@@ -1327,7 +1373,7 @@ Deno.serve(async (req) => {
         await admin.from("agent_scan_items").insert({
           user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
           candidate_name: candidateName, client_name: company,
-          outcome, reason: kind, signal,
+          outcome, reason: kind, signal: { ...signal, card_kind: kind },
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1398,20 +1444,37 @@ Deno.serve(async (req) => {
         });
       }
 
-      stillRelevant.add(`${batchKey}::batch_followup`);
-      const existingBatch = existingByKey.get(`${batchKey}::batch_followup`);
+      const batchCardKey = `${batchKey}::batch_followup`;
+      const existingBatch = existingByKey.get(batchCardKey);
+      const batchClosedReason = existingBatch ? null : userSuppression(batchCardKey);
+      let batchOutcome: string;
       if (existingBatch) {
         await admin.from("agent_action_cards").update({
           payload, status: "open", snooze_until: null,
           updated_at: new Date().toISOString(),
         }).eq("id", existingBatch.id);
-      } else {
+        stillRelevant.add(batchCardKey);
+        batchOutcome = "card_updated";
+      } else if (!batchClosedReason) {
         await admin.from("agent_action_cards").insert({
           user_id: userId, slack_submission_id: batchKey,
           kind: "batch_followup", status: "open", payload,
         });
         cardsCreated++;
+        stillRelevant.add(batchCardKey);
+        batchOutcome = "card_created";
+      } else {
+        // User dismissed/resolved this batch card — keep it closed (the
+        // member cards were rolled up above, so nothing re-nags).
+        batchOutcome = "suppressed";
       }
+      await admin.from("agent_scan_items").insert({
+        user_id: userId, scan_run_id: runId, slack_submission_id: batchKey,
+        candidate_name: `${candNames.length} candidates`, client_name: clientName,
+        outcome: batchOutcome,
+        reason: batchOutcome === "suppressed" ? batchClosedReason : "batch_followup",
+        signal: { card_kind: "batch_followup" },
+      });
     }
 
     // Auto-resolve cards no longer relevant — only on final page
@@ -1433,12 +1496,18 @@ Deno.serve(async (req) => {
           .in("status", ["open", "snoozed"]);
         const { data: items } = await admin
           .from("agent_scan_items")
-          .select("slack_submission_id, outcome, reason")
+          .select("slack_submission_id, outcome, reason, signal")
+          .eq("user_id", userId)
           .eq("scan_run_id", runId);
         const seen = new Set<string>();
         for (const it of items ?? []) {
           if (it.outcome === "card_created" || it.outcome === "card_updated" || it.outcome === "snoozed_until_scheduled") {
-            seen.add(`${it.slack_submission_id}::${it.reason === "scheduled_future" || it.reason?.startsWith("scheduled") || it.reason?.startsWith("next_round") ? (it.reason?.includes("post_interview") ? "post_interview_followup" : "intro_stall") : it.reason}`);
+            // card_kind is stamped into the signal at every card-write site;
+            // reconstructing the kind from the reason string mis-keyed snoozed
+            // and batch cards and auto-resolved them right after creating them.
+            const ck = (it.signal as { card_kind?: string } | null)?.card_kind;
+            const kindGuess = ck ?? (it.reason?.includes("post_interview") ? "post_interview_followup" : "intro_stall");
+            seen.add(`${it.slack_submission_id}::${kindGuess}`);
           }
         }
         for (const c of openCards ?? []) {
@@ -1462,7 +1531,11 @@ Deno.serve(async (req) => {
       };
       if (!hasMore) finishPatch.finished_at = new Date().toISOString();
       if (scanError) finishPatch.error = scanError;
-      await admin.from("agent_scan_runs").update(finishPatch).eq("id", runId);
+      let runUpdate = admin.from("agent_scan_runs").update(finishPatch).eq("id", runId);
+      // run_id comes from the request body on paginated calls — scope to the
+      // authed user so a forged run_id can't touch another user's run row.
+      if (userId) runUpdate = runUpdate.eq("user_id", userId);
+      await runUpdate;
     }
   }
 

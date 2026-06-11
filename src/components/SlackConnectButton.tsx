@@ -71,15 +71,24 @@ export function SlackConnectButton({ onSynced }: SlackConnectButtonProps) {
         channels_scanned?: number;
         submissions_saved?: number;
         missing_name_count?: number;
+        partial?: boolean;
+        channels_remaining?: string[];
       };
       const missing =
         s.missing_name_count && s.missing_name_count > 0
           ? ` (${s.missing_name_count} need review)`
           : "";
-      toast.success(
-        `Synced ${s.submissions_saved ?? 0} submissions from ${s.channels_scanned ?? 0} channels${missing}`,
-        { id: t },
-      );
+      if (s.partial) {
+        toast.warning(
+          `Synced ${s.submissions_saved ?? 0} submissions from ${s.channels_scanned ?? 0} channels, but Slack rate limits stopped the scan early (${s.channels_remaining?.length ?? 0} channels left). Run Sync again — it picks up where it left off.`,
+          { id: t, duration: 12000 },
+        );
+      } else {
+        toast.success(
+          `Synced ${s.submissions_saved ?? 0} submissions from ${s.channels_scanned ?? 0} channels${missing}`,
+          { id: t },
+        );
+      }
       await reload();
       onSynced?.();
     } finally {
