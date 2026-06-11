@@ -1,1 +1,6 @@
 project_id = "sjbygvfjxarfajzasajr"
+
+# Slack calls this endpoint directly (Events API) — it authenticates with the
+# Slack request signature (SLACK_SIGNING_SECRET), not a Supabase JWT.
+[functions.slack-events]
+verify_jwt = false
