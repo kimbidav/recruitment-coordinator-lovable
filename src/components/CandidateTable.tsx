@@ -16,19 +16,26 @@ import { cn } from "@/lib/utils";
 import { format, parseISO } from "date-fns";
 import { SLACK_STATUS_LABEL, SlackStatus } from "@/lib/slackParse";
 
-function SourcePill({ source, hasSlack }: { source: string; hasSlack: boolean }) {
-  const label =
-    source === "both" || (source === "ashby" && hasSlack)
-      ? "Both"
-      : source === "slack"
-        ? "Slack"
-        : "Ashby";
+// Source is company-level: "ashby" = the client runs an Ashby instance (every
+// loop there is tagged ashby, even Slack-only submissions); "slack" = client
+// with no Ashby presence. A Slack-only candidate at an Ashby client gets the
+// warning variant — they should exist in Ashby but don't.
+function SourcePill({ source, missingFromAshby }: { source: string; missingFromAshby?: boolean }) {
+  if (missingFromAshby) {
+    return (
+      <span
+        title="In a Slack thread at this client, but has no Ashby record — they should be added to Ashby."
+        className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 cursor-help whitespace-nowrap"
+      >
+        Ashby ⚠
+      </span>
+    );
+  }
+  const label = source === "slack" ? "Slack" : "Ashby";
   const cls =
-    label === "Both"
-      ? "bg-primary/10 text-primary"
-      : label === "Slack"
-        ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
-        : "bg-muted text-muted-foreground";
+    label === "Slack"
+      ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+      : "bg-muted text-muted-foreground";
   return (
     <span className={cn("text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded", cls)}>
       {label}
@@ -93,10 +100,12 @@ export function CandidateTable({
       let bVal: string | number;
 
       if (sortField === "progress") {
-        // Sort by percentage of completion (current/total); rows with no
-        // stage data sort as 0 instead of NaN (NaN breaks the comparator).
-        aVal = a.total_stages > 0 ? a.current_stage_index / a.total_stages : 0;
-        bVal = b.total_stages > 0 ? b.current_stage_index / b.total_stages : 0;
+        // Sort by percentage of completion (current/total). Rows with no
+        // stage data (Slack-only candidates) get -1 so they rank below even
+        // a genuine 0/N — unknown progress shouldn't interleave with real
+        // values (and NaN would break the comparator entirely).
+        aVal = a.total_stages > 0 ? a.current_stage_index / a.total_stages : -1;
+        bVal = b.total_stages > 0 ? b.current_stage_index / b.total_stages : -1;
       } else if (sortField === "last_activity_at") {
         aVal = new Date(a.last_activity_at).getTime();
         bVal = new Date(b.last_activity_at).getTime();
@@ -253,17 +262,23 @@ export function CandidateTable({
                     <span className="font-medium">{candidate.company_name}</span>
                   </TableCell>
                   <TableCell>
-                    <SourcePill source={candidate.source} hasSlack={!!candidate.slack_meta} />
+                    <SourcePill source={candidate.source} missingFromAshby={candidate.missing_from_ashby} />
                   </TableCell>
                   <TableCell>
                     <StageBadge stage={candidate.pipeline_stage} />
                   </TableCell>
                   <TableCell>
-                    <ProgressBar
-                      current={candidate.current_stage_index}
-                      total={candidate.total_stages}
-                      className="w-24"
-                    />
+                    {candidate.total_stages > 0 ? (
+                      <ProgressBar
+                        current={candidate.current_stage_index}
+                        total={candidate.total_stages}
+                        className="w-24"
+                      />
+                    ) : (
+                      <span className="text-xs text-muted-foreground" title="No Ashby record — pipeline progress unknown">
+                        —
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={candidate.decision_status} />

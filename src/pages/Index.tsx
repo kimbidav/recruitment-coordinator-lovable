@@ -110,9 +110,10 @@ const Index = () => {
 
   // Merge Ashby candidates with Slack submissions.
   // Match key = normalized(client_name) + normalized(candidate_name).
-  // - Ashby + Slack match -> single Ashby row, slack_meta attached, source="both"
-  // - Ashby only -> source="ashby"
-  // - Slack only -> synthesize a Candidate row, source="slack"
+  // Source is COMPANY-level: every row at a client with an Ashby instance is
+  // tagged "ashby" (even Slack-only submissions there); clients with no Ashby
+  // presence are tagged "slack". A matched Ashby+Slack candidate still gets
+  // slack_meta attached so the Thread button works.
   const mergedCandidates = useMemo<Candidate[]>(() => {
     // Build a lookup of "name-ish tokens" -> canonical display name from Ashby
     // credited_to values, so Slack rows (credited under email) collapse onto the
@@ -170,9 +171,8 @@ const Index = () => {
 
     // Company-level classification driven by the authoritative ashby_known_clients
     // set (cumulative across every past fetch). Every distinct company across
-    // Ashby + Slack is either an "Ashby company" or a "Slack-only company".
-    // Per-candidate source then inherits from the company, with an override:
-    // a candidate seen in BOTH the Ashby fetch and a Slack thread is tagged "both".
+    // Ashby + Slack is either an "Ashby company" or a "Slack-only company",
+    // and every candidate inherits the company's source.
     const ashbyCompanySet = new Set<string>(ashbyClientNames);
     // Also treat any company currently returned from the Ashby fetch as Ashby,
     // even if ashby_known_clients hasn't been refreshed yet on this page load.
@@ -250,7 +250,7 @@ const Index = () => {
         matchedSlackIds.add(slack.id);
         return {
           ...c,
-          source: "both",
+          source: "ashby",
           slack_meta: {
             status: slack.status,
             submitted_at: slack.submitted_at,
@@ -268,12 +268,12 @@ const Index = () => {
     const slackOnly: Candidate[] = slackSubs
       .filter((s) => !matchedSlackIds.has(s.id))
       .map((s) => {
-        // Slack-only candidate. If the COMPANY exists in Ashby (per
-        // ashby_known_clients), we still surface it but the per-candidate
-        // source stays "slack" because we have no Ashby record for THIS
-        // person. Other rows for the same company will be tagged "ashby"
-        // or "both", so the company-level classification reads correctly.
-        const _isAshby = companyIsAshby(s.client_name);
+        // Slack-only candidate: no Ashby record for THIS person, so we don't
+        // know their real pipeline progress — total_stages 0 renders as "—"
+        // and sorts below every real progress value. The source tag still
+        // follows the COMPANY: a loop at an Ashby-instrumented client is
+        // "ashby" even when this particular row only exists in Slack.
+        const isAshby = companyIsAshby(s.client_name);
         return {
           company_name: s.client_name,
           job_title: "—",
@@ -283,9 +283,9 @@ const Index = () => {
           pipeline_stage: slackStatusToPipelineStage(s.status),
           decision_status: slackStatusToDecision(s.status),
           stage_type: "",
-          current_stage_index: s.status === "accepted" ? 1 : 0,
-          total_stages: 1,
-          stage_progress: s.status === "accepted" ? "1/1" : "0/1",
+          current_stage_index: 0,
+          total_stages: 0,
+          stage_progress: "",
           last_activity_at: s.submitted_at,
           days_in_stage: Math.max(
             0,
@@ -293,7 +293,10 @@ const Index = () => {
           ),
           needs_scheduling: false,
           credited_to: userLabel,
-          source: "slack",
+          source: isAshby ? "ashby" : "slack",
+          // Flag the gap: this person is in a Slack thread at an
+          // Ashby-instrumented client but has no Ashby record yet.
+          missing_from_ashby: isAshby,
           feedback_count: 0,
           slack_meta: {
             status: s.status,

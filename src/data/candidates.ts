@@ -39,7 +39,12 @@ export interface Candidate {
   days_in_stage: number;
   needs_scheduling: boolean;
   credited_to: string;
-  source: string; // "ashby" | "slack" | "both"
+  // Company-level: "ashby" = client runs an Ashby instance (all loops there
+  // are ashby, even Slack-only submissions); "slack" = no Ashby presence.
+  source: string; // "ashby" | "slack"
+  // Slack-only candidate at an Ashby-instrumented client — they exist in a
+  // Slack thread but have no Ashby record, i.e. they SHOULD be in Ashby.
+  missing_from_ashby?: boolean;
   feedback_count: number;
   // Ashby returns this as a string label (e.g. "Strong Hire") — not numeric.
   latest_recommendation?: string;
