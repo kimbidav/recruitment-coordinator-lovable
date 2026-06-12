@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       agent_action_cards: {
         Row: {
+          ashby_pair_key: string | null
           candidate_row_id: string | null
           created_at: string
           id: string
@@ -28,6 +29,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string
           id?: string
@@ -40,6 +42,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string
           id?: string
@@ -155,167 +158,29 @@ export type Database = {
       ashby_connection: {
         Row: {
           id: number
-          status: string
-          last_seeded_at: string | null
-          last_ok_at: string | null
           last_error: string | null
+          last_ok_at: string | null
+          last_seeded_at: string | null
           seeded_by: string | null
+          status: string
           updated_at: string
         }
         Insert: {
           id?: number
-          status?: string
-          last_seeded_at?: string | null
-          last_ok_at?: string | null
           last_error?: string | null
+          last_ok_at?: string | null
+          last_seeded_at?: string | null
           seeded_by?: string | null
+          status?: string
           updated_at?: string
         }
         Update: {
           id?: number
-          status?: string
-          last_seeded_at?: string | null
-          last_ok_at?: string | null
           last_error?: string | null
+          last_ok_at?: string | null
+          last_seeded_at?: string | null
           seeded_by?: string | null
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      ashby_orgs: {
-        Row: {
-          org_name: string
-          org_id: string | null
-          first_seen_at: string
-          last_swept_at: string | null
-          last_sweep_ok: boolean | null
-        }
-        Insert: {
-          org_name: string
-          org_id?: string | null
-          first_seen_at?: string
-          last_swept_at?: string | null
-          last_sweep_ok?: boolean | null
-        }
-        Update: {
-          org_name?: string
-          org_id?: string | null
-          first_seen_at?: string
-          last_swept_at?: string | null
-          last_sweep_ok?: boolean | null
-        }
-        Relationships: []
-      }
-      ashby_snapshot_candidates: {
-        Row: {
-          id: string
-          ashby_candidate_id: string
-          ashby_job_id: string
-          application_id: string | null
-          org_id: string | null
-          candidate_name: string
-          company_name: string
-          job_title: string | null
-          pipeline_stage: string | null
-          stage_type: string
-          decision_status: string | null
-          current_stage_index: number
-          total_stages: number
-          stage_progress: string | null
-          days_in_stage: number
-          needs_scheduling: boolean
-          credited_to: string | null
-          source: string | null
-          feedback_count: number
-          latest_recommendation: string | null
-          latest_feedback_author: string | null
-          latest_feedback_date: string | null
-          current_stage_avg_score: number | null
-          current_stage_date: string | null
-          current_stage_interviews: string | null
-          interview_history_summary: string | null
-          last_activity_at: string | null
-          interview_events: Json
-          archived_reason: string | null
-          archived_inferred: boolean | null
-          archived_detected_at: string | null
-          fetched_at: string | null
-          fetch_source: string | null
-          created_at: string
-          updated_at: string
-        }
-        Insert: {
-          id?: string
-          ashby_candidate_id: string
-          ashby_job_id?: string
-          application_id?: string | null
-          org_id?: string | null
-          candidate_name: string
-          company_name: string
-          job_title?: string | null
-          pipeline_stage?: string | null
-          stage_type?: string
-          decision_status?: string | null
-          current_stage_index?: number
-          total_stages?: number
-          stage_progress?: string | null
-          days_in_stage?: number
-          needs_scheduling?: boolean
-          credited_to?: string | null
-          source?: string | null
-          feedback_count?: number
-          latest_recommendation?: string | null
-          latest_feedback_author?: string | null
-          latest_feedback_date?: string | null
-          current_stage_avg_score?: number | null
-          current_stage_date?: string | null
-          current_stage_interviews?: string | null
-          interview_history_summary?: string | null
-          last_activity_at?: string | null
-          interview_events?: Json
-          archived_reason?: string | null
-          archived_inferred?: boolean | null
-          archived_detected_at?: string | null
-          fetched_at?: string | null
-          fetch_source?: string | null
-          created_at?: string
-          updated_at?: string
-        }
-        Update: {
-          id?: string
-          ashby_candidate_id?: string
-          ashby_job_id?: string
-          application_id?: string | null
-          org_id?: string | null
-          candidate_name?: string
-          company_name?: string
-          job_title?: string | null
-          pipeline_stage?: string | null
-          stage_type?: string
-          decision_status?: string | null
-          current_stage_index?: number
-          total_stages?: number
-          stage_progress?: string | null
-          days_in_stage?: number
-          needs_scheduling?: boolean
-          credited_to?: string | null
-          source?: string | null
-          feedback_count?: number
-          latest_recommendation?: string | null
-          latest_feedback_author?: string | null
-          latest_feedback_date?: string | null
-          current_stage_avg_score?: number | null
-          current_stage_date?: string | null
-          current_stage_interviews?: string | null
-          interview_history_summary?: string | null
-          last_activity_at?: string | null
-          interview_events?: Json
-          archived_reason?: string | null
-          archived_inferred?: boolean | null
-          archived_detected_at?: string | null
-          fetched_at?: string | null
-          fetch_source?: string | null
-          created_at?: string
+          status?: string
           updated_at?: string
         }
         Relationships: []
@@ -341,6 +206,144 @@ export type Database = {
           id?: string
           last_seen_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      ashby_orgs: {
+        Row: {
+          first_seen_at: string
+          last_sweep_ok: boolean | null
+          last_swept_at: string | null
+          org_id: string | null
+          org_name: string
+        }
+        Insert: {
+          first_seen_at?: string
+          last_sweep_ok?: boolean | null
+          last_swept_at?: string | null
+          org_id?: string | null
+          org_name: string
+        }
+        Update: {
+          first_seen_at?: string
+          last_sweep_ok?: boolean | null
+          last_swept_at?: string | null
+          org_id?: string | null
+          org_name?: string
+        }
+        Relationships: []
+      }
+      ashby_snapshot_candidates: {
+        Row: {
+          application_id: string | null
+          archived_detected_at: string | null
+          archived_inferred: boolean | null
+          archived_reason: string | null
+          ashby_candidate_id: string
+          ashby_job_id: string
+          candidate_name: string
+          company_name: string
+          created_at: string
+          credited_to: string | null
+          current_stage_avg_score: number | null
+          current_stage_date: string | null
+          current_stage_index: number
+          current_stage_interviews: string | null
+          days_in_stage: number
+          decision_status: string | null
+          feedback_count: number
+          fetch_source: string | null
+          fetched_at: string | null
+          id: string
+          interview_events: Json
+          interview_history_summary: string | null
+          job_title: string | null
+          last_activity_at: string | null
+          latest_feedback_author: string | null
+          latest_feedback_date: string | null
+          latest_recommendation: string | null
+          needs_scheduling: boolean
+          org_id: string | null
+          pipeline_stage: string | null
+          source: string | null
+          stage_progress: string | null
+          stage_type: string
+          total_stages: number
+          updated_at: string
+        }
+        Insert: {
+          application_id?: string | null
+          archived_detected_at?: string | null
+          archived_inferred?: boolean | null
+          archived_reason?: string | null
+          ashby_candidate_id: string
+          ashby_job_id?: string
+          candidate_name: string
+          company_name: string
+          created_at?: string
+          credited_to?: string | null
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
+          current_stage_index?: number
+          current_stage_interviews?: string | null
+          days_in_stage?: number
+          decision_status?: string | null
+          feedback_count?: number
+          fetch_source?: string | null
+          fetched_at?: string | null
+          id?: string
+          interview_events?: Json
+          interview_history_summary?: string | null
+          job_title?: string | null
+          last_activity_at?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          latest_recommendation?: string | null
+          needs_scheduling?: boolean
+          org_id?: string | null
+          pipeline_stage?: string | null
+          source?: string | null
+          stage_progress?: string | null
+          stage_type?: string
+          total_stages?: number
+          updated_at?: string
+        }
+        Update: {
+          application_id?: string | null
+          archived_detected_at?: string | null
+          archived_inferred?: boolean | null
+          archived_reason?: string | null
+          ashby_candidate_id?: string
+          ashby_job_id?: string
+          candidate_name?: string
+          company_name?: string
+          created_at?: string
+          credited_to?: string | null
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
+          current_stage_index?: number
+          current_stage_interviews?: string | null
+          days_in_stage?: number
+          decision_status?: string | null
+          feedback_count?: number
+          fetch_source?: string | null
+          fetched_at?: string | null
+          id?: string
+          interview_events?: Json
+          interview_history_summary?: string | null
+          job_title?: string | null
+          last_activity_at?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          latest_recommendation?: string | null
+          needs_scheduling?: boolean
+          org_id?: string | null
+          pipeline_stage?: string | null
+          source?: string | null
+          stage_progress?: string | null
+          stage_type?: string
+          total_stages?: number
+          updated_at?: string
         }
         Relationships: []
       }
