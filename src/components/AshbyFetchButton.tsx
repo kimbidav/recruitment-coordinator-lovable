@@ -27,7 +27,6 @@ import {
 } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
-import { Candidate } from "@/data/candidates";
 import { ASHBY_AUTOMATION_API_BASE } from "@/lib/ashbyAutomation";
 import { clearStoredAshbyCookie } from "@/lib/ashbyCookie";
 import {
@@ -95,30 +94,12 @@ function useSimulatedProgress(active: boolean) {
 }
 
 interface AshbyFetchButtonProps {
-  /** Accumulate-and-merge handler: stored candidates are never deleted; per-field merge. */
-  onMergeFetch: (candidates: Candidate[]) => Promise<void>;
-}
-
-interface ExtractionStats {
-  orgs_total?: number;
-  orgs_fetched?: number;
-  orgs_failed?: number;
-  orgs_retried?: number;
-  total_seconds?: number;
+  /** Called after a completed sync. Persistence happened SERVER-SIDE during
+   *  the poll (org-shared snapshot tables) — the consumer just re-pulls. */
+  onSyncComplete: () => Promise<void>;
 }
 
 type ConnectionStatus = "healthy" | "expired" | "disconnected" | "unknown";
-
-function parseAshbyResponse(data: unknown): { candidates: Candidate[]; stats: ExtractionStats } {
-  if (Array.isArray(data)) return { candidates: data as Candidate[], stats: {} };
-  if (data && typeof data === "object") {
-    const obj = data as { candidates?: unknown; extraction_stats?: ExtractionStats };
-    if (Array.isArray(obj.candidates)) {
-      return { candidates: obj.candidates as Candidate[], stats: obj.extraction_stats ?? {} };
-    }
-  }
-  return { candidates: [], stats: {} };
-}
 
 /** Strip common paste mistakes (whole cookie header, name=value form, quotes, whitespace). */
 function normalizeTokenInput(raw: string): string {
@@ -154,131 +135,9 @@ function detectOS(): "mac" | "win" {
   return /Mac|iPhone|iPad/i.test(p) ? "mac" : "win";
 }
 
-function harvestClientNames(candidates: Candidate[], stats: ExtractionStats): string[] {
-  const clientNames = Array.from(
-    new Set(
-      candidates
-        .map((c) => (c.company_name ?? "").trim())
-        .filter((n) => n.length > 0),
-    ),
-  );
-  const statsAny = stats as unknown as Record<string, unknown>;
-  const harvestFromValue = (v: unknown) => {
-    if (!v) return;
-    if (typeof v === "string") {
-      const name = v.trim();
-      if (name && !clientNames.includes(name)) clientNames.push(name);
-      return;
-    }
-    if (Array.isArray(v)) {
-      for (const item of v) harvestFromValue(item);
-      return;
-    }
-    if (typeof v === "object") {
-      const obj = v as Record<string, unknown>;
-      for (const k of ["name", "org_name", "organization", "org", "client_name", "company_name"]) {
-        if (typeof obj[k] === "string") {
-          harvestFromValue(obj[k]);
-          return;
-        }
-      }
-    }
-  };
-  for (const key of ["orgs", "org_names", "per_org", "orgs_breakdown", "organizations"]) {
-    harvestFromValue(statsAny[key]);
-  }
-  for (const [k, v] of Object.entries(statsAny)) {
-    if (v && typeof v === "object" && !Array.isArray(v) && /^[A-Z]/.test(k) && k.length < 80) {
-      if (!clientNames.includes(k)) clientNames.push(k);
-    }
-  }
-  return clientNames;
-}
-
-async function persistKnownClients(userId: string, clientNames: string[]) {
-  if (!clientNames.length) return;
-  const rows = clientNames.map((client_name) => ({
-    user_id: userId,
-    client_name,
-    last_seen_at: new Date().toISOString(),
-  }));
-  await supabase.from("ashby_known_clients").upsert(rows, { onConflict: "user_id,client_name" });
-  const { data: knownAll } = await supabase
-    .from("ashby_known_clients")
-    .select("client_name, last_seen_at")
-    .eq("user_id", userId)
-    .order("client_name");
-  console.log(
-    `[Ashby fetch] harvested ${clientNames.length} companies this run; ${knownAll?.length ?? 0} total Ashby companies known:`,
-  );
-  console.table((knownAll ?? []).map((r) => ({ company: r.client_name, last_seen: r.last_seen_at })));
-}
-
-async function applyFetchResult(args: {
-  data: unknown;
-  userId?: string;
-  complete: () => void;
-  onMergeFetch: (candidates: Candidate[]) => Promise<void>;
-  closeDialog: () => void;
-}) {
-  const { data, userId, complete, onMergeFetch, closeDialog } = args;
-  const { candidates, stats } = parseAshbyResponse(data);
-  const orgsTotal = stats.orgs_total;
-  const orgsFetched = stats.orgs_fetched;
-  const orgsFailed = stats.orgs_failed ?? 0;
-  const statsAny = stats as unknown as { complete?: boolean };
-  // Partial if the extractor says the sweep didn't complete OR any org failed.
-  const partial = statsAny.complete === false || orgsFailed > 0;
-
-  if (candidates.length === 0) {
-    toast.error("No candidates returned from Ashby");
-    return;
-  }
-
-  const byCompany = new Map<string, number>();
-  for (const c of candidates) {
-    const name = (c.company_name ?? "").trim() || "(unknown)";
-    byCompany.set(name, (byCompany.get(name) ?? 0) + 1);
-  }
-  const breakdown = Array.from(byCompany.entries()).sort((a, b) => b[1] - a[1]);
-  console.log(`[Ashby fetch] ${candidates.length} candidates across ${byCompany.size} companies (partial=${partial}):`);
-  console.table(breakdown.map(([company, n]) => ({ company, candidates: n })));
-  (window as unknown as Record<string, unknown>).__lastAshbyFetch = {
-    candidates,
-    stats,
-    byCompany: Object.fromEntries(breakdown),
-    partial,
-    at: new Date().toISOString(),
-  };
-
-  complete();
-  await new Promise((r) => setTimeout(r, 400));
-  // ALWAYS merge. Stored rows the fetch didn't return are kept, and interview /
-  // feedback enrichment accumulates across runs — the extractor enriches as many
-  // candidates as fit its per-run budget, so repeated syncs fill in the rest.
-  await onMergeFetch(candidates);
-
-  if (userId) {
-    await persistKnownClients(userId, harvestClientNames(candidates, stats));
-  }
-
-  if (partial) {
-    toast.warning(
-      `Partial Ashby fetch — ${orgsFailed} org(s) failed${orgsTotal ? ` (${orgsFetched ?? "?"}/${orgsTotal})` : ""}. Showing accumulated data; re-run to fill gaps.`,
-      { duration: 15000 },
-    );
-  } else if (orgsTotal && orgsFetched !== undefined) {
-    toast.success(`Merged ${candidates.length} candidates from ${orgsFetched}/${orgsTotal} orgs`);
-  } else {
-    toast.success(`Merged ${candidates.length} candidates from Ashby`);
-  }
-
-  closeDialog();
-}
-
 const EXPIRY_PATTERN = /401|session expired|expired or invalid|reconnect/i;
 
-export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
+export function AshbyFetchButton({ onSyncComplete }: AshbyFetchButtonProps) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
@@ -382,14 +241,27 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
         return;
       }
 
+      // Completed. The snapshot was persisted server-side by whichever poller
+      // won the job — this client just re-pulls it and reports the job-row
+      // stats (the bulky result payload is no longer retained).
       setConnectionStatus("healthy");
-      await applyFetchResult({
-        data: job.result_payload,
-        userId: user?.id,
-        complete,
-        onMergeFetch,
-        closeDialog: () => setOpen(false),
-      });
+      complete();
+      await new Promise((r) => setTimeout(r, 400));
+      await onSyncComplete();
+      const n = job.candidate_count ?? 0;
+      const orgsFailed = job.orgs_failed ?? 0;
+      const partial = job.status === "partial" || orgsFailed > 0;
+      if (partial) {
+        toast.warning(
+          `Partial Ashby sync — ${orgsFailed} org(s) failed${job.orgs_total ? ` (${job.orgs_fetched ?? "?"}/${job.orgs_total})` : ""}. The snapshot keeps earlier data; re-sync to fill gaps.`,
+          { duration: 15000 },
+        );
+      } else if (job.orgs_total) {
+        toast.success(`Synced ${n} candidates from ${job.orgs_fetched ?? "?"}/${job.orgs_total} orgs`);
+      } else {
+        toast.success(`Synced ${n} candidates from Ashby`);
+      }
+      setOpen(false);
       return;
     }
 

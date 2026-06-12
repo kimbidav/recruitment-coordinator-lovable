@@ -39,7 +39,7 @@ const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
 const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 const Index = () => {
-  const { candidates, lastUpdated, isLoading, saveSession, mergeAshbyFetch, markCandidateClosed } = usePipelineSession();
+  const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
   const { activeSnapshot, archivedSnapshot, orgNames, snapshotLoaded, refreshSnapshot } = useAshbySnapshot();
   const { aliases, aliasesLoaded } = useRecruiterAliases();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
@@ -81,9 +81,10 @@ const Index = () => {
   const snapshotIsTruth = snapshotLoaded && (activeSnapshot.length > 0 || archivedSnapshot.length > 0);
   const ashbySourceCandidates = snapshotIsTruth ? activeSnapshot : candidates;
 
-  // Load the authoritative set of companies known to exist in the user's Ashby
-  // workspace. This is cumulative across every past fetch — never deleted —
-  // so a company stays "Ashby" even if it has zero active candidates today.
+  // Manual-override list of Ashby companies (fed by the Agent tab's
+  // "mark as Ashby client" button). The authoritative source is the
+  // org-shared ashby_orgs table; this remains as the user escape hatch.
+  // Auto-harvest writes from the fetch path were retired in Phase 5.
   useEffect(() => {
     if (!user) {
       setAshbyClientNames([]);
@@ -469,8 +470,7 @@ const Index = () => {
               <GoogleCalendarSync candidates={filteredCandidates} />
               <SlackConnectButton onSynced={reloadSlack} />
               <AshbyFetchButton
-                onMergeFetch={async (fetched) => {
-                  await mergeAshbyFetch(fetched);
+                onSyncComplete={async () => {
                   // The server persisted the org-shared snapshot during the
                   // poll — re-pull it so the table reflects the new truth.
                   await refreshSnapshot();

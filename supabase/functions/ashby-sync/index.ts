@@ -445,10 +445,15 @@ async function advanceJob(admin: Admin, job: Record<string, unknown>): Promise<R
   if (wonClaim && candidates.length > 0) {
     try {
       await persistSnapshot(admin, candidates, companies);
+      // The snapshot is the durable copy now — drop the multi-hundred-KB
+      // payload from the job row (the dashboard reads candidate_count /
+      // orgs_* columns, not the payload).
+      const slim = { extractor_job_id: extractorJobId };
+      await admin.from("fetch_jobs").update({ result_payload: slim }).eq("id", jobId);
+      (update as Record<string, unknown>).result_payload = slim;
     } catch (err) {
-      // Best-effort: snapshot tables may not exist yet (migration pending) or
-      // the upsert hiccuped. The dashboard still gets the payload; the next
-      // completed fetch re-runs the merge against whatever is stored.
+      // Best-effort: if the persist hiccuped, KEEP the payload on the row so
+      // nothing is lost; the next completed fetch re-runs the merge.
       console.error("[ashby-sync] snapshot persist failed:", err instanceof Error ? err.message : err);
     }
   }

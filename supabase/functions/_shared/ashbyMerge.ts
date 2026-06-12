@@ -1,6 +1,6 @@
 // Server-side accumulate-and-merge for Ashby snapshots (Deno port).
 //
-// Canonical implementation of the merge rules from src/lib/candidateMerge.ts
+// Canonical implementation of the accumulate-and-merge rules
 // (PRD: "Fix Ashby Fetch Data Loss") plus the archived/hired inference from
 // the local desktop app's _save_ashby_candidates_preserving_detail. Operates
 // on raw extractor records (Record<string, unknown>) so application_id /

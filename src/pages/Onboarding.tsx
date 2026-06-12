@@ -68,7 +68,6 @@ const Onboarding = () => {
   const { user, loading: authLoading, signOut } = useAuth();
   const navigate = useNavigate();
   const status = useOnboardingStatus();
-  const { mergeAshbyFetch } = usePipelineSession();
   const { aliases, refreshAliases } = useRecruiterAliases();
 
   useEffect(() => {
@@ -159,8 +158,7 @@ const Onboarding = () => {
             done={status.ashbyConnected}
             action={
               <AshbyFetchButton
-                onMergeFetch={async (candidates) => {
-                  await mergeAshbyFetch(candidates);
+                onSyncComplete={async () => {
                   void status.refresh();
                 }}
               />

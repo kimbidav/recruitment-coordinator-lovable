@@ -3,7 +3,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { Candidate, InterviewEvent } from "@/data/candidates";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { mergeCandidates } from "@/lib/candidateMerge";
 
 const PAGE_SIZE = 1000;
 // Keep chunks SMALL. PostgREST + supabase-js have payload + timeout limits, and
@@ -669,20 +668,10 @@ export function usePipelineSession() {
     [sessionId, user],
   );
 
-  // Ashby-specific path: ACCUMULATE incoming fetches into stored data.
-  // Never deletes; merges per-field; protects enriched rows from thin re-fetches.
-  // See src/lib/candidateMerge.ts for rules.
-  const mergeAshbyFetch = useCallback(
-    async (incoming: Candidate[]) => {
-      const existing = candidatesRef.current;
-      const { merged, stats } = mergeCandidates(existing, incoming);
-      console.log(
-        `[Ashby merge] +${stats.added} new, ~${stats.updated} updated, =${stats.kept} kept, ↧${stats.downgradeSkipped} downgrade-skipped, total=${stats.total} (incoming=${incoming.length}, existing=${existing.length})`,
-      );
-      await saveSession(merged, { deleteMissing: false });
-    },
-    [saveSession],
-  );
+  // NOTE: the old mergeAshbyFetch client-side accumulate path is retired —
+  // Ashby persistence is server-side now (ashby-sync → ashby_snapshot_candidates,
+  // merge rules in supabase/functions/_shared/ashbyMerge.ts). This hook only
+  // serves CSV uploads and the legacy per-user rows.
 
   return {
     candidates,
@@ -690,7 +679,6 @@ export function usePipelineSession() {
     lastUpdated,
     isLoading,
     saveSession,
-    mergeAshbyFetch,
     clearSession,
     markCandidateClosed,
   };
