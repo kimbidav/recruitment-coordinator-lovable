@@ -149,6 +149,36 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_connection: {
+        Row: {
+          id: number
+          status: string
+          last_seeded_at: string | null
+          last_ok_at: string | null
+          last_error: string | null
+          seeded_by: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          status?: string
+          last_seeded_at?: string | null
+          last_ok_at?: string | null
+          last_error?: string | null
+          seeded_by?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          status?: string
+          last_seeded_at?: string | null
+          last_ok_at?: string | null
+          last_error?: string | null
+          seeded_by?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ashby_known_clients: {
         Row: {
           client_name: string

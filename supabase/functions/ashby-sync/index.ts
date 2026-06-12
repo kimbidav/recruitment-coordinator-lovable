@@ -4,18 +4,32 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 const ASHBY_AUTOMATION_API_BASE =
   Deno.env.get("ASHBY_AUTOMATION_API_BASE") || "https://ashby-automation-production.up.railway.app";
 
+// Shared secret gating the Railway extractor's extract/session endpoints.
+// Only edge functions hold it — the browser never talks to Railway directly.
+const EXTRACTOR_SHARED_SECRET = Deno.env.get("EXTRACTOR_SHARED_SECRET") || "";
+
+function extractorHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return EXTRACTOR_SHARED_SECRET
+    ? { ...extra, "X-Extractor-Secret": EXTRACTOR_SHARED_SECRET }
+    : extra;
+}
+
 // A full org sweep can take 15+ minutes on the extractor side. Edge functions
 // can't outlive that, so this function never waits for the sweep itself:
-//   POST { cookie }        -> starts an async extractor job (POST /api/extract/start),
-//                             records the extractor job id on a fetch_jobs row,
-//                             and returns immediately.
-//   POST { poll_job_id }   -> checks the extractor's job status (GET
-//                             /api/extract/status/:id), advances the fetch_jobs
-//                             row (progress / succeeded / partial / failed),
-//                             and returns the row. The frontend calls this every
-//                             few seconds; each call is a single cheap fetch.
-// The extractor caches a successful sweep for 10 minutes and reuses it for new
-// start calls, so retries after a browser refresh don't restart from scratch.
+//   POST {}                    -> starts an async extractor job using the
+//                                 extractor's SHARED team session (no cookie),
+//                                 records the extractor job id on a fetch_jobs
+//                                 row, and returns immediately.
+//   POST { poll_job_id }       -> checks the extractor's job status, advances
+//                                 the fetch_jobs row, returns the row.
+//   POST { action: "seed", cookie } -> verifies + installs a new shared
+//                                 session on the extractor (self-service: any
+//                                 teammate can do this when the session dies).
+//   POST { action: "status" }  -> session health from ashby_connection, plus a
+//                                 live probe of the extractor when {live:true}.
+// The extractor caches a successful sweep for 10 minutes, runs at most one
+// sweep at a time (a second start attaches to the running job), and keeps the
+// shared session's rotating cookie chain on a durable volume.
 
 type FetchJobStatus = "running" | "succeeded" | "failed" | "partial";
 
@@ -49,6 +63,14 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 
 type Admin = ReturnType<typeof createClient>;
 
+/** Upsert the org-wide Ashby session health singleton (id=1). */
+async function setConnection(admin: Admin, fields: Record<string, unknown>) {
+  await admin.from("ashby_connection").upsert(
+    { id: 1, updated_at: new Date().toISOString(), ...fields },
+    { onConflict: "id" },
+  );
+}
+
 async function failJob(admin: Admin, jobId: string, message: string) {
   await admin.from("fetch_jobs").update({
     status: "failed",
@@ -67,19 +89,20 @@ async function loadJob(admin: Admin, jobId: string, userId: string) {
   return job;
 }
 
-/** Start an async extraction on the Railway extractor; returns its job id. */
-async function startExtractorJob(cookie: string): Promise<{ jobId: string } | { error: string; status: number }> {
+/** Start an async extraction using the extractor's shared team session. */
+async function startExtractorJob(): Promise<{ jobId: string } | { error: string; status: number }> {
   let res: Response;
   try {
     // No force flag: if the extractor finished a sweep in the last 10 minutes
     // (e.g. a previous attempt the browser stopped watching), reuse it instead
-    // of restarting the whole sweep.
+    // of restarting the whole sweep. No cookie either: the extractor loads
+    // the shared session from its persisted (volume-backed) rotation chain.
     res = await fetchWithTimeout(
       `${ASHBY_AUTOMATION_API_BASE}/api/extract/start`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cookie }),
+        headers: extractorHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({}),
       },
       // Generous: Railway cold starts take ~30s.
       90_000,
@@ -96,7 +119,7 @@ async function startExtractorJob(cookie: string): Promise<{ jobId: string } | { 
 
   const body = await res.json().catch(() => ({}));
   if (res.status === 401) {
-    return { error: "Ashby session expired (401). Paste a fresh token.", status: 401 };
+    return { error: "Ashby session expired. Anyone on the team can reconnect it from the dashboard.", status: 401 };
   }
   if (!res.ok) {
     const detail = typeof body?.error === "string" ? body.error : `HTTP ${res.status}`;
@@ -107,6 +130,36 @@ async function startExtractorJob(cookie: string): Promise<{ jobId: string } | { 
     return { error: "Ashby extractor did not return a job id.", status: 502 };
   }
   return { jobId };
+}
+
+/** Verify + install a new shared session on the extractor. */
+async function seedExtractorSession(cookie: string): Promise<{ ok: true } | { error: string; status: number }> {
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${ASHBY_AUTOMATION_API_BASE}/api/session/seed`,
+      {
+        method: "POST",
+        headers: extractorHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ cookie }),
+      },
+      90_000,
+    );
+  } catch (error) {
+    const isAbort = error instanceof DOMException && error.name === "AbortError";
+    return {
+      error: isAbort
+        ? "The Ashby extractor service did not respond (it may be cold-starting). Try again in a minute."
+        : `Could not reach the Ashby extractor: ${error instanceof Error ? error.message : "unknown error"}`,
+      status: 502,
+    };
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = typeof body?.error === "string" ? body.error : `HTTP ${res.status}`;
+    return { error: detail, status: res.status === 401 || res.status === 400 ? res.status : 502 };
+  }
+  return { ok: true };
 }
 
 /** Poll the extractor for a running job and advance the fetch_jobs row. */
@@ -123,7 +176,7 @@ async function advanceJob(admin: Admin, job: Record<string, unknown>): Promise<R
   try {
     res = await fetchWithTimeout(
       `${ASHBY_AUTOMATION_API_BASE}/api/extract/status/${extractorJobId}`,
-      { method: "GET" },
+      { method: "GET", headers: extractorHeaders() },
       30_000,
     );
   } catch {
@@ -167,6 +220,9 @@ async function advanceJob(admin: Admin, job: Record<string, unknown>): Promise<R
     const detail = [body?.error, body?.detail].filter((s: unknown) => typeof s === "string" && s).join(" — ");
     const message = detail || `Ashby extraction failed (${res.status})`;
     await failJob(admin, jobId, message);
+    if (res.status === 401 || /expired/i.test(message)) {
+      await setConnection(admin, { status: "expired", last_error: message.slice(0, 500) });
+    }
     return { ...job, status: "failed", error_message: message.slice(0, 1000) };
   }
 
@@ -190,6 +246,7 @@ async function advanceJob(admin: Admin, job: Record<string, unknown>): Promise<R
     error_message: candidates.length === 0 ? "No candidates returned" : null,
   };
   await admin.from("fetch_jobs").update(update).eq("id", jobId);
+  await setConnection(admin, { status: "healthy", last_ok_at: new Date().toISOString(), last_error: null });
   return { ...job, ...update };
 }
 
@@ -236,12 +293,58 @@ Deno.serve(async (req) => {
       return json({ job: advanced });
     }
 
-    // Start mode.
-    const cookie = typeof body.cookie === "string" ? body.cookie.trim() : "";
-    if (!cookie) return json({ error: "cookie required" }, 400);
+    // Seed mode: any teammate installs a new shared session on the extractor.
+    if (body.action === "seed") {
+      const cookie = typeof body.cookie === "string" ? body.cookie.trim() : "";
+      if (!cookie) return json({ error: "cookie required" }, 400);
+      const seeded = await seedExtractorSession(cookie);
+      if ("error" in seeded) {
+        await setConnection(admin, { status: "expired", last_error: seeded.error.slice(0, 500) });
+        return json({ error: seeded.error }, seeded.status);
+      }
+      await setConnection(admin, {
+        status: "healthy",
+        last_seeded_at: new Date().toISOString(),
+        seeded_by: userData.user.email ?? userData.user.id,
+        last_error: null,
+      });
+      return json({ ok: true, status: "healthy" });
+    }
 
-    const started = await startExtractorJob(cookie);
-    if ("error" in started) return json({ error: started.error }, started.status);
+    // Status mode: session health for the UI (DB state; live probe optional).
+    if (body.action === "status") {
+      const { data: conn } = await admin.from("ashby_connection").select("*").eq("id", 1).maybeSingle();
+      if (body.live === true) {
+        try {
+          const res = await fetchWithTimeout(
+            `${ASHBY_AUTOMATION_API_BASE}/api/session/status`,
+            { method: "GET", headers: extractorHeaders() },
+            30_000,
+          );
+          const probe = await res.json().catch(() => ({}));
+          if (res.ok && typeof probe?.authenticated === "boolean") {
+            const status = probe.authenticated ? "healthy" : "expired";
+            await setConnection(admin, {
+              status,
+              ...(probe.authenticated ? { last_ok_at: new Date().toISOString(), last_error: null } : {}),
+            });
+            return json({ connection: { ...(conn ?? {}), status }, probe });
+          }
+        } catch {
+          // Extractor unreachable — fall through to DB state.
+        }
+      }
+      return json({ connection: conn ?? { id: 1, status: "disconnected" } });
+    }
+
+    // Start mode — uses the extractor's shared team session; no cookie.
+    const started = await startExtractorJob();
+    if ("error" in started) {
+      if (started.status === 401) {
+        await setConnection(admin, { status: "expired", last_error: started.error.slice(0, 500) });
+      }
+      return json({ error: started.error }, started.status);
+    }
 
     const { data: job, error: insertErr } = await admin
       .from("fetch_jobs")

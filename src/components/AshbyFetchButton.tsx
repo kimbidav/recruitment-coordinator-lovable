@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Download,
   Loader2,
@@ -9,6 +9,7 @@ import {
   Shield,
   ChevronDown,
   PlayCircle,
+  KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,11 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Candidate } from "@/data/candidates";
 import { ASHBY_AUTOMATION_API_BASE } from "@/lib/ashbyAutomation";
-import {
-  getStoredAshbyCookie,
-  setStoredAshbyCookie,
-  clearStoredAshbyCookie,
-} from "@/lib/ashbyCookie";
+import { clearStoredAshbyCookie } from "@/lib/ashbyCookie";
 import {
   getJobProgress,
   getLatestRunningJob,
@@ -109,6 +106,8 @@ interface ExtractionStats {
   orgs_retried?: number;
   total_seconds?: number;
 }
+
+type ConnectionStatus = "healthy" | "expired" | "disconnected" | "unknown";
 
 function parseAshbyResponse(data: unknown): { candidates: Candidate[]; stats: ExtractionStats } {
   if (Array.isArray(data)) return { candidates: data as Candidate[], stats: {} };
@@ -216,15 +215,13 @@ async function persistKnownClients(userId: string, clientNames: string[]) {
 }
 
 async function applyFetchResult(args: {
-  cookie: string;
   data: unknown;
   userId?: string;
   complete: () => void;
   onMergeFetch: (candidates: Candidate[]) => Promise<void>;
   closeDialog: () => void;
-  clearInput: () => void;
 }) {
-  const { cookie, data, userId, complete, onMergeFetch, closeDialog, clearInput } = args;
+  const { data, userId, complete, onMergeFetch, closeDialog } = args;
   const { candidates, stats } = parseAshbyResponse(data);
   const orgsTotal = stats.orgs_total;
   const orgsFetched = stats.orgs_fetched;
@@ -256,7 +253,6 @@ async function applyFetchResult(args: {
 
   complete();
   await new Promise((r) => setTimeout(r, 400));
-  setStoredAshbyCookie(cookie);
   // ALWAYS merge. Stored rows the fetch didn't return are kept, and interview /
   // feedback enrichment accumulates across runs — the extractor enriches as many
   // candidates as fit its per-run budget, so repeated syncs fill in the rest.
@@ -278,30 +274,56 @@ async function applyFetchResult(args: {
   }
 
   closeDialog();
-  clearInput();
 }
 
+const EXPIRY_PATTERN = /401|session expired|expired or invalid|reconnect/i;
 
 export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [staleJobNotified, setStaleJobNotified] = useState(false);
   const [liveProgress, setLiveProgress] = useState<FetchJobProgress | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("unknown");
   const { progress, label, complete } = useSimulatedProgress(loading);
   const os = useMemo(detectOS, []);
   const devtoolsKey = os === "mac" ? "⌘⌥I" : "F12";
+
+  // The session is org-shared and lives on the extractor; per-user
+  // localStorage cookies are a retired concept. Clean up old ones.
+  useEffect(() => {
+    clearStoredAshbyCookie();
+  }, []);
+
+  const refreshConnectionStatus = useCallback(async () => {
+    try {
+      const { data } = await supabase.functions.invoke("ashby-sync", {
+        body: { action: "status" },
+      });
+      const status = (data as { connection?: { status?: string } } | null)?.connection?.status;
+      if (status === "healthy" || status === "expired" || status === "disconnected") {
+        setConnectionStatus(status);
+      }
+    } catch {
+      // Leave as-is; sync attempts surface real errors.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) void refreshConnectionStatus();
+  }, [user, refreshConnectionStatus]);
 
   const describeFetchFailure = (message?: string | null) => {
     const trimmed = message?.trim();
     if (!trimmed) return "Ashby fetch failed before any candidates were returned.";
     if (trimmed.includes("401")) {
-      return "Your Ashby session expired during the fetch. Copy a fresh token from the same Ashby tab and try again.";
+      return "The shared Ashby session expired during the fetch. Reconnect it below — any teammate's Ashby login works.";
     }
     if (trimmed.toLowerCase().includes("upstream error")) {
-      return "The Ashby fetch service hit an upstream error before candidates were returned. This usually means the session went stale mid-run, so grab a fresh token from the same signed-in Ashby tab and retry.";
+      return "The Ashby fetch service hit an upstream error before candidates were returned. This usually means the session went stale mid-run. Reconnect below and retry.";
     }
     return trimmed;
   };
@@ -326,10 +348,17 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
 
   const validation = validateToken(cookie);
 
+  const handleExpiry = (failureMessage: string) => {
+    setConnectionStatus("expired");
+    setFetchError(failureMessage);
+    setOpen(true);
+    toast.error(failureMessage);
+  };
+
   // A full org sweep takes up to ~20 min on slow days; the extractor keeps its
   // job for 30 min, so watch for 25. Each poll goes through the edge function,
   // which is what actually advances the job (it checks the extractor's status).
-  const pollJobUntilComplete = async (jobId: string, cookieToUse: string) => {
+  const pollJobUntilComplete = async (jobId: string) => {
     const pollStartedAt = Date.now();
     while (Date.now() - pollStartedAt < 1_500_000) {
       await new Promise((r) => setTimeout(r, 5000));
@@ -343,52 +372,44 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
 
       if (job.status === "failed") {
         const failureMessage = describeFetchFailure(job.error_message);
-        setFetchError(failureMessage);
-        setOpen(true);
-        // The extractor's mid-run failure says "Session expired or invalid.
-        // Please paste a fresh cookie" (no literal "401") — match broadly so
-        // a dead stored token gets cleared instead of being re-sent forever.
-        if (/401|session expired|expired or invalid/i.test(job.error_message ?? "")) {
-          clearStoredAshbyCookie();
-          setCookie("");
-          toast.error("Ashby session expired. Paste a fresh cookie.");
+        if (EXPIRY_PATTERN.test(job.error_message ?? "")) {
+          handleExpiry(failureMessage);
         } else {
-          setCookie(cookieToUse);
+          setFetchError(failureMessage);
+          setOpen(true);
           toast.error(failureMessage);
         }
         return;
       }
 
+      setConnectionStatus("healthy");
       await applyFetchResult({
-        cookie: cookieToUse,
         data: job.result_payload,
         userId: user?.id,
         complete,
         onMergeFetch,
         closeDialog: () => setOpen(false),
-        clearInput: () => setCookie(""),
       });
       return;
     }
 
-    setFetchError("Ashby sync is still running in the background. Leave your signed-in Ashby tab alone, then click Sync from Ashby again in a minute to resume watching it.");
+    setFetchError("Ashby sync is still running in the background. Click Sync from Ashby again in a minute to resume watching it.");
     setOpen(true);
     toast.message("Ashby sync is still running in the background.", {
       description: "Click Sync from Ashby again to resume watching progress.",
     });
   };
 
-  const runFetch = async (cookieToUse: string) => {
+  const runSync = async () => {
     setFetchError(null);
     setLoading(true);
     try {
-      setStoredAshbyCookie(cookieToUse);
       const { data, error } = await supabase.functions.invoke("ashby-sync", {
-        body: { cookie: cookieToUse },
+        body: {},
       });
       if (error) {
         // invoke() hides the response body on non-2xx; surface the real
-        // message (e.g. "Ashby session expired (401)") instead of the generic
+        // message (e.g. "Ashby session expired") instead of the generic
         // "Edge Function returned a non-2xx status code".
         const ctx = (error as { context?: Response }).context;
         if (ctx && typeof ctx.json === "function") {
@@ -400,7 +421,7 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
 
       const jobId = (data as { job?: { id?: string } } | null)?.job?.id;
       if (!jobId) throw new Error("Failed to start Ashby sync");
-      await pollJobUntilComplete(jobId, cookieToUse);
+      await pollJobUntilComplete(jobId);
     } catch (err) {
       console.error("Ashby fetch error:", err);
       const message =
@@ -410,15 +431,13 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
             ? err.message
             : "Failed to fetch from Ashby.";
       const failureMessage = describeFetchFailure(message);
-      setFetchError(failureMessage);
-      setOpen(true);
-      if (/401|session expired|expired or invalid/i.test(message)) {
-        clearStoredAshbyCookie();
-        setCookie("");
+      if (EXPIRY_PATTERN.test(message)) {
+        handleExpiry(failureMessage);
       } else {
-        setCookie(cookieToUse);
+        setFetchError(failureMessage);
+        setOpen(true);
+        toast.error(failureMessage);
       }
-      toast.error(failureMessage);
     } finally {
       setLoading(false);
       setLiveProgress(null);
@@ -426,37 +445,38 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
   };
 
   const handleClick = () => {
-    const stored = getStoredAshbyCookie();
-    if (stored) {
-      void (async () => {
-        // Re-attach to a sweep that's still running (e.g. after a page reload)
-        // instead of starting a second one.
-        const runningJob = user ? await getLatestRunningJob(user.id) : null;
-        const isFresh =
-          runningJob &&
-          Date.now() - new Date(runningJob.started_at).getTime() < 30 * 60_000;
-        if (runningJob && isFresh) {
-          setLoading(true);
-          try {
-            await pollJobUntilComplete(runningJob.id, stored);
-          } finally {
-            setLoading(false);
-            setLiveProgress(null);
-          }
-          return;
-        }
-        await runFetch(stored);
-      })();
-    } else {
+    if (connectionStatus === "expired" || connectionStatus === "disconnected") {
+      setFetchError(null);
       setOpen(true);
+      return;
     }
+    void (async () => {
+      // Re-attach to a sweep that's still running (e.g. after a page reload,
+      // or a teammate's sweep — the extractor runs one shared sweep at a time)
+      // instead of starting a second one.
+      const runningJob = user ? await getLatestRunningJob(user.id) : null;
+      const isFresh =
+        runningJob &&
+        Date.now() - new Date(runningJob.started_at).getTime() < 30 * 60_000;
+      if (runningJob && isFresh) {
+        setLoading(true);
+        try {
+          await pollJobUntilComplete(runningJob.id);
+        } finally {
+          setLoading(false);
+          setLiveProgress(null);
+        }
+        return;
+      }
+      await runSync();
+    })();
   };
 
-
+  // Seed: install a verified new shared session on the extractor, then sync.
   const handleDialogSubmit = () => {
     const cleaned = normalizeTokenInput(cookie);
     if (!cleaned) {
-      toast.error("Please paste your Ashby session cookie");
+      toast.error("Please paste your Ashby session token");
       return;
     }
     const v = validateToken(cleaned);
@@ -464,9 +484,37 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
       toast.error(v.hint ?? "Token doesn't look right");
       return;
     }
-    setCookie(cleaned);
     setFetchError(null);
-    void runFetch(cleaned);
+    void (async () => {
+      setSeeding(true);
+      try {
+        const { data, error } = await supabase.functions.invoke("ashby-sync", {
+          body: { action: "seed", cookie: cleaned },
+        });
+        if (error) {
+          const ctx = (error as { context?: Response }).context;
+          if (ctx && typeof ctx.json === "function") {
+            const body = await ctx.json().catch(() => null);
+            if (body?.error) throw new Error(body.error);
+          }
+          throw error;
+        }
+        if ((data as { ok?: boolean } | null)?.ok !== true) {
+          throw new Error("Seeding the Ashby session failed.");
+        }
+        setConnectionStatus("healthy");
+        setCookie("");
+        toast.success("Ashby reconnected for the whole team. Starting sync...");
+      } catch (err) {
+        const message = err instanceof Error && err.message ? err.message : "Could not reconnect Ashby.";
+        setFetchError(message);
+        toast.error(message);
+        return;
+      } finally {
+        setSeeding(false);
+      }
+      await runSync();
+    })();
   };
 
   const handlePaste = (raw: string) => {
@@ -474,9 +522,7 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
     setCookie(cleaned);
   };
 
-
-
-  const hasStoredCookie = !!getStoredAshbyCookie();
+  const needsReconnect = connectionStatus === "expired" || connectionStatus === "disconnected";
 
   return (
     <>
@@ -484,31 +530,32 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
         variant="outline"
         className="gap-2"
         onClick={handleClick}
-        disabled={loading}
+        disabled={loading || seeding}
       >
         {loading ? (
           <Loader2 className="h-4 w-4 animate-spin" />
-        ) : hasStoredCookie ? (
-          <RefreshCw className="h-4 w-4" />
+        ) : needsReconnect ? (
+          <KeyRound className="h-4 w-4" />
         ) : (
-          <Download className="h-4 w-4" />
+          <RefreshCw className="h-4 w-4" />
         )}
         {loading
           ? liveProgress
             ? `Syncing ${liveProgress.completed}/${liveProgress.total} orgs...`
             : "Syncing..."
-          : hasStoredCookie
-            ? "Sync from Ashby"
-            : "Connect Ashby"}
+          : needsReconnect
+            ? "Reconnect Ashby"
+            : "Sync from Ashby"}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Connect your Ashby account</DialogTitle>
+            <DialogTitle>Reconnect Ashby</DialogTitle>
             <DialogDescription>
-              We need your Ashby session token to pull candidates. Follow the steps
-              below — it takes about a minute. Watch the walkthrough if you get stuck.
+              The whole team shares one Ashby connection, and it needs a re-login about
+              once a week. Anyone can do it — your own Ashby session works for everyone.
+              Follow the steps below; it takes about a minute.
             </DialogDescription>
           </DialogHeader>
 
@@ -600,7 +647,7 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
                   cookie && validation.valid && "border-emerald-500/60 focus-visible:ring-emerald-500/30",
                   cookie && !validation.valid && "border-destructive/60 focus-visible:ring-destructive/30",
                 )}
-                disabled={loading}
+                disabled={loading || seeding}
               />
               {cookie && validation.valid && (
                 <Check className="absolute right-2 top-2 h-4 w-4 text-emerald-600" />
@@ -610,7 +657,7 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
               <p className="text-xs text-destructive">{validation.hint}</p>
             )}
             {cookie && validation.valid && (
-              <p className="text-xs text-emerald-600">Looks good — ready to fetch.</p>
+              <p className="text-xs text-emerald-600">Looks good — ready to reconnect.</p>
             )}
           </div>
 
@@ -623,33 +670,27 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-2 text-xs text-muted-foreground space-y-1">
               <p>
-                Ashby has no per-user API key for external recruiters, so we use your session token to act on your behalf — only when you click Sync.
+                Ashby has no per-user API key for external recruiters, so the team shares one
+                session that our extraction service keeps alive. When it expires (~weekly),
+                whoever needs data next reconnects it with their own login.
               </p>
               <p>
-                The token is stored in your browser's localStorage and is sent only to our extraction service to fetch your candidates. We don't share it, log it, or use it for anything else.
+                The token is sent once to our extraction service and stored there — never in
+                your browser. Heads up: the Ashby tab you copied it from may get signed out
+                once the service starts using it; that's expected, just sign back in.
               </p>
             </CollapsibleContent>
           </Collapsible>
 
-          {fetchError && !loading && (
+          {fetchError && !loading && !seeding && (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-foreground">
-              <p className="font-medium text-destructive">Fetch didn’t complete.</p>
+              <p className="font-medium text-destructive">Something went wrong.</p>
               <p className="mt-1 text-muted-foreground">{fetchError}</p>
             </div>
           )}
 
           {loading && (
             <div className="space-y-3 py-1">
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-foreground">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-                <div className="space-y-0.5">
-                  <p className="font-medium">Heads up: Ashby may sign you out in another tab.</p>
-                  <p className="text-muted-foreground">
-                    That's expected — your token is in use server-side. Don't re-sign in until this finishes,
-                    or the running session will be invalidated and orgs may be dropped.
-                  </p>
-                </div>
-              </div>
               <Progress
                 value={liveProgress ? Math.round((liveProgress.completed / liveProgress.total) * 100) : progress}
                 className="h-2"
@@ -666,11 +707,11 @@ export function AshbyFetchButton({ onMergeFetch }: AshbyFetchButtonProps) {
           <DialogFooter>
             <Button
               onClick={handleDialogSubmit}
-              disabled={loading || !validation.valid}
+              disabled={loading || seeding || !validation.valid}
               className="gap-2"
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              {loading ? "Fetching..." : "Fetch Candidates"}
+              {seeding || loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              {seeding ? "Reconnecting..." : loading ? "Syncing..." : "Reconnect & Sync"}
             </Button>
           </DialogFooter>
         </DialogContent>

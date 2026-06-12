@@ -151,8 +151,8 @@ const Onboarding = () => {
 
           <StepRow
             index={3}
-            title="Connect Ashby"
-            caption="Pull the latest pipeline stages, feedback, and interview history from Ashby."
+            title="Ashby (shared by the team)"
+            caption="One Ashby connection serves the whole team. If it's already connected you can skip this; if it shows Reconnect, any teammate's Ashby login fixes it for everyone."
             done={status.ashbyConnected}
             action={
               <AshbyFetchButton

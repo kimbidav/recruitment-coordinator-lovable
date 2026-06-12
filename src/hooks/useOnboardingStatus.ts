@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { getStoredAshbyCookie } from "@/lib/ashbyCookie";
 
 export interface OnboardingStatus {
   googleConnected: boolean;
@@ -35,7 +34,7 @@ export function useOnboardingStatus(): OnboardingStatus {
     }
     setLoading(true);
     try {
-      const [googleRes, slackRes, candidatesRes] = await Promise.all([
+      const [googleRes, slackRes, candidatesRes, ashbyRes] = await Promise.all([
         supabase
           .from("google_calendar_tokens")
           .select("google_email")
@@ -48,6 +47,13 @@ export function useOnboardingStatus(): OnboardingStatus {
           .from("candidates")
           .select("id", { count: "exact", head: true })
           .limit(1),
+        // Org-wide shared session: connected for everyone or no one. New
+        // teammates skip the Ashby step when the team session is healthy.
+        supabase
+          .from("ashby_connection")
+          .select("status")
+          .eq("id", 1)
+          .maybeSingle(),
       ]);
 
       setGoogleConnected(!!googleRes.data);
@@ -55,7 +61,7 @@ export function useOnboardingStatus(): OnboardingStatus {
       setSlackConnected(!!slackRes.data);
       setSlackTeamName(slackRes.data?.slack_team_name ?? null);
       setHasCandidates((candidatesRes.count ?? 0) > 0);
-      setAshbyConnected(!!getStoredAshbyCookie());
+      setAshbyConnected(ashbyRes.data?.status === "healthy");
     } catch {
       // Non-fatal — leave defaults.
     } finally {

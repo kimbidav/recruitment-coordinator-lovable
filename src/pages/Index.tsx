@@ -7,6 +7,7 @@ import { SearchInput } from "@/components/SearchInput";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { CsvUpload } from "@/components/CsvUpload";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
+import { AshbyConnectionBanner } from "@/components/AshbyConnectionBanner";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
 import { SlackConnectButton } from "@/components/SlackConnectButton";
@@ -440,6 +441,7 @@ const Index = () => {
 
       {/* Main Content */}
       <main className="container py-6 space-y-6">
+        <AshbyConnectionBanner />
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
