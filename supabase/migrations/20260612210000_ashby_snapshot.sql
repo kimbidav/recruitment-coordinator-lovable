@@ -1,0 +1,80 @@
+-- Org-shared Ashby snapshot: the cloud equivalent of the desktop app's
+-- data/ashby_candidates.json. Written server-side by the ashby-sync edge
+-- function (accumulate-and-merge, archive/hired inference); read by every
+-- authenticated user and filtered per-user by credited_to in the app.
+
+create table public.ashby_snapshot_candidates (
+  id uuid primary key default gen_random_uuid(),
+  ashby_candidate_id text not null,
+  ashby_job_id text not null default '',
+  application_id text,
+  org_id text,
+  candidate_name text not null,
+  company_name text not null,
+  job_title text,
+  pipeline_stage text,
+  stage_type text not null default '',
+  decision_status text,
+  current_stage_index int not null default 0,
+  total_stages int not null default 0,
+  stage_progress text,
+  days_in_stage int not null default 0,
+  needs_scheduling boolean not null default false,
+  credited_to text,
+  source text,
+  feedback_count int not null default 0,
+  latest_recommendation text,
+  latest_feedback_author text,
+  latest_feedback_date timestamptz,
+  current_stage_avg_score numeric,
+  current_stage_date timestamptz,
+  current_stage_interviews text,
+  interview_history_summary text,
+  last_activity_at text,
+  interview_events jsonb not null default '[]'::jsonb,
+  archived_reason text,
+  archived_inferred boolean,
+  archived_detected_at timestamptz,
+  fetched_at timestamptz,
+  fetch_source text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (ashby_candidate_id, ashby_job_id)
+);
+
+create index ashby_snapshot_candidates_company_idx
+  on public.ashby_snapshot_candidates (company_name);
+create index ashby_snapshot_candidates_credited_idx
+  on public.ashby_snapshot_candidates (credited_to);
+
+-- Authoritative Ashby org list (includes orgs with zero candidate rows).
+-- The extractor appends an org to its result's `companies` array only after
+-- a successful sweep, so last_swept_at doubles as sweep bookkeeping.
+create table public.ashby_orgs (
+  org_name text primary key,
+  org_id text,
+  first_seen_at timestamptz not null default now(),
+  last_swept_at timestamptz,
+  last_sweep_ok boolean
+);
+
+alter table public.ashby_snapshot_candidates enable row level security;
+alter table public.ashby_orgs enable row level security;
+
+create policy "authenticated can read ashby snapshot"
+  on public.ashby_snapshot_candidates
+  for select
+  to authenticated
+  using (true);
+
+create policy "authenticated can read ashby orgs"
+  on public.ashby_orgs
+  for select
+  to authenticated
+  using (true);
+
+-- Writes go through the ashby-sync edge function with the service role only.
+grant select on public.ashby_snapshot_candidates to authenticated;
+grant select on public.ashby_orgs to authenticated;
+grant all on public.ashby_snapshot_candidates to service_role;
+grant all on public.ashby_orgs to service_role;

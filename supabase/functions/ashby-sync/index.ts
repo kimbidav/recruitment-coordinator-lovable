@@ -1,5 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import {
+  type RawRecord,
+  mergeCandidateRecords,
+  inferArchivedCandidates,
+} from "../_shared/ashbyMerge.ts";
 
 const ASHBY_AUTOMATION_API_BASE =
   Deno.env.get("ASHBY_AUTOMATION_API_BASE") || "https://ashby-automation-production.up.railway.app";
@@ -40,15 +45,36 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function parseAshbyResponse(data: unknown): { candidates: unknown[]; stats: Record<string, unknown> } {
-  if (Array.isArray(data)) return { candidates: data, stats: {} };
+function parseAshbyResponse(data: unknown): {
+  candidates: unknown[];
+  stats: Record<string, unknown>;
+  companies: string[];
+} {
+  if (Array.isArray(data)) return { candidates: data, stats: {}, companies: [] };
   if (data && typeof data === "object") {
-    const obj = data as { candidates?: unknown; extraction_stats?: Record<string, unknown> };
+    const obj = data as {
+      candidates?: unknown;
+      extraction_stats?: Record<string, unknown>;
+      companies?: unknown;
+    };
     if (Array.isArray(obj.candidates)) {
-      return { candidates: obj.candidates, stats: obj.extraction_stats ?? {} };
+      // The extractor appends a company to `companies` only after its org
+      // swept successfully — so this doubles as the trusted-org set for
+      // archive inference AND the authoritative Ashby org list (it includes
+      // orgs with zero candidates, which candidate rows can never reveal).
+      const companies: string[] = [];
+      for (const entry of Array.isArray(obj.companies) ? obj.companies : []) {
+        if (typeof entry === "string" && entry.trim()) {
+          companies.push(entry.trim());
+        } else if (entry && typeof entry === "object") {
+          const name = (entry as Record<string, unknown>).name ?? (entry as Record<string, unknown>).company_name;
+          if (typeof name === "string" && name.trim()) companies.push(name.trim());
+        }
+      }
+      return { candidates: obj.candidates, stats: obj.extraction_stats ?? {}, companies };
     }
   }
-  return { candidates: [], stats: {} };
+  return { candidates: [], stats: {}, companies: [] };
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -162,6 +188,165 @@ async function seedExtractorSession(cookie: string): Promise<{ ok: true } | { er
   return { ok: true };
 }
 
+// ── Org-shared snapshot persistence ─────────────────────────────────────────
+//
+// The cloud equivalent of the desktop app's data/ashby_candidates.json:
+// `ashby_snapshot_candidates` is the canonical, org-scoped Ashby truth that
+// every user's pipeline view reads (filtered per-user by credited_to). It is
+// written exactly once per completed fetch, by whichever poller wins the
+// conditional status flip — NOT by the browser.
+
+const txt = (v: unknown): string | null => {
+  const s = typeof v === "string" ? v.trim() : v === null || v === undefined ? "" : String(v).trim();
+  return s || null;
+};
+const reqTxt = (v: unknown, fb: string): string => txt(v) ?? fb;
+const intg = (v: unknown): number => {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isInteger(n) ? n : 0;
+};
+const num = (v: unknown): number | null => {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const tstamp = (v: unknown): string | null => {
+  const s = txt(v);
+  if (!s) return null;
+  const p = Date.parse(s);
+  return Number.isFinite(p) ? new Date(p).toISOString() : null;
+};
+
+/** Extractor/merged record (candidate_id/job_id) → snapshot table row. */
+function snapshotRow(rec: RawRecord): Record<string, unknown> {
+  return {
+    ashby_candidate_id: reqTxt(rec.candidate_id, ""),
+    ashby_job_id: txt(rec.job_id) ?? "",
+    application_id: txt(rec.application_id),
+    org_id: txt(rec.org_id),
+    candidate_name: reqTxt(rec.candidate_name, "(no name)"),
+    company_name: reqTxt(rec.company_name, "(unknown company)"),
+    job_title: txt(rec.job_title),
+    pipeline_stage: txt(rec.pipeline_stage),
+    stage_type: txt(rec.stage_type) ?? "",
+    decision_status: txt(rec.decision_status),
+    current_stage_index: intg(rec.current_stage_index),
+    total_stages: intg(rec.total_stages),
+    stage_progress: txt(rec.stage_progress),
+    days_in_stage: intg(rec.days_in_stage),
+    needs_scheduling: rec.needs_scheduling === true,
+    credited_to: txt(rec.credited_to),
+    source: txt(rec.source),
+    feedback_count: intg(rec.feedback_count),
+    latest_recommendation: txt(rec.latest_recommendation),
+    latest_feedback_author: txt(rec.latest_feedback_author),
+    latest_feedback_date: tstamp(rec.latest_feedback_date),
+    current_stage_avg_score: num(rec.current_stage_avg_score),
+    current_stage_date: tstamp(rec.current_stage_date),
+    current_stage_interviews: txt(rec.current_stage_interviews),
+    interview_history_summary: txt(rec.interview_history_summary),
+    last_activity_at: txt(rec.last_activity_at),
+    interview_events: Array.isArray(rec.interview_events) ? rec.interview_events : [],
+    archived_reason: txt(rec.archived_reason),
+    archived_inferred: typeof rec.archived_inferred === "boolean" ? rec.archived_inferred : null,
+    archived_detected_at: tstamp(rec.archived_detected_at),
+    fetched_at: tstamp(rec.fetched_at),
+    fetch_source: txt(rec.fetch_source),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+/** Snapshot table row → merge-shaped record (candidate_id/job_id keys). */
+function recordFromRow(row: Record<string, unknown>): RawRecord {
+  const { ashby_candidate_id, ashby_job_id, id: _id, created_at: _c, updated_at: _u, ...rest } = row;
+  return { ...rest, candidate_id: ashby_candidate_id, job_id: ashby_job_id };
+}
+
+async function loadSnapshotRecords(admin: Admin): Promise<RawRecord[]> {
+  const out: RawRecord[] = [];
+  const PAGE = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await admin
+      .from("ashby_snapshot_candidates")
+      .select("*")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as Record<string, unknown>[];
+    out.push(...rows.map(recordFromRow));
+    if (rows.length < PAGE) break;
+    from += PAGE;
+  }
+  return out;
+}
+
+async function verifyArchiveStatuses(
+  apps: { application_id: string; org_id: string }[],
+): Promise<{ application_id?: string }[]> {
+  const res = await fetchWithTimeout(
+    `${ASHBY_AUTOMATION_API_BASE}/api/applications/archive-status`,
+    {
+      method: "POST",
+      headers: extractorHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ applications: apps }),
+    },
+    60_000,
+  );
+  if (!res.ok) throw new Error(`archive-status HTTP ${res.status}`);
+  const body = await res.json().catch(() => ({}));
+  return Array.isArray(body?.results) ? body.results : [];
+}
+
+/**
+ * Merge a completed fetch into the org-shared snapshot tables. Best-effort:
+ * a persist failure must not fail the poll (the dashboard still gets the
+ * payload; the next completed fetch retries the snapshot).
+ */
+async function persistSnapshot(
+  admin: Admin,
+  candidates: unknown[],
+  companies: string[],
+): Promise<void> {
+  const incoming = candidates.filter((c): c is RawRecord => !!c && typeof c === "object");
+  const existing = await loadSnapshotRecords(admin);
+  const outcome = mergeCandidateRecords(existing, incoming);
+
+  const trusted = new Set(companies.map((c) => c.toLowerCase()));
+  const archive = await inferArchivedCandidates(outcome, trusted, verifyArchiveStatuses);
+
+  const toUpsert = [...outcome.touched, ...archive.stamped]
+    .map(snapshotRow)
+    .filter((r) => (r.ashby_candidate_id as string).length > 0);
+
+  // Chunked upserts: same rationale as usePipelineSession's saveSession —
+  // one giant statement is where PostgREST writes go to die.
+  for (let i = 0; i < toUpsert.length; i += 50) {
+    const chunk = toUpsert.slice(i, i + 50);
+    const { error } = await admin
+      .from("ashby_snapshot_candidates")
+      .upsert(chunk, { onConflict: "ashby_candidate_id,ashby_job_id" });
+    if (error) throw error;
+  }
+
+  if (companies.length > 0) {
+    const now = new Date().toISOString();
+    const orgRows = Array.from(new Set(companies)).map((org_name) => ({
+      org_name,
+      last_swept_at: now,
+      last_sweep_ok: true,
+    }));
+    const { error } = await admin.from("ashby_orgs").upsert(orgRows, { onConflict: "org_name" });
+    if (error) throw error;
+  }
+
+  console.log(
+    `[ashby-sync] snapshot merge: +${outcome.stats.added} new, ~${outcome.stats.updated} updated, ` +
+      `=${outcome.stats.kept} kept, ↧${outcome.stats.downgrade_skipped} downgrade-skipped, ` +
+      `⊘${archive.archived_inferred} archived, ★${archive.hired_detected} hired, ` +
+      `${outcome.stats.skipped_no_id} skipped (no ashby id), total=${outcome.stats.total}, ` +
+      `orgs=${companies.length}`,
+  );
+}
+
 /** Poll the extractor for a running job and advance the fetch_jobs row. */
 async function advanceJob(admin: Admin, job: Record<string, unknown>): Promise<Record<string, unknown>> {
   const jobId = job.id as string;
@@ -227,7 +412,7 @@ async function advanceJob(admin: Admin, job: Record<string, unknown>): Promise<R
   }
 
   // Completed: the status response carries the full result payload.
-  const { candidates, stats } = parseAshbyResponse(body);
+  const { candidates, stats, companies } = parseAshbyResponse(body);
   const orgsTotal = typeof stats.orgs_total === "number" ? stats.orgs_total : null;
   const orgsFetched = typeof stats.orgs_fetched === "number" ? stats.orgs_fetched : null;
   const orgsFailed = typeof stats.orgs_failed === "number" ? stats.orgs_failed : 0;
@@ -245,8 +430,28 @@ async function advanceJob(admin: Admin, job: Record<string, unknown>): Promise<R
     result_received_at: new Date().toISOString(),
     error_message: candidates.length === 0 ? "No candidates returned" : null,
   };
-  await admin.from("fetch_jobs").update(update).eq("id", jobId);
+  // Conditional flip: multiple teammates may be polling the same shared
+  // extractor job. Only the poller that wins running→done persists the
+  // snapshot, so the merge runs exactly once per fetch.
+  const { data: claimed } = await admin
+    .from("fetch_jobs")
+    .update(update)
+    .eq("id", jobId)
+    .eq("status", "running")
+    .select("id");
+  const wonClaim = Array.isArray(claimed) && claimed.length > 0;
   await setConnection(admin, { status: "healthy", last_ok_at: new Date().toISOString(), last_error: null });
+
+  if (wonClaim && candidates.length > 0) {
+    try {
+      await persistSnapshot(admin, candidates, companies);
+    } catch (err) {
+      // Best-effort: snapshot tables may not exist yet (migration pending) or
+      // the upsert hiccuped. The dashboard still gets the payload; the next
+      // completed fetch re-runs the merge against whatever is stored.
+      console.error("[ashby-sync] snapshot persist failed:", err instanceof Error ? err.message : err);
+    }
+  }
   return { ...job, ...update };
 }
 

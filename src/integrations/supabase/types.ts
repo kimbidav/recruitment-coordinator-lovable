@@ -179,6 +179,144 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_orgs: {
+        Row: {
+          org_name: string
+          org_id: string | null
+          first_seen_at: string
+          last_swept_at: string | null
+          last_sweep_ok: boolean | null
+        }
+        Insert: {
+          org_name: string
+          org_id?: string | null
+          first_seen_at?: string
+          last_swept_at?: string | null
+          last_sweep_ok?: boolean | null
+        }
+        Update: {
+          org_name?: string
+          org_id?: string | null
+          first_seen_at?: string
+          last_swept_at?: string | null
+          last_sweep_ok?: boolean | null
+        }
+        Relationships: []
+      }
+      ashby_snapshot_candidates: {
+        Row: {
+          id: string
+          ashby_candidate_id: string
+          ashby_job_id: string
+          application_id: string | null
+          org_id: string | null
+          candidate_name: string
+          company_name: string
+          job_title: string | null
+          pipeline_stage: string | null
+          stage_type: string
+          decision_status: string | null
+          current_stage_index: number
+          total_stages: number
+          stage_progress: string | null
+          days_in_stage: number
+          needs_scheduling: boolean
+          credited_to: string | null
+          source: string | null
+          feedback_count: number
+          latest_recommendation: string | null
+          latest_feedback_author: string | null
+          latest_feedback_date: string | null
+          current_stage_avg_score: number | null
+          current_stage_date: string | null
+          current_stage_interviews: string | null
+          interview_history_summary: string | null
+          last_activity_at: string | null
+          interview_events: Json
+          archived_reason: string | null
+          archived_inferred: boolean | null
+          archived_detected_at: string | null
+          fetched_at: string | null
+          fetch_source: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          ashby_candidate_id: string
+          ashby_job_id?: string
+          application_id?: string | null
+          org_id?: string | null
+          candidate_name: string
+          company_name: string
+          job_title?: string | null
+          pipeline_stage?: string | null
+          stage_type?: string
+          decision_status?: string | null
+          current_stage_index?: number
+          total_stages?: number
+          stage_progress?: string | null
+          days_in_stage?: number
+          needs_scheduling?: boolean
+          credited_to?: string | null
+          source?: string | null
+          feedback_count?: number
+          latest_recommendation?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
+          current_stage_interviews?: string | null
+          interview_history_summary?: string | null
+          last_activity_at?: string | null
+          interview_events?: Json
+          archived_reason?: string | null
+          archived_inferred?: boolean | null
+          archived_detected_at?: string | null
+          fetched_at?: string | null
+          fetch_source?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          ashby_candidate_id?: string
+          ashby_job_id?: string
+          application_id?: string | null
+          org_id?: string | null
+          candidate_name?: string
+          company_name?: string
+          job_title?: string | null
+          pipeline_stage?: string | null
+          stage_type?: string
+          decision_status?: string | null
+          current_stage_index?: number
+          total_stages?: number
+          stage_progress?: string | null
+          days_in_stage?: number
+          needs_scheduling?: boolean
+          credited_to?: string | null
+          source?: string | null
+          feedback_count?: number
+          latest_recommendation?: string | null
+          latest_feedback_author?: string | null
+          latest_feedback_date?: string | null
+          current_stage_avg_score?: number | null
+          current_stage_date?: string | null
+          current_stage_interviews?: string | null
+          interview_history_summary?: string | null
+          last_activity_at?: string | null
+          interview_events?: Json
+          archived_reason?: string | null
+          archived_inferred?: boolean | null
+          archived_detected_at?: string | null
+          fetched_at?: string | null
+          fetch_source?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ashby_known_clients: {
         Row: {
           client_name: string
