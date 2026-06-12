@@ -18,19 +18,10 @@ import { SLACK_STATUS_LABEL, SlackStatus } from "@/lib/slackParse";
 
 // Source is company-level: "ashby" = the client runs an Ashby instance (every
 // loop there is tagged ashby, even Slack-only submissions); "slack" = client
-// with no Ashby presence. A Slack-only candidate at an Ashby client gets the
-// warning variant — they should exist in Ashby but don't.
-function SourcePill({ source, missingFromAshby }: { source: string; missingFromAshby?: boolean }) {
-  if (missingFromAshby) {
-    return (
-      <span
-        title="In a Slack thread at this client, but has no Ashby record — they should be added to Ashby."
-        className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 cursor-help whitespace-nowrap"
-      >
-        Ashby ⚠
-      </span>
-    );
-  }
+// with no Ashby presence. The candidate-level "missing from Ashby" gap is
+// flagged with an explicit badge under the candidate's name (not here) — the
+// Source pill stays the company-level truth.
+function SourcePill({ source }: { source: string }) {
   const label = source === "slack" ? "Slack" : "Ashby";
   const cls =
     label === "Slack"
@@ -222,37 +213,47 @@ export function CandidateTable({
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2 group/name">
-                      <span className="font-medium text-foreground">
-                        {candidate.candidate_name}
-                      </span>
-                      <div className="flex items-center gap-1 opacity-0 group-hover/name:opacity-100 transition-opacity">
-                        {linkedinByName.get(candidate.candidate_name) && (
-                          <a
-                            href={linkedinByName.get(candidate.candidate_name)!}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            title="Open LinkedIn profile"
-                            className="text-muted-foreground hover:text-primary transition-colors"
-                          >
-                            <Linkedin className="h-3.5 w-3.5" />
-                          </a>
-                        )}
-                        {onFilterByCandidate && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onFilterByCandidate(candidate.candidate_name);
-                            }}
-                            title={`Filter to all processes for ${candidate.candidate_name}`}
-                            className="text-muted-foreground hover:text-primary transition-colors"
-                          >
-                            <Filter className="h-3.5 w-3.5" />
-                          </button>
-                        )}
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-2 group/name">
+                        <span className="font-medium text-foreground">
+                          {candidate.candidate_name}
+                        </span>
+                        <div className="flex items-center gap-1 opacity-0 group-hover/name:opacity-100 transition-opacity">
+                          {linkedinByName.get(candidate.candidate_name) && (
+                            <a
+                              href={linkedinByName.get(candidate.candidate_name)!}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              title="Open LinkedIn profile"
+                              className="text-muted-foreground hover:text-primary transition-colors"
+                            >
+                              <Linkedin className="h-3.5 w-3.5" />
+                            </a>
+                          )}
+                          {onFilterByCandidate && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onFilterByCandidate(candidate.candidate_name);
+                              }}
+                              title={`Filter to all processes for ${candidate.candidate_name}`}
+                              className="text-muted-foreground hover:text-primary transition-colors"
+                            >
+                              <Filter className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
+                      {candidate.missing_from_ashby && (
+                        <span
+                          title="This client runs Ashby, but this candidate has no Ashby record (not even an archived one) — they may be missing from the ATS."
+                          className="inline-flex items-center gap-1 w-fit text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30 cursor-help whitespace-nowrap"
+                        >
+                          ⚠ Not yet in Ashby
+                        </span>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -262,7 +263,7 @@ export function CandidateTable({
                     <span className="font-medium">{candidate.company_name}</span>
                   </TableCell>
                   <TableCell>
-                    <SourcePill source={candidate.source} missingFromAshby={candidate.missing_from_ashby} />
+                    <SourcePill source={candidate.source} />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1.5">
