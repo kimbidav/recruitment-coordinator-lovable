@@ -27,6 +27,7 @@ interface PreparedEvent {
   end_time: string;
   candidate_name: string;
   company_name: string;
+  credited_to: string;
 }
 
 export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
@@ -114,6 +115,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
           end_time: new Date(stageDate.getTime() + 30 * 60 * 1000).toISOString(),
           candidate_name: c.candidate_name,
           company_name: c.company_name,
+          credited_to: c.credited_to ?? "",
         };
       })
       .filter((e): e is PreparedEvent => e !== null && new Date(e.start_time) >= now)
@@ -131,12 +133,16 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   const handleConfirmSync = async () => {
     setIsLoading(true);
     try {
-      // Strip the display-only fields before sending.
-      const payload = upcomingEvents.map(({ id, interview_title, start_time, end_time }) => ({
+      // Strip the display-only fields before sending. credited_to rides along
+      // so the server can enforce the only-my-candidates guard — the org
+      // shares one pipeline, and a stray "Everyone" filter must not schedule
+      // teammates' interviews on this user's calendar.
+      const payload = upcomingEvents.map(({ id, interview_title, start_time, end_time, credited_to }) => ({
         id,
         interview_title,
         start_time,
         end_time,
+        credited_to,
       }));
       const { data, error } = await supabase.functions.invoke("google-calendar-sync", {
         body: { events: payload },

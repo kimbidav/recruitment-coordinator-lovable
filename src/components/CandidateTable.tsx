@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronUp, Linkedin, Filter, MessagesSquare, Mail, Ban } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, ChevronDown, ChevronUp, Linkedin, Filter, MessagesSquare, Mail, Ban } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -265,7 +265,17 @@ export function CandidateTable({
                     <SourcePill source={candidate.source} missingFromAshby={candidate.missing_from_ashby} />
                   </TableCell>
                   <TableCell>
-                    <StageBadge stage={candidate.pipeline_stage} />
+                    <div className="flex items-center gap-1.5">
+                      <StageBadge stage={candidate.pipeline_stage} />
+                      {candidate.data_quality_warnings && candidate.data_quality_warnings.length > 0 && (
+                        <span title={candidate.data_quality_warnings.join("\n")} className="inline-flex">
+                          <AlertTriangle
+                            className="h-3.5 w-3.5 shrink-0 text-amber-600"
+                            aria-label="Ashby data warning"
+                          />
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     {candidate.total_stages > 0 ? (
@@ -281,7 +291,15 @@ export function CandidateTable({
                     )}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={candidate.decision_status} />
+                    <StatusBadge
+                      status={candidate.decision_status}
+                      reason={
+                        candidate.archived_reason ??
+                        (candidate.archived_inferred
+                          ? "Inferred: candidate no longer appears in Ashby's active pipeline"
+                          : undefined)
+                      }
+                    />
                   </TableCell>
                   <TableCell
                     onClick={(e) => e.stopPropagation()}

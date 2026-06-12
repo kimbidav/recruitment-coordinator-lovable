@@ -10,7 +10,9 @@ import { SlackConnectButton } from "@/components/SlackConnectButton";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
+import { RecruiterAliasStep } from "@/components/RecruiterAliasStep";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
+import { useRecruiterAliases } from "@/hooks/useRecruiterAliases";
 
 const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
 const PENDING_ONBOARDING_KEY = "pendingOnboarding";
@@ -67,6 +69,7 @@ const Onboarding = () => {
   const navigate = useNavigate();
   const status = useOnboardingStatus();
   const { mergeAshbyFetch } = usePipelineSession();
+  const { aliases, refreshAliases } = useRecruiterAliases();
 
   useEffect(() => {
     document.title = "Welcome — Candidate Pipeline";
@@ -162,6 +165,15 @@ const Onboarding = () => {
                 }}
               />
             }
+          />
+
+          <StepRow
+            index={4}
+            title="Your name in Ashby"
+            caption="Pick how you appear as the submitter in Ashby so the dashboard can default to YOUR candidates (the team shares one Ashby pipeline)."
+            done={aliases.length > 0}
+            doneLabel={aliases.length > 0 ? aliases[0] : undefined}
+            action={<RecruiterAliasStep onSaved={() => void refreshAliases()} />}
           />
         </Card>
 

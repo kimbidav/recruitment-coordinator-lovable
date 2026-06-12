@@ -20,6 +20,9 @@ import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
+import { useAshbySnapshot } from "@/hooks/useAshbySnapshot";
+import { useRecruiterAliases } from "@/hooks/useRecruiterAliases";
+import { creditedToMatchesAliases } from "@/lib/recruiterIdentity";
 import { useSlackSubmissions } from "@/hooks/useSlackSubmissions";
 import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
 import { useAuth } from "@/contexts/AuthContext";
@@ -37,6 +40,8 @@ const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 const Index = () => {
   const { candidates, lastUpdated, isLoading, saveSession, mergeAshbyFetch, markCandidateClosed } = usePipelineSession();
+  const { activeSnapshot, archivedSnapshot, orgNames, snapshotLoaded, refreshSnapshot } = useAshbySnapshot();
+  const { aliases, aliasesLoaded } = useRecruiterAliases();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
@@ -67,6 +72,14 @@ const Index = () => {
   const [slackThreadFor, setSlackThreadFor] = useState<Candidate | null>(null);
   const [emailFor, setEmailFor] = useState<Candidate | null>(null);
   const [ashbyClientNames, setAshbyClientNames] = useState<string[]>([]);
+  const [showArchive, setShowArchive] = useState(false);
+  const [mineOnly, setMineOnly] = useState(true);
+
+  // The org-shared snapshot (written server-side by ashby-sync) is the Ashby
+  // source of truth once it has rows; the per-user candidates table remains
+  // as the fallback for CSV uploads and pre-snapshot installs.
+  const snapshotIsTruth = snapshotLoaded && (activeSnapshot.length > 0 || archivedSnapshot.length > 0);
+  const ashbySourceCandidates = snapshotIsTruth ? activeSnapshot : candidates;
 
   // Load the authoritative set of companies known to exist in the user's Ashby
   // workspace. This is cumulative across every past fetch — never deleted —
@@ -130,7 +143,7 @@ const Index = () => {
         .filter(Boolean);
 
     const canonicalByToken = new Map<string, string>();
-    for (const c of candidates) {
+    for (const c of ashbySourceCandidates) {
       const name = c.credited_to?.trim();
       if (!name || name.includes("@")) continue;
       const tokens = tokenize(name);
@@ -170,14 +183,17 @@ const Index = () => {
 
     const userLabel = canonicalizeSubmitter(user?.email ?? "Me");
 
-    // Company-level classification driven by the authoritative ashby_known_clients
-    // set (cumulative across every past fetch). Every distinct company across
-    // Ashby + Slack is either an "Ashby company" or a "Slack-only company",
-    // and every candidate inherits the company's source.
-    const ashbyCompanySet = new Set<string>(ashbyClientNames);
-    // Also treat any company currently returned from the Ashby fetch as Ashby,
-    // even if ashby_known_clients hasn't been refreshed yet on this page load.
-    for (const c of candidates) {
+    // Company-level classification. Primary source: the authoritative
+    // ashby_orgs list from the extractor (covers orgs with ZERO candidate
+    // rows — candidate-derived sets can never reveal those). Fallbacks: the
+    // legacy per-user ashby_known_clients set and companies present in the
+    // current Ashby rows.
+    const ashbyCompanySet = new Set<string>([...orgNames, ...ashbyClientNames]);
+    for (const c of ashbySourceCandidates) {
+      const name = (c.company_name ?? "").trim();
+      if (name) ashbyCompanySet.add(name);
+    }
+    for (const c of archivedSnapshot) {
       const name = (c.company_name ?? "").trim();
       if (name) ashbyCompanySet.add(name);
     }
@@ -227,7 +243,7 @@ const Index = () => {
     }
 
     const matchedSlackIds = new Set<string>();
-    const enriched: Candidate[] = candidates.map((c) => {
+    const enriched: Candidate[] = ashbySourceCandidates.map((c) => {
       const buckets: (typeof slackSubs)[] = [
         slackByCandidateName.get(normalizeMatchKey(c.candidate_name)) ?? [],
         slackByFirstLast.get(firstLastKey(c.candidate_name) ?? "") ?? [],
@@ -266,8 +282,26 @@ const Index = () => {
       return { ...c, source: "ashby" };
     });
 
+    // A Slack thread whose candidate is ARCHIVED in Ashby should not
+    // resurface as an active Slack-only row (or a false "missing from
+    // Ashby" flag) — the archived snapshot row already represents that loop
+    // and is visible under the archive toggle.
+    const archivedNameKeys = new Map<string, string[]>();
+    for (const a of archivedSnapshot) {
+      const key = normalizeMatchKey(a.candidate_name);
+      if (!key) continue;
+      const list = archivedNameKeys.get(key) ?? [];
+      list.push(a.company_name);
+      archivedNameKeys.set(key, list);
+    }
+    const matchesArchived = (s: (typeof slackSubs)[number]): boolean => {
+      const companies = archivedNameKeys.get(normalizeMatchKey(s.candidate_name || "")) ?? [];
+      return companies.some((companyName) => companiesMatch(s.client_name, companyName));
+    };
+
     const slackOnly: Candidate[] = slackSubs
       .filter((s) => !matchedSlackIds.has(s.id))
+      .filter((s) => !matchesArchived(s))
       .map((s) => {
         // Slack-only candidate: no Ashby record for THIS person, so we don't
         // know their real pipeline progress — total_stages 0 renders as "—"
@@ -311,11 +345,25 @@ const Index = () => {
       });
 
     return [...enriched, ...slackOnly];
-  }, [candidates, slackSubs, user?.email, ashbyClientNames]);
+  }, [ashbySourceCandidates, archivedSnapshot, slackSubs, user?.email, ashbyClientNames, orgNames]);
+
+  // Per-user view + archive split, applied AFTER the merge so both respect
+  // the same identity rules. "My candidates" filters the org-shared data to
+  // rows credited to this user's aliases; archived rows appear only behind
+  // the toggle and never count toward stats.
+  const visibleCandidates = useMemo(() => {
+    const mineFilter = (list: Candidate[]) =>
+      mineOnly && aliases.length > 0
+        ? list.filter((c) => creditedToMatchesAliases(c.credited_to, aliases))
+        : list;
+    const active = mineFilter(mergedCandidates);
+    const archived = showArchive && snapshotIsTruth ? mineFilter(archivedSnapshot) : [];
+    return { active, archived, all: [...active, ...archived] };
+  }, [mergedCandidates, archivedSnapshot, mineOnly, aliases, showArchive, snapshotIsTruth]);
 
   const companies = useMemo(
-    () => [...new Set(mergedCandidates.map((c) => c.company_name))].sort(),
-    [mergedCandidates],
+    () => [...new Set(visibleCandidates.all.map((c) => c.company_name))].sort(),
+    [visibleCandidates],
   );
 
   // Collapse granular pipeline stages into two buckets the user cares about:
@@ -336,22 +384,22 @@ const Index = () => {
   const stages = useMemo(() => ["In Process", "Closed"], []);
 
   const statuses = useMemo(
-    () => [...new Set(mergedCandidates.map((c) => c.decision_status))].sort(),
-    [mergedCandidates],
+    () => [...new Set(visibleCandidates.all.map((c) => c.decision_status))].sort(),
+    [visibleCandidates],
   );
 
   const submitters = useMemo(
-    () => [...new Set(mergedCandidates.map((c) => c.credited_to))].sort(),
-    [mergedCandidates],
+    () => [...new Set(visibleCandidates.all.map((c) => c.credited_to))].sort(),
+    [visibleCandidates],
   );
 
   const sources = useMemo(
-    () => [...new Set(mergedCandidates.map((c) => c.source || "ashby"))].sort(),
-    [mergedCandidates],
+    () => [...new Set(visibleCandidates.all.map((c) => c.source || "ashby"))].sort(),
+    [visibleCandidates],
   );
 
   const filteredCandidates = useMemo(() => {
-    return mergedCandidates.filter((candidate) => {
+    return visibleCandidates.all.filter((candidate) => {
       const matchesSearch =
         search === "" ||
         candidate.candidate_name.toLowerCase().includes(search.toLowerCase()) ||
@@ -379,7 +427,7 @@ const Index = () => {
         matchesSource
       );
     });
-  }, [mergedCandidates, search, companyFilter, stageFilter, statusFilter, submitterFilter, sourceFilter]);
+  }, [visibleCandidates, search, companyFilter, stageFilter, statusFilter, submitterFilter, sourceFilter]);
 
   if (isLoading) {
     return (
@@ -420,7 +468,14 @@ const Index = () => {
             <div className="flex items-center gap-2 flex-wrap">
               <GoogleCalendarSync candidates={filteredCandidates} />
               <SlackConnectButton onSynced={reloadSlack} />
-              <AshbyFetchButton onMergeFetch={mergeAshbyFetch} />
+              <AshbyFetchButton
+                onMergeFetch={async (fetched) => {
+                  await mergeAshbyFetch(fetched);
+                  // The server persisted the org-shared snapshot during the
+                  // poll — re-pull it so the table reflects the new truth.
+                  await refreshSnapshot();
+                }}
+              />
               <CsvUpload onUpload={handleCsvUpload} />
               {user && (
                 <Button
@@ -475,8 +530,8 @@ const Index = () => {
               </div>
             ) : (
               <>
-                {/* Stats */}
-                <DashboardStats candidates={mergedCandidates} />
+                {/* Stats — active loops only; archived rows never count. */}
+                <DashboardStats candidates={visibleCandidates.active} />
 
                 {/* Filters */}
                 <div className="flex flex-col sm:flex-row gap-3">
@@ -529,12 +584,34 @@ const Index = () => {
                         className="w-[140px]"
                       />
                     )}
+                    {aliasesLoaded && aliases.length > 0 && (
+                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={mineOnly}
+                          onChange={(e) => setMineOnly(e.target.checked)}
+                          className="h-3.5 w-3.5 accent-primary"
+                        />
+                        My candidates only
+                      </label>
+                    )}
+                    {snapshotIsTruth && archivedSnapshot.length > 0 && (
+                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={showArchive}
+                          onChange={(e) => setShowArchive(e.target.checked)}
+                          className="h-3.5 w-3.5 accent-primary"
+                        />
+                        Include archive ({archivedSnapshot.length})
+                      </label>
+                    )}
                   </div>
                 </div>
 
                 {/* Results count */}
                 <p className="text-sm text-muted-foreground">
-                  Showing {filteredCandidates.length} of {mergedCandidates.length} candidates
+                  Showing {filteredCandidates.length} of {visibleCandidates.all.length} candidates
                   {slackSubs.length > 0 && (
                     <span className="ml-2">
                       · {slackSubs.length} from Slack

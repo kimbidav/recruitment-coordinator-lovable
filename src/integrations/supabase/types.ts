@@ -130,6 +130,7 @@ export type Database = {
           batch_followup_threshold: number
           created_at: string
           intro_stall_min_days: number
+          recruiter_aliases: string[]
           updated_at: string
           user_id: string
         }
@@ -137,6 +138,7 @@ export type Database = {
           batch_followup_threshold?: number
           created_at?: string
           intro_stall_min_days?: number
+          recruiter_aliases?: string[]
           updated_at?: string
           user_id: string
         }
@@ -144,6 +146,7 @@ export type Database = {
           batch_followup_threshold?: number
           created_at?: string
           intro_stall_min_days?: number
+          recruiter_aliases?: string[]
           updated_at?: string
           user_id?: string
         }

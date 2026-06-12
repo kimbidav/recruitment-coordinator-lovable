@@ -6,6 +6,34 @@ interface InEvent {
   interview_title: string;
   start_time: string;
   end_time: string;
+  credited_to?: string;
+}
+
+function normalizePersonName(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Tokens derived from the caller's email local-part — the fallback identity
+ * when they haven't saved recruiter_aliases yet. */
+function emailIdentityMatches(email: string, credited: string): boolean {
+  const local = (email.split("@")[0] || "").toLowerCase();
+  if (!local) return false;
+  const tokens = credited.split(" ");
+  const parts = local.split(/[._\-+]/).filter(Boolean);
+  return (
+    (parts.length > 1 && parts.every((p) => tokens.includes(p))) ||
+    (parts.length === 1 &&
+      tokens.length >= 2 &&
+      local.length > 2 &&
+      tokens[0].startsWith(local[0]) &&
+      local.slice(1) === tokens[tokens.length - 1]) ||
+    tokens.includes(local)
+  );
 }
 
 async function refreshAccessToken(refreshToken: string) {
@@ -61,6 +89,41 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
+
+    // Recruiter guard: the org shares one Ashby pipeline, so only events for
+    // candidates credited to THIS user may land on their calendar — enforced
+    // server-side so a UI filter bug can't schedule teammates' interviews.
+    // Identity = saved recruiter_aliases, falling back to email-derived
+    // matching. Events without credited_to (older clients) pass through.
+    const { data: settings } = await admin
+      .from("agent_settings")
+      .select("recruiter_aliases")
+      .eq("user_id", userId)
+      .maybeSingle();
+    const aliases = ((settings as { recruiter_aliases?: string[] } | null)?.recruiter_aliases ?? [])
+      .map(normalizePersonName)
+      .filter(Boolean);
+    const userEmail = userData.user.email ?? "";
+    const isMine = (ev: InEvent): boolean => {
+      const credited = normalizePersonName(ev.credited_to ?? "");
+      if (!credited || credited === "unknown") return true;
+      if (aliases.length > 0) return aliases.includes(credited);
+      return emailIdentityMatches(userEmail, credited);
+    };
+    const myEvents = events.filter(isMine);
+    const skippedNotMine = events.length - myEvents.length;
+    if (myEvents.length === 0) {
+      return new Response(JSON.stringify({
+        success: true,
+        created: 0,
+        skipped: 0,
+        skipped_not_mine: skippedNotMine,
+        total: events.length,
+        errors: [],
+        message: `No events created — all ${skippedNotMine} selected interviews belong to other recruiters.`,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     const { data: tokenRow, error: tokenErr } = await admin
       .from("google_calendar_tokens")
       .select("*")
@@ -91,7 +154,7 @@ Deno.serve(async (req) => {
     // batch as duplicates.
     const existingKeys = new Set<string>();
     try {
-      const times = events
+      const times = myEvents
         .map((ev) => new Date(ev.start_time).getTime())
         .filter((t) => !isNaN(t));
       if (times.length > 0) {
@@ -128,7 +191,7 @@ Deno.serve(async (req) => {
     let created = 0;
     let skipped = 0;
     const errors: string[] = [];
-    for (const ev of events) {
+    for (const ev of myEvents) {
       const evTime = new Date(ev.start_time).getTime();
       const evDay = isNaN(evTime)
         ? ev.start_time.slice(0, 10)
@@ -165,15 +228,17 @@ Deno.serve(async (req) => {
       }
     }
 
+    const notMineNote = skippedNotMine > 0 ? `, ${skippedNotMine} other recruiters' skipped` : "";
     return new Response(JSON.stringify({
       success: true,
       created,
       skipped,
+      skipped_not_mine: skippedNotMine,
       total: events.length,
       errors,
       message: skipped > 0
-        ? `Created ${created} calendar events (${skipped} already existed)`
-        : `Created ${created}/${events.length} calendar events`,
+        ? `Created ${created} calendar events (${skipped} already existed${notMineNote})`
+        : `Created ${created}/${myEvents.length} calendar events${notMineNote}`,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";

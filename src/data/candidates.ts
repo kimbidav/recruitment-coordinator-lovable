@@ -59,6 +59,16 @@ export interface Candidate {
   /** True if the user closed this candidate locally from the dashboard. */
   closed_locally?: boolean;
   closed_at?: string;
+  /** Where the row's pipeline truth came from. Snapshot rows are "ashby". */
+  pipeline_data_source?: "ashby" | "slack" | "csv";
+  /** Snapshot-vs-reality inconsistencies worth a warning icon. */
+  data_quality_warnings?: string[];
+  /** Process is over (Archived/Hired/etc.) — lives behind the archive toggle. */
+  is_historical?: boolean;
+  /** Ashby archive outcome. archived_inferred=true means the candidate
+   *  vanished from a swept org and the reason couldn't be verified. */
+  archived_reason?: string | null;
+  archived_inferred?: boolean;
 }
 
 // Empty by default - data is loaded from Ashby fetch / CSV uploads
