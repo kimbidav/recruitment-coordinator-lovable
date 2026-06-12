@@ -35,6 +35,18 @@ export function AgentActionCard({ card, drafting, closing, onReplySlack, onEmail
   const p = card.payload || {};
   const isStall = card.kind === "intro_stall";
   const isBatch = card.kind === "batch_followup";
+  const isAshbyScheduling = card.kind === "ashby_needs_scheduling";
+  const isAshbyFeedback = card.kind === "ashby_missing_feedback";
+  const kindLabel = isBatch
+    ? "Batch status check"
+    : isStall
+      ? "No scheduling signal"
+      : isAshbyScheduling
+        ? "Needs scheduling (Ashby)"
+        : isAshbyFeedback
+          ? "Missing feedback (Ashby)"
+          : "Awaiting feedback";
+  const ctx = p.ashby_context;
   return (
     <Card className="p-4 space-y-3">
       <div className="flex items-start justify-between gap-3">
@@ -58,7 +70,7 @@ export function AgentActionCard({ card, drafting, closing, onReplySlack, onEmail
               ) : (
                 <AlarmClock className="h-3 w-3" />
               )}
-              {isBatch ? "Batch status check" : isStall ? "No scheduling signal" : "Awaiting feedback"}
+              {kindLabel}
             </Badge>
             <span className="text-xs text-muted-foreground">
               created {formatDistanceToNow(new Date(card.created_at), { addSuffix: true })}
@@ -90,6 +102,76 @@ export function AgentActionCard({ card, drafting, closing, onReplySlack, onEmail
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {ctx && (
+        <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+            Ashby Pipeline
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+            {ctx.job_title && (
+              <div className="col-span-2 text-foreground font-medium truncate">{ctx.job_title}</div>
+            )}
+            {ctx.pipeline_stage && (
+              <div>
+                <span className="text-muted-foreground">Stage: </span>
+                {ctx.pipeline_stage}
+                {ctx.stage_progress ? ` (${ctx.stage_progress})` : ""}
+              </div>
+            )}
+            {typeof ctx.days_in_stage === "number" && (
+              <div>
+                <span className="text-muted-foreground">Days in stage: </span>
+                {ctx.days_in_stage}
+              </div>
+            )}
+            {ctx.decision_status && (
+              <div>
+                <span className="text-muted-foreground">Status: </span>
+                {ctx.decision_status}
+              </div>
+            )}
+            {typeof ctx.feedback_count === "number" && ctx.feedback_count > 0 && (
+              <div>
+                <span className="text-muted-foreground">Scorecards: </span>
+                {ctx.feedback_count}
+                {typeof ctx.avg_score === "number" ? ` · avg ${ctx.avg_score.toFixed(1)}` : ""}
+              </div>
+            )}
+            {ctx.upcoming_interview && (
+              <div className="col-span-2">
+                <span className="text-muted-foreground">Upcoming: </span>
+                {ctx.upcoming_interview}
+              </div>
+            )}
+            {ctx.current_stage_interviews && (
+              <div className="col-span-2 truncate" title={ctx.current_stage_interviews}>
+                <span className="text-muted-foreground">This stage: </span>
+                {ctx.current_stage_interviews}
+              </div>
+            )}
+            {ctx.latest_feedback && (ctx.latest_feedback.author || ctx.latest_feedback.date) && (
+              <div className="col-span-2">
+                <span className="text-muted-foreground">Latest feedback: </span>
+                {[
+                  ctx.latest_feedback.author,
+                  ctx.latest_feedback.date
+                    ? new Date(ctx.latest_feedback.date).toLocaleDateString()
+                    : null,
+                  ctx.latest_feedback.recommendation,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </div>
+            )}
+            {ctx.interview_history && (
+              <div className="col-span-2 text-muted-foreground truncate" title={ctx.interview_history}>
+                {ctx.interview_history}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

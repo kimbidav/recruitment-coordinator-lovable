@@ -32,13 +32,25 @@ Lovable Cloud → project settings → Edge Functions secrets (or
 
 ## 3. Supabase — apply the migration DDL
 
-Pushes do NOT auto-apply migrations. Run the contents of
-`supabase/migrations/20260612190000_ashby_connection.sql` in the Lovable Cloud
-SQL panel (or ask Lovable to apply it), then verify:
+Pushes do NOT auto-apply migrations. Run the contents of these four files in
+the Lovable Cloud SQL panel (or ask Lovable to apply them), in order:
+
+1. `supabase/migrations/20260612190000_ashby_connection.sql` — session health singleton
+2. `supabase/migrations/20260612210000_ashby_snapshot.sql` — org-shared snapshot + org list
+3. `supabase/migrations/20260612213000_recruiter_aliases.sql` — per-user Ashby identity
+4. `supabase/migrations/20260612220000_ashby_card_pair_key.sql` — Ashby card dedup key
+
+Then verify:
 
 ```sql
-select * from public.ashby_connection;  -- should exist (0 rows initially)
+select * from public.ashby_connection;                  -- exists (0 rows initially)
+select count(*) from public.ashby_snapshot_candidates;  -- 0 until first sync
+select recruiter_aliases from public.agent_settings limit 1;
 ```
+
+Every feature degrades gracefully until the DDL is applied (the app falls
+back to the per-user candidates path and skips snapshot persistence), so
+applying late is safe — but nothing org-shared works until then.
 
 ## 4. First seed
 

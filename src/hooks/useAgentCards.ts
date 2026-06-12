@@ -36,12 +36,36 @@ export interface AgentCardPayload {
   ashby_last_activity_at?: string | null;
   ashby_stale?: boolean;
   ashby_days_since_activity?: number | null;
+  /** Full ATS context block on Ashby-derived cards. */
+  ashby_context?: {
+    job_title?: string | null;
+    pipeline_stage?: string | null;
+    stage_progress?: string | null;
+    decision_status?: string | null;
+    days_in_stage?: number | null;
+    feedback_count?: number | null;
+    avg_score?: number | null;
+    latest_recommendation?: string | null;
+    upcoming_interview?: string | null;
+    current_stage_interviews?: string | null;
+    latest_feedback?: {
+      author?: string | null;
+      date?: string | null;
+      recommendation?: string | null;
+    } | null;
+    interview_history?: string | null;
+  };
 }
 
 export interface AgentCard {
   id: string;
   slack_submission_id: string | null;
-  kind: "intro_stall" | "post_interview_followup" | "batch_followup";
+  kind:
+    | "intro_stall"
+    | "post_interview_followup"
+    | "batch_followup"
+    | "ashby_needs_scheduling"
+    | "ashby_missing_feedback";
   status: "open" | "snoozed" | "dismissed" | "resolved";
   snooze_until: string | null;
   created_at: string;

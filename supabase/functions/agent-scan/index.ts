@@ -75,6 +75,35 @@ function companiesMatch(a: string, b: string): boolean {
   const [bF] = companyTokens(b);
   return !!aF && aF === bF && aF.length >= 5;
 }
+/**
+ * Friday-EOW rule for ambiguous scheduling emails ("grabbed a time", no
+ * date): follow up on the FRIDAY of the email's week; emails sent Fri-Sun
+ * roll to the next Friday. Deterministic — LLM drift can't break the rule.
+ * Port of the desktop app's _normalize_followup_to_friday.
+ */
+function normalizeFollowupToFriday(anchorIso: string | null): string {
+  const anchorMs = anchorIso ? new Date(anchorIso).getTime() : NaN;
+  const anchor = isNaN(anchorMs) ? new Date() : new Date(anchorMs);
+  const day = anchor.getUTCDay(); // 0=Sun..5=Fri,6=Sat
+  let daysToFriday: number;
+  if (day >= 1 && day <= 4) {
+    daysToFriday = 5 - day; // Mon-Thu → this week's Friday
+  } else if (day === 5) {
+    daysToFriday = 7; // Friday → next Friday
+  } else {
+    daysToFriday = day === 6 ? 6 : 5; // Sat → +6, Sun → +5
+  }
+  const friday = new Date(Date.UTC(
+    anchor.getUTCFullYear(), anchor.getUTCMonth(), anchor.getUTCDate() + daysToFriday,
+    17, 0, 0,
+  ));
+  // A Friday already in the past means the follow-up is due — re-check tomorrow.
+  if (friday.getTime() <= Date.now()) {
+    return new Date(Date.now() + 86400000).toISOString();
+  }
+  return friday.toISOString();
+}
+
 function firstName(full: string): string {
   return (full || "").trim().split(/\s+/)[0] || full;
 }
@@ -711,6 +740,10 @@ Deno.serve(async (req) => {
     const userClosedByKey = new Map<string, { status: string; updated_at: string }>();
     const indexCards = (cards: Array<{ id: string; slack_submission_id: string | null; kind: string; status: string; updated_at: string }> | null) => {
       for (const c of cards ?? []) {
+        // Ashby-derived cards are keyed by (company, candidate) pair and
+        // managed by their own pass below — keep them out of the
+        // slack_submission_id-keyed index and its auto-resolve sweep.
+        if (c.kind.startsWith("ashby_")) continue;
         const key = `${c.slack_submission_id}::${c.kind}`;
         if (c.status === "open" || c.status === "snoozed") {
           existingByKey.set(key, { id: c.id, status: c.status });
@@ -879,6 +912,83 @@ Deno.serve(async (req) => {
         if (r.client_name && !isInternalPipeline(r.client_name)) mergeAshby(r.client_name, null);
       }
     }
+    // Org-shared truth (primary, once populated): the authoritative org list
+    // covers zero-candidate orgs, and stage_type-bearing snapshot rows give
+    // real per-pair coverage + activity. These also feed the Ashby-derived
+    // cards and the archived prune below.
+    type SnapshotScanRow = {
+      ashby_candidate_id: string;
+      ashby_job_id: string;
+      candidate_name: string;
+      company_name: string;
+      job_title: string | null;
+      pipeline_stage: string | null;
+      stage_type: string;
+      decision_status: string | null;
+      stage_progress: string | null;
+      current_stage_index: number;
+      total_stages: number;
+      days_in_stage: number;
+      needs_scheduling: boolean;
+      credited_to: string | null;
+      feedback_count: number;
+      latest_recommendation: string | null;
+      latest_feedback_author: string | null;
+      latest_feedback_date: string | null;
+      current_stage_avg_score: number | null;
+      current_stage_date: string | null;
+      current_stage_interviews: string | null;
+      interview_history_summary: string | null;
+      last_activity_at: string | null;
+      archived_reason: string | null;
+      interview_events: unknown;
+    };
+    const DONE_DECISIONS = new Set(["archived", "hired", "closed", "rejected"]);
+    let snapshotRows: SnapshotScanRow[] = [];
+    try {
+      const { data: orgRows } = await admin.from("ashby_orgs").select("org_name");
+      for (const r of (orgRows ?? []) as Array<{ org_name?: string }>) {
+        if (r.org_name && !isInternalPipeline(r.org_name)) mergeAshby(r.org_name, null);
+      }
+      const { data: snapRows } = await admin
+        .from("ashby_snapshot_candidates")
+        .select(
+          "ashby_candidate_id,ashby_job_id,candidate_name,company_name,job_title,pipeline_stage,stage_type,decision_status,stage_progress,current_stage_index,total_stages,days_in_stage,needs_scheduling,credited_to,feedback_count,latest_recommendation,latest_feedback_author,latest_feedback_date,current_stage_avg_score,current_stage_date,current_stage_interviews,interview_history_summary,last_activity_at,archived_reason,interview_events",
+        )
+        .limit(5000);
+      snapshotRows = (snapRows ?? []) as SnapshotScanRow[];
+      for (const r of snapshotRows) {
+        if (!r.stage_type || !r.company_name) continue; // placeholders never count
+        const tsList = [r.last_activity_at, r.current_stage_date, r.latest_feedback_date]
+          .map((s) => (s ? new Date(s).getTime() : NaN))
+          .filter((n) => !isNaN(n));
+        const latest = tsList.length ? Math.max(...tsList) : null;
+        mergeAshby(r.company_name, latest);
+        if (r.candidate_name) {
+          const k = pairKey(r.company_name, r.candidate_name);
+          const prev = ashbyByPair.get(k);
+          if (!prev) {
+            ashbyByPair.set(k, { tracked: true, latest });
+          } else {
+            ashbyByPair.set(k, {
+              tracked: true,
+              latest: latest != null && (prev.latest == null || latest > prev.latest) ? latest : prev.latest,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      // Snapshot tables may not exist yet (migration pending) — legacy
+      // per-user sources above still drive routing.
+      console.error("snapshot routing load failed", e);
+    }
+    const archivedPairs = new Set<string>();
+    for (const r of snapshotRows) {
+      if (!r.stage_type) continue;
+      if (DONE_DECISIONS.has((r.decision_status ?? "").trim().toLowerCase())) {
+        archivedPairs.add(pairKey(r.company_name, r.candidate_name));
+      }
+    }
     const lookupAshbyClient = (rawCompany: string): number | null | undefined => {
       const key = normalizeCompany(rawCompany);
       if (!key) return undefined;
@@ -956,6 +1066,16 @@ Deno.serve(async (req) => {
             user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
             candidate_name: candidateName, client_name: company,
             outcome: "skipped_no_name", reason: "no candidate_name",
+          });
+          continue;
+        }
+        // Ashby already decided this process is over (Archived/Hired/etc.) —
+        // surfacing follow-ups for it would be noise.
+        if (archivedPairs.has(pairKey(company, candidateName))) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "suppressed", reason: "archived_in_ashby",
           });
           continue;
         }
@@ -1186,10 +1306,14 @@ Deno.serve(async (req) => {
             snoozeUntil = new Date(Date.now() + 3 * 86400000).toISOString();
           } else if (signal.outcome === "scheduling_in_progress") {
             suppressedReason = "scheduling_in_progress";
-            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
-            snoozeUntil = !isNaN(fu) && fu > Date.now()
-              ? new Date(fu).toISOString()
-              : new Date(Date.now() + 7 * 86400000).toISOString();
+            // Friday-EOW rule, anchored on the most recent email in the
+            // thread (falls back to now). Deterministic override of whatever
+            // the LLM suggested.
+            const anchor = gmailHits
+              .map((g) => g.date)
+              .filter(Boolean)
+              .sort((a, b) => new Date(b!).getTime() - new Date(a!).getTime())[0] ?? null;
+            snoozeUntil = normalizeFollowupToFriday(anchor);
           } else if (signal.outcome === "ambiguous") {
             suppressedReason = "ambiguous_signal";
           } else if (threadActiveRecently) {
@@ -1222,10 +1346,12 @@ Deno.serve(async (req) => {
             }
           } else if (signal.outcome === "scheduling_in_progress") {
             suppressedReason = "next_round_scheduling_in_progress";
-            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
-            snoozeUntil = !isNaN(fu) && fu > Date.now()
-              ? new Date(fu).toISOString()
-              : new Date(Date.now() + 7 * 86400000).toISOString();
+            // Same Friday-EOW rule as the intro_stall path.
+            const anchor = gmailHits
+              .map((g) => g.date)
+              .filter(Boolean)
+              .sort((a, b) => new Date(b!).getTime() - new Date(a!).getTime())[0] ?? null;
+            snoozeUntil = normalizeFollowupToFriday(anchor);
           }
           if (!suppressedReason) {
             const meetingMs = new Date(pastCalMatch.start).getTime();
@@ -1475,6 +1601,218 @@ Deno.serve(async (req) => {
         reason: batchOutcome === "suppressed" ? batchClosedReason : "batch_followup",
         signal: { card_kind: "batch_followup" },
       });
+    }
+
+    // --- Ashby-derived follow-ups (desktop app Step 5b) -----------------------
+    //
+    // Scan the org-shared snapshot for THIS user's candidates (recruiter
+    // aliases) and surface: ashby_needs_scheduling (flagged by Ashby, or 3+
+    // days in stage with no upcoming interview) and ashby_missing_feedback
+    // (completed interviews with unsubmitted scorecards, date-anchored).
+    // Cards carry the full ATS context block and refresh it on every scan
+    // (enrichment back-fill), keyed by (company,candidate) pair for dedup.
+    if (isFirstInvocation) {
+      try {
+        const aliasNorms = ((settings?.recruiter_aliases ?? []) as string[])
+          .map((a) => normalizeName(a))
+          .filter(Boolean);
+        const isMine = (credited: string | null): boolean => {
+          const c = normalizeName(credited ?? "");
+          // Unlike the dashboard's benefit-of-the-doubt, unattributed rows
+          // generate cards for NO ONE — otherwise every teammate gets nagged
+          // about the same unowned candidate.
+          if (!c || c === "unknown") return false;
+          return aliasNorms.includes(c);
+        };
+
+        // Slack cross-link pool: the user's submissions, matched by fuzzy
+        // name+company so the card gets an inline thread.
+        const { data: allSubs } = await admin
+          .from("slack_submissions")
+          .select("id, candidate_name, client_name, channel_id, message_ts, permalink")
+          .eq("user_id", userId);
+        const subPool = (allSubs ?? []) as Array<{
+          id: string; candidate_name: string | null; client_name: string | null;
+          channel_id: string; message_ts: string; permalink: string | null;
+        }>;
+        const findSlackFor = (name: string, company: string) =>
+          subPool.find(
+            (s) =>
+              normalizeName(s.candidate_name ?? "") === normalizeName(name) &&
+              companiesMatch(s.client_name ?? "", company),
+          ) ?? null;
+
+        // Existing ashby cards, keyed by `${pair}::${kind}`.
+        const { data: ashbyCards } = await admin
+          .from("agent_action_cards")
+          .select("id, kind, status, updated_at, ashby_pair_key")
+          .eq("user_id", userId)
+          .in("kind", ["ashby_needs_scheduling", "ashby_missing_feedback"]);
+        const existingAshby = new Map<string, { id: string; status: string }>();
+        const closedAshby = new Map<string, { status: string; updated_at: string }>();
+        for (const c of (ashbyCards ?? []) as Array<{ id: string; kind: string; status: string; updated_at: string; ashby_pair_key: string | null }>) {
+          if (!c.ashby_pair_key) continue;
+          const key = `${c.ashby_pair_key}::${c.kind}`;
+          if (c.status === "open" || c.status === "snoozed") {
+            existingAshby.set(key, { id: c.id, status: c.status });
+          } else if (c.status === "dismissed" || c.status === "resolved") {
+            const prev = closedAshby.get(key);
+            if (!prev || new Date(c.updated_at).getTime() > new Date(prev.updated_at).getTime()) {
+              closedAshby.set(key, { status: c.status, updated_at: c.updated_at });
+            }
+          }
+        }
+        const ashbySuppression = (key: string): string | null => {
+          const closed = closedAshby.get(key);
+          if (!closed) return null;
+          if (closed.status === "dismissed") return "user_dismissed";
+          if (Date.now() - new Date(closed.updated_at).getTime() < RESOLVED_RECREATE_COOLDOWN_MS) {
+            return "recently_resolved_by_user";
+          }
+          return null;
+        };
+
+        const fmtDate = (iso: string) =>
+          new Date(iso).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+        const fmtUpcoming = (ev: Record<string, unknown>): string => {
+          const title = String(ev.interview_title ?? "Interview");
+          const start = String(ev.start_time ?? "");
+          const t = Date.parse(start);
+          const when = Number.isFinite(t)
+            ? new Date(t).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+            : "";
+          const interviewers = Array.isArray(ev.interviewers) ? (ev.interviewers as Array<Record<string, unknown>>) : [];
+          const who = interviewers.length ? ` with ${String(interviewers[0].name ?? "").split(" ")[0]}` : "";
+          return `${title}${when ? ` on ${when}` : ""}${who}`;
+        };
+
+        const relevantAshby = new Set<string>();
+        for (const r of snapshotRows) {
+          if (!r.stage_type || !r.candidate_name || !r.company_name) continue;
+          if (DONE_DECISIONS.has((r.decision_status ?? "").trim().toLowerCase())) continue;
+          if (isInternalPipeline(r.company_name)) continue;
+          if (!isMine(r.credited_to)) continue;
+
+          const events = Array.isArray(r.interview_events)
+            ? (r.interview_events as Array<Record<string, unknown>>)
+            : [];
+          const now = Date.now();
+          const timed = events
+            .map((ev) => ({ ev, t: Date.parse(String(ev.start_time ?? "")) }))
+            .filter((x) => Number.isFinite(x.t));
+          const upcoming = timed.filter((x) => x.t > now).sort((a, b) => a.t - b.t)[0];
+          const past = timed.filter((x) => x.t <= now).sort((a, b) => b.t - a.t);
+
+          const fnNm = firstName(r.candidate_name);
+          const stageLabel = r.pipeline_stage || "their current stage";
+          let kind: "ashby_needs_scheduling" | "ashby_missing_feedback" | null = null;
+          let summary = "";
+          let slackMsg = "";
+
+          const missingFeedback =
+            past.length > 0 &&
+            past.some((x) =>
+              Array.isArray(x.ev.interviewers) &&
+              (x.ev.interviewers as Array<Record<string, unknown>>).some(
+                (iv) => iv && iv.feedback_submitted === false,
+              ),
+            );
+          if (missingFeedback) {
+            kind = "ashby_missing_feedback";
+            summary = `${r.candidate_name} has completed interviews with missing feedback. Last interview on ${fmtDate(new Date(past[0].t).toISOString())}.`;
+            slackMsg = `Hey team! ${fnNm} has interviews completed but feedback is still missing in Ashby — any chance we can get scorecards in? Happy to help chase.`;
+          } else if (!upcoming && (r.needs_scheduling || r.days_in_stage >= 3)) {
+            kind = "ashby_needs_scheduling";
+            summary = r.needs_scheduling
+              ? `Ashby flags ${r.candidate_name} as needing scheduling in ${stageLabel}.`
+              : `${r.candidate_name} has been in ${stageLabel} for ${r.days_in_stage} days with no upcoming interview.`;
+            slackMsg = `Hey team! ${fnNm} has been in ${stageLabel} for ${r.days_in_stage} days — anything I can do to help get the next step scheduled?`;
+          }
+          if (!kind) continue;
+
+          const pk = pairKey(r.company_name, r.candidate_name);
+          const cardKey = `${pk}::${kind}`;
+          if (relevantAshby.has(cardKey)) continue; // one card per pair+kind
+          relevantAshby.add(cardKey);
+
+          const slack = findSlackFor(r.candidate_name, r.company_name);
+          const ashbyContext = {
+            job_title: r.job_title,
+            pipeline_stage: r.pipeline_stage,
+            stage_progress: r.stage_progress || (r.total_stages > 0 ? `${r.current_stage_index}/${r.total_stages}` : null),
+            decision_status: r.decision_status,
+            days_in_stage: r.days_in_stage,
+            feedback_count: r.feedback_count,
+            avg_score: r.current_stage_avg_score,
+            latest_recommendation: r.latest_recommendation,
+            upcoming_interview: upcoming ? fmtUpcoming(upcoming.ev) : null,
+            current_stage_interviews: r.current_stage_interviews,
+            latest_feedback:
+              r.latest_feedback_author || r.latest_feedback_date
+                ? {
+                    author: r.latest_feedback_author,
+                    date: r.latest_feedback_date,
+                    recommendation: r.latest_recommendation,
+                  }
+                : null,
+            interview_history: r.interview_history_summary,
+          };
+          const payload = {
+            candidate_name: r.candidate_name,
+            company_name: r.company_name,
+            channel_id: slack?.channel_id,
+            message_ts: slack?.message_ts,
+            slack_permalink: slack?.permalink ?? undefined,
+            signal_summary: summary,
+            suggested_slack_message: slackMsg,
+            ashby_context: ashbyContext,
+            ...ashbyFlagsFor(r.company_name, r.candidate_name),
+          };
+
+          const existing = existingAshby.get(cardKey);
+          if (existing) {
+            // Enrichment back-fill: keep the ATS context fresh every scan.
+            await admin.from("agent_action_cards").update({
+              payload, updated_at: new Date().toISOString(),
+            }).eq("id", existing.id);
+            continue;
+          }
+          const closedReason = ashbySuppression(cardKey);
+          if (closedReason) {
+            await admin.from("agent_scan_items").insert({
+              user_id: userId, scan_run_id: runId, slack_submission_id: slack?.id ?? null,
+              candidate_name: r.candidate_name, client_name: r.company_name,
+              outcome: "suppressed", reason: closedReason, signal: { card_kind: kind },
+            });
+            continue;
+          }
+          await admin.from("agent_action_cards").insert({
+            user_id: userId, slack_submission_id: slack?.id ?? null,
+            kind, status: "open", payload, ashby_pair_key: pk,
+          });
+          cardsCreated++;
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: slack?.id ?? null,
+            candidate_name: r.candidate_name, client_name: r.company_name,
+            outcome: "card_created", reason: kind, signal: { card_kind: kind },
+          });
+        }
+
+        // Lifecycle: open/snoozed ashby cards whose trigger no longer holds
+        // (archived, scheduled, feedback submitted, not mine anymore) resolve.
+        for (const [key, c] of existingAshby) {
+          if (!relevantAshby.has(key)) {
+            await admin.from("agent_action_cards").update({
+              status: "resolved", updated_at: new Date().toISOString(),
+            }).eq("id", c.id);
+            cardsResolved++;
+          }
+        }
+      } catch (e) {
+        // ashby_pair_key column or snapshot tables may not exist yet
+        // (migrations pending) — the Slack-side scan is unaffected.
+        console.error("ashby card pass failed", e);
+      }
     }
 
     // Auto-resolve cards no longer relevant — only on final page

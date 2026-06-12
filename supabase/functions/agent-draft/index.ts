@@ -7,11 +7,18 @@ function firstName(full: string): string {
 }
 
 interface DraftArgs {
-  kind: "intro_stall" | "post_interview_followup" | "batch_followup";
+  kind:
+    | "intro_stall"
+    | "post_interview_followup"
+    | "batch_followup"
+    | "ashby_needs_scheduling"
+    | "ashby_missing_feedback";
   candidateName: string;
   company: string;
   recruiterName: string;
   candidates?: string[];
+  stage?: string;
+  daysInStage?: number;
 }
 
 export function buildDrafts(args: DraftArgs) {
@@ -21,14 +28,20 @@ export function buildDrafts(args: DraftArgs) {
     slack_message = `Hey — wanted to see if ${fn} got scheduled, or do I need to bump?`;
   } else if (args.kind === "post_interview_followup") {
     slack_message = `Hey — any feedback on ${fn} from the interview? Happy to share notes from our side too.`;
+  } else if (args.kind === "ashby_needs_scheduling") {
+    const stagePart = args.stage ? ` in ${args.stage}` : "";
+    const daysPart = typeof args.daysInStage === "number" && args.daysInStage > 0 ? ` for ${args.daysInStage} days` : "";
+    slack_message = `Hey team! ${fn} has been${stagePart}${daysPart} — anything I can do to help get the next step scheduled?`;
+  } else if (args.kind === "ashby_missing_feedback") {
+    slack_message = `Hey team! ${fn} has interviews completed but feedback is still missing in Ashby — any chance we can get scorecards in? Happy to help chase.`;
   } else {
     const list = (args.candidates ?? []).map((n) => `– ${n}`).join("\n");
     slack_message = `Quick status check on:\n${list}\nAny updates?`;
   }
-  const email_subject = args.kind === "intro_stall"
+  const email_subject = args.kind === "intro_stall" || args.kind === "ashby_needs_scheduling"
     ? `Following up — ${args.company}`
     : `How did your ${args.company} conversation go?`;
-  const email_body = args.kind === "intro_stall"
+  const email_body = args.kind === "intro_stall" || args.kind === "ashby_needs_scheduling"
     ? `Hi ${fn},\n\nJust checking in to make sure you've been able to connect with the team at ${args.company}. Let me know if there's anything I can help unblock on scheduling.\n\nBest,\n${args.recruiterName}`
     : `Hi ${fn},\n\nWanted to check in after your conversation with ${args.company}. How did it go? Happy to share feedback or talk through next steps.\n\nBest,\n${args.recruiterName}`;
   return { slack_message, email_subject, email_body };
@@ -100,6 +113,8 @@ Deno.serve(async (req) => {
       company: p.company_name ?? "",
       recruiterName,
       candidates: Array.isArray(p.candidates) ? p.candidates.map((c: any) => c.name).filter(Boolean) : undefined,
+      stage: p.ashby_context?.pipeline_stage ?? undefined,
+      daysInStage: p.ashby_context?.days_in_stage ?? undefined,
     });
 
     // Cache onto the card
