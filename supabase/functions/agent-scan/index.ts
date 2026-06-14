@@ -1,5 +1,17 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+// Ashby-candidate parity helpers (ported from the local agent_runner.py).
+// Pure functions, extracted so they can be unit-tested — see ashby_parity_test.ts.
+import {
+  ashbyIsScheduled,
+  ashbyLastInterviewPrefix,
+  ashbyLatestActivityMs,
+  ashbyOnsiteMovementSignal,
+  ashbyTrigger,
+  type CandRow,
+  fridayOfWeek,
+  isArchivedAshby,
+} from "./ashby_parity.ts";
 
 // Agent scan v2: detects intro_stall, post_interview_followup, and batch_followup cards.
 // Adds: email-based scheduling detection (intro_stall + post-interview suppression),
@@ -726,7 +738,11 @@ Deno.serve(async (req) => {
       const { data: existingCards } = await admin
         .from("agent_action_cards")
         .select("id, slack_submission_id, kind, status, updated_at")
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        // Slack-flow index only — Ashby cards (candidate_row_id-keyed,
+        // slack_submission_id null) are managed by their own resolve pass and
+        // would otherwise collide on a `null::kind` key and get thrashed.
+        .not("slack_submission_id", "is", null);
       indexCards(existingCards);
     } else {
       const ids = batch.map((s) => s.id);
@@ -810,6 +826,11 @@ Deno.serve(async (req) => {
     const ashbyRawNames: string[] = []; // raw company names ever seen as Ashby (deduped)
     const ashbyRawSeen = new Set<string>();
     const ashbyByPair = new Map<string, { tracked: boolean; latest: number | null }>(); // `${normCompany}::${normName}`
+    // Detailed Ashby rows (with interview_events) for the (name,company)
+    // suppression lookup in the Slack loop and the independent Ashby scan below.
+    let ashbyDetailRows: CandRow[] = [];
+    const ashbyRowByPair = new Map<string, CandRow>(); // exact pairKey -> row
+    const ashbyRowsByCompanyKey = new Map<string, CandRow[]>(); // normalizeCompany -> rows
     const normalizeName = (raw: string): string => {
       if (!raw) return "";
       return raw
@@ -834,19 +855,33 @@ Deno.serve(async (req) => {
       }
     };
     {
+      // Full-detail load. Every `candidates` row is a real Ashby row (carries
+      // ashby_candidate_id); Slack-only submissions live in slack_submissions.
+      // Reused for (a) the company/pair Ashby classification that drives the
+      // Slack flow's ashby_tracked tagging, (b) per-(name,company) suppression
+      // in the Slack loop, (c) the independent Ashby scan on the final page.
+      // interview_events is embedded via its candidate_row_id FK.
       const { data: candRows } = await admin
         .from("candidates")
-        .select("company_name,candidate_name,ashby_candidate_id,last_activity_at,current_stage_date,latest_feedback_date")
+        .select(
+          "id, candidate_name, company_name, decision_status, pipeline_stage, days_in_stage, " +
+            "current_stage_date, current_stage_index, total_stages, needs_scheduling, feedback_count, " +
+            "interview_history_summary, current_stage_interviews, latest_recommendation, " +
+            "latest_feedback_author, latest_feedback_date, current_stage_avg_score, last_activity_at, " +
+            "credited_to, ashby_candidate_id, " +
+            "interview_events ( id, interview_title, start_time, end_time, interviewers )",
+        )
         .eq("user_id", userId);
-      for (const r of (candRows ?? []) as Array<{
-        company_name?: string;
-        candidate_name?: string;
-        ashby_candidate_id?: string | null;
-        last_activity_at?: string | null;
-        current_stage_date?: string | null;
-        latest_feedback_date?: string | null;
-      }>) {
+      ashbyDetailRows = (candRows ?? []) as unknown as CandRow[];
+      for (const r of ashbyDetailRows) {
         if (!r.company_name || !r.candidate_name) continue;
+        ashbyRowByPair.set(pairKey(r.company_name, r.candidate_name), r);
+        const ck = normalizeCompany(r.company_name);
+        if (ck) {
+          const arr = ashbyRowsByCompanyKey.get(ck);
+          if (arr) arr.push(r);
+          else ashbyRowsByCompanyKey.set(ck, [r]);
+        }
         const tracked = !!r.ashby_candidate_id;
         const tsList = [r.last_activity_at, r.current_stage_date, r.latest_feedback_date]
           .map((s) => (s ? new Date(s).getTime() : NaN))
@@ -869,6 +904,21 @@ Deno.serve(async (req) => {
         if (tracked) mergeAshby(r.company_name, latest);
       }
     }
+    // Locate the real Ashby row for a (company, candidate): exact pair first,
+    // then fuzzy (same normalized name, fuzzy company) so "Deep Tune" ≡
+    // "Deeptune". Mirrors agent_runner._ashby_record_for.
+    const findAshbyRow = (company: string, name: string): CandRow | undefined => {
+      const exact = ashbyRowByPair.get(pairKey(company, name));
+      if (exact) return exact;
+      const nn = normalizeName(name);
+      if (!nn) return undefined;
+      for (const rows of ashbyRowsByCompanyKey.values()) {
+        for (const r of rows) {
+          if (normalizeName(r.candidate_name) === nn && companiesMatch(company, r.company_name)) return r;
+        }
+      }
+      return undefined;
+    };
     // Also include any client ever seen in an Ashby fetch, even with no current candidates.
     {
       const { data: knownRows } = await admin
@@ -956,6 +1006,29 @@ Deno.serve(async (req) => {
             user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
             candidate_name: candidateName, client_name: company,
             outcome: "skipped_no_name", reason: "no candidate_name",
+          });
+          continue;
+        }
+
+        // Ashby-state suppression (parity with the local app): if Ashby has
+        // already decided this candidate's process (archived/hired) or shows the
+        // next round is scheduled, don't card them. `continue` without marking
+        // the key relevant lets any existing Slack card auto-resolve on the
+        // final page.
+        const ashbyRow = findAshbyRow(company, candidateName);
+        if (ashbyRow && isArchivedAshby(ashbyRow)) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "suppressed", reason: "ashby_archived_or_hired",
+          });
+          continue;
+        }
+        if (ashbyRow && ashbyIsScheduled(ashbyRow)) {
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+            candidate_name: candidateName, client_name: company,
+            outcome: "suppressed", reason: "ashby_scheduled",
           });
           continue;
         }
@@ -1186,10 +1259,11 @@ Deno.serve(async (req) => {
             snoozeUntil = new Date(Date.now() + 3 * 86400000).toISOString();
           } else if (signal.outcome === "scheduling_in_progress") {
             suppressedReason = "scheduling_in_progress";
-            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
-            snoozeUntil = !isNaN(fu) && fu > Date.now()
-              ? new Date(fu).toISOString()
-              : new Date(Date.now() + 7 * 86400000).toISOString();
+            // Friday-EOW rule (parity with local _normalize_followup_to_friday):
+            // ambiguous "I grabbed a time" / "I'll send an invite" emails →
+            // re-check on the Friday of the email's week (next Friday if it
+            // landed Fri–Sun). Anchor on the most recent scheduling email.
+            snoozeUntil = fridayOfWeek(recentGmail ? new Date(recentGmail.ts) : new Date()).toISOString();
           } else if (signal.outcome === "ambiguous") {
             suppressedReason = "ambiguous_signal";
           } else if (threadActiveRecently) {
@@ -1222,10 +1296,9 @@ Deno.serve(async (req) => {
             }
           } else if (signal.outcome === "scheduling_in_progress") {
             suppressedReason = "next_round_scheduling_in_progress";
-            const fu = signal.suggested_followup_at ? new Date(signal.suggested_followup_at).getTime() : NaN;
-            snoozeUntil = !isNaN(fu) && fu > Date.now()
-              ? new Date(fu).toISOString()
-              : new Date(Date.now() + 7 * 86400000).toISOString();
+            // Friday-EOW rule (see intro_stall path above): re-check on the
+            // Friday of the most recent scheduling email's week.
+            snoozeUntil = fridayOfWeek(recentGmail ? new Date(recentGmail.ts) : new Date()).toISOString();
           }
           if (!suppressedReason) {
             const meetingMs = new Date(pastCalMatch.start).getTime();
@@ -1477,6 +1550,156 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── Independent Ashby-candidate scan (parity with local Step 5b) ──────────
+    // Runs once, on the final page. Surfaces Ashby candidates that need
+    // scheduling or are missing feedback — even with no Slack thread. Cards are
+    // keyed on candidate_row_id (slack_submission_id null) and managed by a
+    // self-contained resolve pass, fully disjoint from the Slack sweeps above.
+    if (!hasMore && runId && userId) {
+      try {
+        // Cross-flow dedupe: skip Ashby candidates already carded by the Slack
+        // flow (this run or a lingering prior run). Built from committed
+        // open/snoozed Slack cards so it covers every page, not just the last.
+        const slackHandledPairs = new Set<string>();
+        const { data: openSlackCards } = await admin
+          .from("agent_action_cards")
+          .select("payload")
+          .eq("user_id", userId)
+          .not("slack_submission_id", "is", null)
+          .in("status", ["open", "snoozed"]);
+        for (const c of openSlackCards ?? []) {
+          const p = (c.payload ?? {}) as {
+            candidate_name?: string;
+            company_name?: string;
+            client_name?: string;
+            candidates?: Array<{ name?: string }>;
+          };
+          if (Array.isArray(p.candidates)) {
+            const co = p.client_name || p.company_name || "";
+            for (const m of p.candidates) if (m?.name && co) slackHandledPairs.add(pairKey(co, m.name));
+          } else if (p.candidate_name && p.company_name) {
+            slackHandledPairs.add(pairKey(p.company_name, p.candidate_name));
+          }
+        }
+
+        // Existing Ashby cards (candidate_row_id-keyed) for upsert + resolve.
+        const { data: existingAshby } = await admin
+          .from("agent_action_cards")
+          .select("id, candidate_row_id, kind, status, updated_at")
+          .eq("user_id", userId)
+          .not("candidate_row_id", "is", null);
+        const ashbyExistingByKey = new Map<string, { id: string; status: string }>();
+        const ashbyClosedByKey = new Map<string, { status: string; updated_at: string }>();
+        for (const c of existingAshby ?? []) {
+          const key = `${c.candidate_row_id}::${c.kind}`;
+          if (c.status === "open" || c.status === "snoozed") {
+            ashbyExistingByKey.set(key, { id: c.id, status: c.status });
+          } else if (c.status === "dismissed" || c.status === "resolved") {
+            const prev = ashbyClosedByKey.get(key);
+            if (!prev || new Date(c.updated_at).getTime() > new Date(prev.updated_at).getTime()) {
+              ashbyClosedByKey.set(key, { status: c.status, updated_at: c.updated_at });
+            }
+          }
+        }
+        // Respect the user's dismiss/resolve, same cooldown as the Slack flow.
+        const ashbyUserSuppression = (key: string): string | null => {
+          const closed = ashbyClosedByKey.get(key);
+          if (!closed) return null;
+          if (closed.status === "dismissed") return "user_dismissed";
+          if (Date.now() - new Date(closed.updated_at).getTime() < RESOLVED_RECREATE_COOLDOWN_MS) {
+            return "recently_resolved_by_user";
+          }
+          return null;
+        };
+        const ashbyStillRelevant = new Set<string>();
+
+        for (const row of ashbyDetailRows) {
+          if (!row.candidate_name || !row.company_name || !row.ashby_candidate_id) continue;
+          if (isInternalPipeline(row.company_name)) continue;
+          if (isArchivedAshby(row) || ashbyIsScheduled(row)) continue;
+          if (slackHandledPairs.has(pairKey(row.company_name, row.candidate_name))) continue;
+          const trig = ashbyTrigger(row, introStallMinDays);
+          if (!trig) continue;
+
+          const isFeedback = trig === "ashby_missing_feedback";
+          // Reuse existing kinds so the dashboard renders them with no change:
+          // missing-feedback ≈ post_interview_followup; needs-scheduling ≈ intro_stall.
+          const kind = isFeedback ? "post_interview_followup" : "intro_stall";
+          const key = `${row.id}::${kind}`;
+          const existing = ashbyExistingByKey.get(key);
+          const closedReason = existing ? null : ashbyUserSuppression(key);
+          if (closedReason) {
+            await admin.from("agent_scan_items").insert({
+              user_id: userId, scan_run_id: runId,
+              candidate_name: row.candidate_name, client_name: row.company_name,
+              outcome: "suppressed", reason: closedReason,
+            });
+            continue;
+          }
+
+          // For the onsite-movement case, present the stage as "Onsite" and
+          // derive days from current_stage_date (mirrors _process_ashby_candidates).
+          const onsiteMove = trig === "ashby_needs_scheduling" && ashbyOnsiteMovementSignal(row);
+          const stage = onsiteMove ? "Onsite" : (row.pipeline_stage || "current");
+          let days = row.days_in_stage ?? 0;
+          if (stage.toLowerCase().startsWith("onsite")) {
+            const sd = row.current_stage_date ? new Date(row.current_stage_date).getTime() : NaN;
+            if (!isNaN(sd)) days = Math.max(0, Math.floor((Date.now() - sd) / 86400000));
+          }
+          const fb = row.feedback_count ?? 0;
+          const lastPrefix = ashbyLastInterviewPrefix(row);
+          const suggested = isFeedback
+            ? `Hey team! Wanted to follow up on ${row.candidate_name} — it looks like there are interviews completed but we're still missing some feedback. Could the interviewers submit their scorecards when they get a chance? Would love to keep the process moving.`
+            : `Hey team! Wanted to follow up on ${row.candidate_name} — they've been in the ${stage} stage for ${days} days and it doesn't look like a next step has been scheduled yet. Can we get something on the calendar?`;
+          const signal_summary = isFeedback
+            ? `${lastPrefix}In ${stage} stage, ${days} days. Past interviews found but feedback is incomplete (${fb} scorecards submitted).`
+            : `${lastPrefix}In ${stage} stage for ${days} days with no upcoming interview scheduled.`;
+          const payload: Record<string, unknown> = {
+            candidate_name: row.candidate_name,
+            company_name: row.company_name,
+            signal_summary,
+            suggested_slack_message: suggested,
+            // buildFlags yields ashby_tracked:true → routes into the Ashby section.
+            ...buildFlags(ashbyLatestActivityMs(row)),
+          };
+
+          ashbyStillRelevant.add(key);
+          let outcome: string;
+          if (existing) {
+            await admin.from("agent_action_cards").update({
+              payload, status: "open", snooze_until: null, updated_at: new Date().toISOString(),
+            }).eq("id", existing.id);
+            outcome = "card_updated";
+          } else {
+            await admin.from("agent_action_cards").insert({
+              user_id: userId, slack_submission_id: null, candidate_row_id: row.id,
+              kind, status: "open", payload,
+            });
+            cardsCreated++;
+            outcome = "card_created";
+          }
+          await admin.from("agent_scan_items").insert({
+            user_id: userId, scan_run_id: runId,
+            candidate_name: row.candidate_name, client_name: row.company_name,
+            outcome, reason: trig, signal: { card_kind: kind, ashby: true },
+          });
+        }
+
+        // Resolve Ashby cards that exist but no longer trigger (the candidates
+        // set is scanned in full here, so this in-memory sweep is complete).
+        for (const [key, c] of ashbyExistingByKey) {
+          if (!ashbyStillRelevant.has(key)) {
+            await admin.from("agent_action_cards").update({
+              status: "resolved", updated_at: new Date().toISOString(),
+            }).eq("id", c.id);
+            cardsResolved++;
+          }
+        }
+      } catch (e) {
+        console.error("agent-scan ashby pass error", e instanceof Error ? e.message : String(e));
+      }
+    }
+
     // Auto-resolve cards no longer relevant — only on final page
     if (!hasMore) {
       if (isFirstInvocation) {
@@ -1493,7 +1716,9 @@ Deno.serve(async (req) => {
           .from("agent_action_cards")
           .select("id, slack_submission_id, kind")
           .eq("user_id", userId)
-          .in("status", ["open", "snoozed"]);
+          .in("status", ["open", "snoozed"])
+          // Slack-flow sweep only — never resolve Ashby cards here.
+          .not("slack_submission_id", "is", null);
         const { data: items } = await admin
           .from("agent_scan_items")
           .select("slack_submission_id, outcome, reason, signal")
