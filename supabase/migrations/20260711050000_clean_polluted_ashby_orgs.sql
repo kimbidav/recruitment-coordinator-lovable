@@ -1,0 +1,12 @@
+-- ashby_orgs was polluted with candidate-EMPLOYER names: the ashby-sync edge
+-- function built the "swept orgs" list from the extractor result's `companies`
+-- field (each candidate's current employer) instead of `orgs` (the real swept
+-- client-org names). Besides polluting this table, that broke archive
+-- inference — the trusted-org set never matched any client, so candidates who
+-- left the active pipeline were never stamped Archived/Hired.
+--
+-- Reset the table; the next completed sync (fixed edge function + an extractor
+-- build that returns `orgs`) repopulates it with real client orgs only. The
+-- dashboard degrades gracefully while empty (company classification falls back
+-- to snapshot rows + ashby_known_clients).
+truncate table public.ashby_orgs;
