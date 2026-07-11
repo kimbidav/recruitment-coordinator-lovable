@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, ChevronDown, ChevronUp, Linkedin, Filter, MessagesSquare, Mail, Ban } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, ChevronDown, ChevronUp, Linkedin, Filter, MessagesSquare, Mail, Ban, Loader2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -43,6 +43,11 @@ interface CandidateTableProps {
   onOpenSlackThread?: (c: Candidate) => void;
   onOpenEmail?: (c: Candidate) => void;
   onCloseCandidate?: (c: Candidate) => void;
+  /** Multi-select for the follow-up bar. Checkbox column renders only when provided. */
+  selectedIds?: Set<string>;
+  onToggleSelect?: (c: Candidate) => void;
+  /** candidate_id currently being resolved by the find-thread lookup (shows a spinner). */
+  findingThreadId?: string | null;
 }
 
 export function CandidateTable({
@@ -51,6 +56,9 @@ export function CandidateTable({
   onOpenSlackThread,
   onOpenEmail,
   onCloseCandidate,
+  selectedIds,
+  onToggleSelect,
+  findingThreadId,
 }: CandidateTableProps) {
   const [sortField, setSortField] = useState<SortField>("last_activity_at");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -141,6 +149,7 @@ export function CandidateTable({
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent border-border">
+            {onToggleSelect && <TableHead className="w-8"></TableHead>}
             <TableHead className="w-8"></TableHead>
             <TableHead
               className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -188,6 +197,15 @@ export function CandidateTable({
                 <SortIcon field="progress" />
               </div>
             </TableHead>
+            <TableHead
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSort("days_in_stage")}
+            >
+              <div className="flex items-center gap-1.5">
+                Days
+                <SortIcon field="days_in_stage" />
+              </div>
+            </TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="sticky right-0 bg-card shadow-[-4px_0_8px_-4px_hsl(var(--border))]">Actions</TableHead>
           </TableRow>
@@ -205,6 +223,17 @@ export function CandidateTable({
                   )}
                   onClick={() => toggleRow(candidate.candidate_id)}
                 >
+                  {onToggleSelect && (
+                    <TableCell className="w-8" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds?.has(candidate.candidate_id) ?? false}
+                        onChange={() => onToggleSelect(candidate)}
+                        className="h-3.5 w-3.5 accent-primary cursor-pointer"
+                        aria-label={`Select ${candidate.candidate_name} for follow-up`}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell className="w-8">
                     {isExpanded ? (
                       <ChevronUp className="h-4 w-4 text-muted-foreground" />
@@ -292,6 +321,23 @@ export function CandidateTable({
                     )}
                   </TableCell>
                   <TableCell>
+                    <span
+                      className={cn(
+                        "text-sm tabular-nums",
+                        candidate.days_in_stage > 30
+                          ? "text-destructive font-medium"
+                          : "text-muted-foreground",
+                      )}
+                      title={
+                        candidate.days_in_stage > 30
+                          ? `${candidate.days_in_stage} days in stage — may need attention`
+                          : `${candidate.days_in_stage} days in current stage`
+                      }
+                    >
+                      {Number.isFinite(candidate.days_in_stage) ? `${candidate.days_in_stage}d` : "—"}
+                    </span>
+                  </TableCell>
+                  <TableCell>
                     <StatusBadge
                       status={candidate.decision_status}
                       reason={
@@ -308,14 +354,23 @@ export function CandidateTable({
                   >
                     <div className="flex items-center gap-2 text-sm">
 
-                      {candidate.slack_meta && onOpenSlackThread && (
+                      {onOpenSlackThread && (
                         <button
                           type="button"
                           onClick={() => onOpenSlackThread(candidate)}
-                          className="text-muted-foreground hover:text-primary transition-colors inline-flex items-center gap-1"
-                          title="Open Slack thread"
+                          disabled={findingThreadId === candidate.candidate_id}
+                          className="text-muted-foreground hover:text-primary transition-colors inline-flex items-center gap-1 disabled:opacity-60"
+                          title={
+                            candidate.slack_meta
+                              ? "Open Slack thread"
+                              : "Find this candidate's Slack thread"
+                          }
                         >
-                          <MessagesSquare className="h-3.5 w-3.5" />
+                          {findingThreadId === candidate.candidate_id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <MessagesSquare className="h-3.5 w-3.5" />
+                          )}
                           Thread
                         </button>
                       )}
@@ -350,7 +405,7 @@ export function CandidateTable({
                 </TableRow>
                 {isExpanded && (
                   <TableRow key={`${candidate.candidate_id}-expanded`} className="bg-muted/20 hover:bg-muted/20">
-                    <TableCell colSpan={8} className="p-4">
+                    <TableCell colSpan={onToggleSelect ? 11 : 10} className="p-4">
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-sm font-semibold text-foreground mb-1">Role</h4>

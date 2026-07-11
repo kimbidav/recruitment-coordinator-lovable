@@ -5,7 +5,11 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 //   action=fetch  -> read parent + replies in a thread
 //   action=reply  -> post a reply as the connected user
 //   action=close  -> add a "no_entry" (⛔) reaction to the parent message
-// Body: { action, channel_id, message_ts, text? }
+//   action=post   -> top-level channel message (follow-up bar)
+//   action=find   -> locate a candidate's submission thread via Slack search
+// Body: { action, channel_id?, message_ts?, text?, candidate_name?, company_name? }
+// post requires the chat:write user scope; find requires search:read —
+// users connected before those scopes were added must reconnect Slack.
 
 async function slackCall<T = any>(
   token: string,
@@ -64,7 +68,8 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-    if (action !== "users" && (!channelId || !messageTs)) {
+    const needsChannelAndTs = ["fetch", "reply", "close", "reopen"].includes(action);
+    if (needsChannelAndTs && (!channelId || !messageTs)) {
       return new Response(
         JSON.stringify({ error: "channel_id, message_ts required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -266,6 +271,126 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true, ts: (result as any).ts }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    if (action === "post") {
+      // Top-level channel message (not a thread reply) — used by the
+      // follow-up bar to send a per-channel status-check message.
+      const text: string = (body.text ?? "").toString().trim();
+      if (!channelId || !text) {
+        return new Response(JSON.stringify({ error: "channel_id, text required" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const result = await slackCall(token, "chat.postMessage", {
+        channel: channelId,
+        text,
+      });
+      return new Response(JSON.stringify({ ok: true, ts: (result as any).ts }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (action === "find") {
+      // Locate a candidate's submission thread when we don't have one stored
+      // (e.g. the submission predates the Slack connection, or the message
+      // wasn't authored by this user). Strategy — port of the desktop app's
+      // /api/slack/find-thread:
+      //   1. Prefer channels whose mapping matches the company name.
+      //   2. search.messages for the quoted candidate name, scoped to that
+      //      channel when known; otherwise unscoped, filtered by channel match.
+      //   3. Prefer parent messages; a reply's permalink carries thread_ts.
+      const candidateName: string = (body.candidate_name ?? "").toString().trim();
+      const companyName: string = (body.company_name ?? "").toString().trim();
+      if (!candidateName) {
+        return new Response(JSON.stringify({ error: "candidate_name required" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const normalize = (s: string) =>
+        (s || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "");
+      const companyKey = normalize(companyName);
+      const channelMatchesCompany = (label: string): boolean => {
+        if (!companyKey) return true;
+        const key = normalize(label);
+        return !!key && (key.includes(companyKey) || companyKey.includes(key));
+      };
+
+      // Channel mappings this user already knows about, matched to the company.
+      const { data: mappings } = await admin
+        .from("slack_channel_mappings")
+        .select("channel_id, channel_name, client_name")
+        .eq("user_id", userId);
+      const matchedMappings = (mappings ?? []).filter(
+        (m) =>
+          channelMatchesCompany(m.client_name ?? "") ||
+          channelMatchesCompany(m.channel_name ?? ""),
+      );
+
+      const runSearch = async (query: string) => {
+        const params = new URLSearchParams({ query, count: "20", sort: "timestamp" });
+        const r = await fetch(`https://slack.com/api/search.messages?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(`search.messages: ${j.error}`);
+        return (j.messages?.matches ?? []) as Array<{
+          ts: string;
+          channel?: { id?: string; name?: string };
+          permalink?: string;
+        }>;
+      };
+
+      let matches: Awaited<ReturnType<typeof runSearch>> = [];
+      try {
+        // Scoped search first when we know the channel name.
+        const scopedChannel = matchedMappings[0]?.channel_name;
+        if (scopedChannel) {
+          matches = await runSearch(`"${candidateName}" in:#${scopedChannel}`);
+        }
+        if (matches.length === 0) {
+          matches = (await runSearch(`"${candidateName}"`)).filter((m) =>
+            channelMatchesCompany(m.channel?.name ?? ""),
+          );
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // missing_scope = user connected before search:read was requested.
+        const status = msg.includes("missing_scope") ? 403 : 500;
+        return new Response(
+          JSON.stringify({
+            error: msg.includes("missing_scope")
+              ? "Slack search permission missing — disconnect and reconnect Slack to grant it."
+              : msg,
+          }),
+          { status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const best = matches[0];
+      if (!best?.channel?.id || !best.ts) {
+        return new Response(JSON.stringify({ ok: true, found: false }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      // If the hit is a reply, its permalink carries thread_ts — prefer the parent.
+      let threadTs = best.ts;
+      const permalinkThread = best.permalink?.match(/thread_ts=(\d+\.\d+)/);
+      if (permalinkThread) threadTs = permalinkThread[1];
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          found: true,
+          channel_id: best.channel.id,
+          channel_name: best.channel.name ?? null,
+          message_ts: threadTs,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     if (action === "close") {
