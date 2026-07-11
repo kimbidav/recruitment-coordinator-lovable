@@ -9,6 +9,7 @@
 - [docs/ashby-architecture.md](docs/ashby-architecture.md) — how the Ashby pipeline integration works end-to-end (browser → Supabase edge function → Railway extractor → Ashby): the shared-session auth model, the async sweep, accumulate-and-merge, and storage. Read this first for the Ashby feature.
 - [docs/ashby-data-schemas.md](docs/ashby-data-schemas.md) — record shapes at each hop, the Supabase table DDL, and the Ashby REST/GraphQL API inventory.
 - [docs/shared-ashby-session-setup.md](docs/shared-ashby-session-setup.md) — one-time infra checklist (Railway volume + secrets + migrations) to activate the shared team session.
+- [docs/slack-integration.md](docs/slack-integration.md) — the Slack side: per-user OAuth and scopes, submission ingestion (sync + events), the slack-thread actions (reply/post/close/find), follow-up bar, and scope-rollout troubleshooting.
 
 ## How can I edit this code?
 
