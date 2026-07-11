@@ -15,6 +15,7 @@ import { Mail, Search, Send, Loader2, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Candidate } from "@/data/candidates";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface EmailComposerProps {
   open: boolean;
@@ -42,19 +43,36 @@ function isOpportunityClosed(c: Candidate): boolean {
   );
 }
 
-function buildDraft(name: string, opps: Candidate[]): { subject: string; body: string } {
+// Status mapping (mirrors the desktop app's compose_candidate_message):
+//   closed              → "no longer moving forward"
+//   active with a stage → the stage name (e.g. "Onsite Interview")
+//   active, no stage    → "in process"
+function opportunityDetail(o: Candidate): string {
+  if (isOpportunityClosed(o)) return "no longer moving forward";
+  const stage = (o.pipeline_stage || "").trim();
+  return stage || "in process";
+}
+
+function buildDraft(
+  name: string,
+  opps: Candidate[],
+  senderFirstName?: string,
+): { subject: string; body: string } {
   const subject = "Checking in on your interviews";
+  const bullets =
+    opps.length > 0
+      ? opps.map((o) => `• ${o.company_name} — ${opportunityDetail(o)}`)
+      : ["• (no opportunities found)"];
   const lines = [
     `Hi ${firstName(name)},`,
     "",
     "I just wanted to check in with you to see how your interviews are coming along. Here are the latest updates I have on each opportunity below:",
     "",
-    ...opps.map((o) => {
-      const closed = isOpportunityClosed(o);
-      return `• ${o.company_name} — ${closed ? "no longer moving forward" : "in process"}`;
-    }),
+    ...bullets,
     "",
-    "Let me know if you have any questions or updates along the way.",
+    "Let me know if you have any questions along the way!",
+    "",
+    senderFirstName ? `Best,\n${senderFirstName}` : "Best,",
   ];
   return { subject, body: lines.join("\n") };
 }
@@ -68,7 +86,20 @@ export function EmailComposer({
   initialBody,
   initialTo,
 }: EmailComposerProps) {
-  const draft = useMemo(() => buildDraft(candidateName, opportunities), [candidateName, opportunities]);
+  const { user } = useAuth();
+  // Sign-off name: Google OAuth full name when available, else the email
+  // local-part (capitalized) as a best effort.
+  const senderFirstName = useMemo(() => {
+    const meta = user?.user_metadata as { full_name?: string; name?: string } | undefined;
+    const full = (meta?.full_name || meta?.name || "").trim();
+    if (full) return full.split(/\s+/)[0];
+    const local = (user?.email ?? "").split("@")[0];
+    return local ? local.charAt(0).toUpperCase() + local.slice(1) : undefined;
+  }, [user?.user_metadata, user?.email]);
+  const draft = useMemo(
+    () => buildDraft(candidateName, opportunities, senderFirstName),
+    [candidateName, opportunities, senderFirstName],
+  );
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState(initialSubject ?? draft.subject);
   const [body, setBody] = useState(initialBody ?? draft.body);
@@ -307,7 +338,7 @@ export function EmailComposer({
                             : "bg-status-success/10 text-status-success")
                         }
                       >
-                        {closed ? "Closed" : "In process"}
+                        {closed ? "Closed" : (o.pipeline_stage || "").trim() || "In process"}
                       </span>
                     </div>
                   );

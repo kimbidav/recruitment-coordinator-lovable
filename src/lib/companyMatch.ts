@@ -56,9 +56,34 @@ export function companyAliases(s: string): Set<string> {
   return aliases;
 }
 
+// Clients that are deliberately tracked as separate entities even though
+// their names overlap with another client — e.g. "Anterior Vpe Cto" is a
+// different hiring manager running a different search than "Anterior".
+// Names here (normalized, lowercase, space-joined) only ever match
+// themselves exactly, so an "Anterior" org can never swallow the
+// "Anterior Vpe Cto" loop. Mirrors SEPARATE_CLIENTS in the desktop app's
+// useMergedPipeline.ts / agent_runner.py.
+export const SEPARATE_CLIENTS = new Set(["anterior vpe cto"]);
+
+/** Lowercase alnum-tokenized key WITHOUT noise filtering, for exact-only names. */
+function rawNameKey(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** True when two company names plausibly refer to the same company. */
 export function companiesMatch(a: string, b: string): boolean {
   if (!a || !b) return false;
+  const aRaw = rawNameKey(a);
+  const bRaw = rawNameKey(b);
+  if (SEPARATE_CLIENTS.has(aRaw) || SEPARATE_CLIENTS.has(bRaw)) {
+    return aRaw === bRaw;
+  }
   const aAliases = companyAliases(a);
   const bAliases = companyAliases(b);
   for (const alias of aAliases) if (bAliases.has(alias)) return true;

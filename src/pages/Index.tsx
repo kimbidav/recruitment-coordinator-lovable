@@ -13,6 +13,7 @@ import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt"
 import { SlackConnectButton } from "@/components/SlackConnectButton";
 import { SlackThreadPanel } from "@/components/SlackThreadPanel";
 import { EmailComposer } from "@/components/EmailComposer";
+import { FollowUpBar } from "@/components/FollowUpBar";
 import { AgentTab } from "@/components/AgentTab";
 import { useAgentCards, visibleCards } from "@/hooks/useAgentCards";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -71,6 +72,8 @@ const Index = () => {
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [slackThreadFor, setSlackThreadFor] = useState<Candidate | null>(null);
   const [emailFor, setEmailFor] = useState<Candidate | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [findingThreadId, setFindingThreadId] = useState<string | null>(null);
   const [ashbyClientNames, setAshbyClientNames] = useState<string[]>([]);
   const [showArchive, setShowArchive] = useState(false);
   const [mineOnly, setMineOnly] = useState(true);
@@ -430,6 +433,103 @@ const Index = () => {
     });
   }, [visibleCandidates, search, companyFilter, stageFilter, statusFilter, submitterFilter, sourceFilter]);
 
+  // Shared by the table's ⛔ button and the follow-up bar's batch close.
+  // Returns success so the batch path can count failures.
+  const closeCandidate = async (c: Candidate): Promise<boolean> => {
+    await markCandidateClosed(c.candidate_id, c.job_id, true);
+    if (c.slack_meta?.channel_id && c.slack_meta?.message_ts) {
+      try {
+        const { data, error } = await supabase.functions.invoke("slack-thread", {
+          body: {
+            action: "close",
+            channel_id: c.slack_meta.channel_id,
+            message_ts: c.slack_meta.message_ts,
+          },
+        });
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+        toast.success(`${c.candidate_name} closed · ⛔ added in Slack`);
+        return true;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Slack reaction failed";
+        toast.error(`Closed locally, but Slack reaction failed: ${msg}`);
+        return false;
+      }
+    }
+    toast.success(`${c.candidate_name} closed`);
+    return true;
+  };
+
+  const toggleSelect = (c: Candidate) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(c.candidate_id)) next.delete(c.candidate_id);
+      else next.add(c.candidate_id);
+      return next;
+    });
+  };
+
+  const selectedCandidates = visibleCandidates.all.filter((c) =>
+    selectedIds.has(c.candidate_id),
+  );
+
+  const deselectChannel = (channelId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const c of visibleCandidates.all) {
+        if (c.slack_meta?.channel_id === channelId) next.delete(c.candidate_id);
+      }
+      return next;
+    });
+  };
+
+  // Open a candidate's Slack thread; when no submission link is stored, fall
+  // back to a live lookup via Slack search (slack-thread action=find).
+  const openSlackThread = async (c: Candidate) => {
+    if (c.slack_meta?.channel_id && c.slack_meta?.message_ts) {
+      setSlackThreadFor(c);
+      return;
+    }
+    setFindingThreadId(c.candidate_id);
+    try {
+      const { data, error } = await supabase.functions.invoke("slack-thread", {
+        body: {
+          action: "find",
+          candidate_name: c.candidate_name,
+          company_name: c.company_name,
+        },
+      });
+      if (error) {
+        const ctx = (error as { context?: Response }).context;
+        if (ctx && typeof ctx.json === "function") {
+          const body = await ctx.json().catch(() => null);
+          if (body?.error) throw new Error(body.error);
+        }
+        throw error;
+      }
+      if (data?.error) throw new Error(data.error);
+      if (!data?.found) {
+        toast.info(`No Slack thread found for ${c.candidate_name}`);
+        return;
+      }
+      setSlackThreadFor({
+        ...c,
+        slack_meta: {
+          status: "submitted",
+          submitted_at: c.last_activity_at,
+          channel_id: data.channel_id,
+          message_ts: data.message_ts,
+          linkedin_url: null,
+          needs_review: false,
+        },
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Thread lookup failed");
+    } finally {
+      setFindingThreadId(null);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -625,30 +725,19 @@ const Index = () => {
                   onFilterByCandidate={(name) => {
                     setSearch(name);
                   }}
-                  onOpenSlackThread={(c) => setSlackThreadFor(c)}
+                  onOpenSlackThread={(c) => void openSlackThread(c)}
                   onOpenEmail={(c) => setEmailFor(c)}
-                  onCloseCandidate={async (c) => {
-                    await markCandidateClosed(c.candidate_id, c.job_id, true);
-                    if (c.slack_meta?.channel_id && c.slack_meta?.message_ts) {
-                      try {
-                        const { data, error } = await supabase.functions.invoke("slack-thread", {
-                          body: {
-                            action: "close",
-                            channel_id: c.slack_meta.channel_id,
-                            message_ts: c.slack_meta.message_ts,
-                          },
-                        });
-                        if (error) throw error;
-                        if (data?.error) throw new Error(data.error);
-                        toast.success(`${c.candidate_name} closed · ⛔ added in Slack`);
-                      } catch (e) {
-                        const msg = e instanceof Error ? e.message : "Slack reaction failed";
-                        toast.error(`Closed locally, but Slack reaction failed: ${msg}`);
-                      }
-                    } else {
-                      toast.success(`${c.candidate_name} closed`);
-                    }
-                  }}
+                  onCloseCandidate={(c) => void closeCandidate(c)}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleSelect}
+                  findingThreadId={findingThreadId}
+                />
+
+                <FollowUpBar
+                  selected={selectedCandidates}
+                  onClear={() => setSelectedIds(new Set())}
+                  onDeselectChannel={deselectChannel}
+                  onCloseCandidate={closeCandidate}
                 />
               </>
             )}

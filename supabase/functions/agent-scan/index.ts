@@ -60,8 +60,23 @@ function companyAliases(s: string): Set<string> {
   }
   return aliases;
 }
+// Deliberately-separate clients: exact-match only, never fuzzy-collapsed.
+// Mirrors SEPARATE_CLIENTS in src/lib/companyMatch.ts — keep in sync.
+const SEPARATE_CLIENTS = new Set(["anterior vpe cto"]);
+function rawNameKey(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .join(" ");
+}
 function companiesMatch(a: string, b: string): boolean {
   if (!a || !b) return false;
+  const aRaw = rawNameKey(a);
+  const bRaw = rawNameKey(b);
+  if (SEPARATE_CLIENTS.has(aRaw) || SEPARATE_CLIENTS.has(bRaw)) return aRaw === bRaw;
   const aA = companyAliases(a);
   const bA = companyAliases(b);
   for (const x of aA) if (bA.has(x)) return true;

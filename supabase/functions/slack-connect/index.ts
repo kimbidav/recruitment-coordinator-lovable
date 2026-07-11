@@ -7,6 +7,13 @@ const USER_SCOPES = [
   "channels:history",
   "groups:history",
   "reactions:read",
+  // Write scopes for thread replies, the follow-up bar's channel posts, and
+  // the ⛔ close/reopen reactions (slack-thread reply/post/close/reopen).
+  "chat:write",
+  "reactions:write",
+  // Thread lookup for candidates without a stored submission link
+  // (slack-thread action=find uses search.messages).
+  "search:read",
   "users:read",
   "users:read.email",
 ].join(",");
