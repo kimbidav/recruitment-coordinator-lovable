@@ -56,18 +56,25 @@ function parseAshbyResponse(data: unknown): {
       candidates?: unknown;
       extraction_stats?: Record<string, unknown>;
       companies?: unknown;
+      orgs?: unknown;
     };
     if (Array.isArray(obj.candidates)) {
-      // The extractor appends a company to `companies` only after its org
-      // swept successfully — so this doubles as the trusted-org set for
-      // archive inference AND the authoritative Ashby org list (it includes
-      // orgs with zero candidates, which candidate rows can never reveal).
+      // `orgs` is the authoritative swept client-org list: the extractor
+      // appends an org name only after its org swept successfully, and it
+      // includes orgs with ZERO candidates (which candidate rows can never
+      // reveal). This is the trusted set for archive inference AND the
+      // ashby_orgs table. Do NOT fall back to `companies` — that field is
+      // candidate-EMPLOYER names (app.candidate.company) and using it here
+      // both breaks archive inference (nothing matches, stale actives never
+      // get stamped) and pollutes ashby_orgs with employer names. An old
+      // extractor build without `orgs` simply gets no inference this fetch,
+      // which is the safe degradation.
       const companies: string[] = [];
-      for (const entry of Array.isArray(obj.companies) ? obj.companies : []) {
+      for (const entry of Array.isArray(obj.orgs) ? obj.orgs : []) {
         if (typeof entry === "string" && entry.trim()) {
           companies.push(entry.trim());
         } else if (entry && typeof entry === "object") {
-          const name = (entry as Record<string, unknown>).name ?? (entry as Record<string, unknown>).company_name;
+          const name = (entry as Record<string, unknown>).name ?? (entry as Record<string, unknown>).org_name;
           if (typeof name === "string" && name.trim()) companies.push(name.trim());
         }
       }
