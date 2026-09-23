@@ -986,6 +986,14 @@ export type Database = {
       }
       slack_submissions: {
         Row: {
+          channel_name: string | null
+          last_activity_at: string | null
+          last_refreshed_at: string | null
+          last_reply_at: string | null
+          migrated_from_channel_id: string | null
+          previous_client_names: string[]
+          reply_count: number
+          thread_ts: string | null
           candidate_name: string
           channel_id: string
           client_name: string
@@ -1002,6 +1010,14 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          channel_name?: string | null
+          last_activity_at?: string | null
+          last_refreshed_at?: string | null
+          last_reply_at?: string | null
+          migrated_from_channel_id?: string | null
+          previous_client_names?: string[]
+          reply_count?: number
+          thread_ts?: string | null
           candidate_name?: string
           channel_id: string
           client_name: string
@@ -1018,6 +1034,14 @@ export type Database = {
           user_id: string
         }
         Update: {
+          channel_name?: string | null
+          last_activity_at?: string | null
+          last_refreshed_at?: string | null
+          last_reply_at?: string | null
+          migrated_from_channel_id?: string | null
+          previous_client_names?: string[]
+          reply_count?: number
+          thread_ts?: string | null
           candidate_name?: string
           channel_id?: string
           client_name?: string
@@ -1030,6 +1054,39 @@ export type Database = {
           raw_text?: string | null
           status?: string
           submitted_at?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      slack_sync_state: {
+        Row: {
+          channel_watermarks: Json
+          failed_channel_ids: string[]
+          last_full_sync_at: string | null
+          last_scan_method: string | null
+          last_sync_at: string | null
+          live_channel_ids: string[]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          channel_watermarks?: Json
+          failed_channel_ids?: string[]
+          last_full_sync_at?: string | null
+          last_scan_method?: string | null
+          last_sync_at?: string | null
+          live_channel_ids?: string[]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          channel_watermarks?: Json
+          failed_channel_ids?: string[]
+          last_full_sync_at?: string | null
+          last_scan_method?: string | null
+          last_sync_at?: string | null
+          live_channel_ids?: string[]
           updated_at?: string
           user_id?: string
         }

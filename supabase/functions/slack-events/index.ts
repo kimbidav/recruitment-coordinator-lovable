@@ -1,4 +1,5 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
 
 // Slack Events API receiver — push-based ingestion so new submissions and
 // reaction changes land in slack_submissions the moment they happen, instead
@@ -159,7 +160,7 @@ async function verifySlackSignature(req: Request, rawBody: string): Promise<bool
 
 // ── Event handling ──────────────────────────────────────────────────────────
 
-type Admin = ReturnType<typeof createClient>;
+type Admin = SupabaseClient;
 
 interface TokenRow {
   user_id: string;
@@ -216,10 +217,15 @@ async function handleMessageEvent(admin: Admin, teamId: string, event: Record<st
     return; // joins, bots, deletes, etc.
   }
   if (!msg.user) return;
-  if (msg.thread_ts && msg.thread_ts !== msg.ts) return; // parents only
-
   const channelId = event.channel as string;
   if (!channelId) return;
+
+  if (msg.thread_ts && msg.thread_ts !== msg.ts) {
+    // A thread reply is ACTIVITY on the parent submission: it keeps the loop
+    // inside the lookback window and tells the agent a human is on it.
+    await bumpThreadActivity(admin, channelId, msg.thread_ts, msg.ts);
+    return;
+  }
 
   const { linkedin_url, candidate_name, needs_review } = extractCandidate(msg);
   if (!linkedin_url) return;
@@ -241,6 +247,7 @@ async function handleMessageEvent(admin: Admin, teamId: string, event: Record<st
       candidate_name: candidate_name || "",
       linkedin_url,
       submitted_at: new Date(parseFloat(msg.ts) * 1000).toISOString(),
+      thread_ts: msg.ts,
       // status intentionally omitted: fresh inserts get the 'submitted'
       // default, and conflict-updates never clobber a status that reaction
       // events (or a polling sync) already set.
@@ -248,6 +255,25 @@ async function handleMessageEvent(admin: Admin, teamId: string, event: Record<st
       permalink: null,
       needs_review,
     }, { onConflict: "user_id,channel_id,message_ts" });
+  }
+}
+
+/** Stamp last_activity_at / reply_count on the parent row(s) of a thread reply. */
+async function bumpThreadActivity(admin: Admin, channelId: string, parentTs: string, replyTs: string) {
+  const replyAt = new Date(parseFloat(replyTs) * 1000);
+  if (!Number.isFinite(replyAt.getTime())) return;
+  const { data: rows } = await admin
+    .from("slack_submissions")
+    .select("id, last_activity_at, reply_count")
+    .eq("channel_id", channelId)
+    .eq("message_ts", parentTs);
+  for (const r of (rows ?? []) as Array<{ id: string; last_activity_at: string | null; reply_count: number | null }>) {
+    const prev = r.last_activity_at ? Date.parse(r.last_activity_at) : 0;
+    await admin.from("slack_submissions").update({
+      last_activity_at: new Date(Math.max(prev, replyAt.getTime())).toISOString(),
+      last_reply_at: replyAt.toISOString(),
+      reply_count: (r.reply_count ?? 0) + 1,
+    }).eq("id", r.id);
   }
 }
 
@@ -318,17 +344,22 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  try {
-    if (event.type === "message") {
-      await handleMessageEvent(admin, teamId, event);
-    } else if (event.type === "reaction_added" || event.type === "reaction_removed") {
-      await handleReactionEvent(admin, teamId, event);
+  // Ack within Slack's 3-second window and do the work afterwards. Always
+  // 200: Slack retries non-200s up to 3x, and our writes are idempotent
+  // upserts, so a retry adds nothing but load.
+  const work = (async () => {
+    try {
+      if (event.type === "message") {
+        await handleMessageEvent(admin, teamId, event);
+      } else if (event.type === "reaction_added" || event.type === "reaction_removed") {
+        await handleReactionEvent(admin, teamId, event);
+      }
+    } catch (e) {
+      console.error("slack-events processing error", e instanceof Error ? e.message : e);
     }
-  } catch (e) {
-    // Always ack with 200: Slack retries non-200s up to 3x, and our writes are
-    // idempotent upserts, so a retry adds nothing but load.
-    console.error("slack-events processing error", e instanceof Error ? e.message : e);
-  }
+  })();
+  if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(work);
+  else await work;
 
   return new Response("ok");
 });
