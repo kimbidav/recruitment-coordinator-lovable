@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Candidate Compass — Connect Ashby",
+  "version": "1.0.0",
+  "description": "One click to connect your Ashby login to Candidate Compass (no DevTools).",
+  "permissions": ["cookies"],
+  "host_permissions": ["https://app.ashbyhq.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.lovable.app/*", "https://*.lovableproject.com/*", "http://localhost:8080/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Connect Ashby to Candidate Compass", "default_popup": "popup.html" }
+}

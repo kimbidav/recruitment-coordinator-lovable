@@ -7,7 +7,10 @@ export interface OnboardingStatus {
   googleEmail: string | null;
   slackConnected: boolean;
   slackTeamName: string | null;
+  /** The signed-in recruiter's OWN Ashby login (drives Slack uploads). */
   ashbyConnected: boolean;
+  /** The shared team session used for pipeline reads. */
+  teamAshbyConnected: boolean;
   hasCandidates: boolean;
   loading: boolean;
   refresh: () => Promise<void>;
@@ -24,6 +27,7 @@ export function useOnboardingStatus(): OnboardingStatus {
   const [slackConnected, setSlackConnected] = useState(false);
   const [slackTeamName, setSlackTeamName] = useState<string | null>(null);
   const [ashbyConnected, setAshbyConnected] = useState(false);
+  const [teamAshbyConnected, setTeamAshbyConnected] = useState(false);
   const [hasCandidates, setHasCandidates] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -34,7 +38,7 @@ export function useOnboardingStatus(): OnboardingStatus {
     }
     setLoading(true);
     try {
-      const [googleRes, slackRes, candidatesRes, ashbyRes] = await Promise.all([
+      const [googleRes, slackRes, candidatesRes, ashbyRes, userAshbyRes] = await Promise.all([
         supabase
           .from("google_calendar_tokens")
           .select("google_email")
@@ -54,6 +58,11 @@ export function useOnboardingStatus(): OnboardingStatus {
           .select("status")
           .eq("id", 1)
           .maybeSingle(),
+        supabase
+          .from("ashby_user_sessions")
+          .select("status")
+          .eq("user_id", user.id)
+          .maybeSingle(),
       ]);
 
       setGoogleConnected(!!googleRes.data);
@@ -61,7 +70,8 @@ export function useOnboardingStatus(): OnboardingStatus {
       setSlackConnected(!!slackRes.data);
       setSlackTeamName(slackRes.data?.slack_team_name ?? null);
       setHasCandidates((candidatesRes.count ?? 0) > 0);
-      setAshbyConnected(ashbyRes.data?.status === "healthy");
+      setTeamAshbyConnected(ashbyRes.data?.status === "healthy");
+      setAshbyConnected(userAshbyRes.data?.status === "healthy");
     } catch {
       // Non-fatal — leave defaults.
     } finally {
@@ -80,6 +90,7 @@ export function useOnboardingStatus(): OnboardingStatus {
     slackConnected,
     slackTeamName,
     ashbyConnected,
+    teamAshbyConnected,
     hasCandidates,
     loading: loading || authLoading,
     refresh,

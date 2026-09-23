@@ -185,6 +185,141 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_user_sessions: {
+        Row: {
+          user_id: string
+          email: string
+          status: string
+          identity_verified: boolean
+          org_count: number
+          last_seeded_at: string | null
+          last_ok_at: string | null
+          last_error: string | null
+          expires_estimate_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          email: string
+          status?: string
+          identity_verified?: boolean
+          org_count?: number
+          last_seeded_at?: string | null
+          last_ok_at?: string | null
+          last_error?: string | null
+          expires_estimate_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          user_id: string
+          email: string
+          status?: string
+          identity_verified?: boolean
+          org_count?: number
+          last_seeded_at?: string | null
+          last_ok_at?: string | null
+          last_error?: string | null
+          expires_estimate_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ashby_uploads: {
+        Row: {
+          id: string
+          session_id: string | null
+          user_id: string
+          extractor_job_id: string | null
+          candidate_name: string | null
+          org_name: string | null
+          status: string
+          http_status: number | null
+          result: Json | null
+          started_at: string
+          finished_at: string | null
+        }
+        Insert: {
+          id?: string
+          session_id?: string | null
+          user_id: string
+          extractor_job_id?: string | null
+          candidate_name?: string | null
+          org_name?: string | null
+          status?: string
+          http_status?: number | null
+          result?: Json | null
+          started_at?: string
+          finished_at?: string | null
+        }
+        Update: {
+          id?: string
+          session_id?: string | null
+          user_id: string
+          extractor_job_id?: string | null
+          candidate_name?: string | null
+          org_name?: string | null
+          status?: string
+          http_status?: number | null
+          result?: Json | null
+          started_at?: string
+          finished_at?: string | null
+        }
+        Relationships: []
+      }
+      ashby_open_jobs_cache: {
+        Row: {
+          org_key: string
+          org_name: string
+          org_id: string | null
+          jobs: Json
+          source_id: string | null
+          source_title: string | null
+          fetched_at: string
+        }
+        Insert: {
+          org_key: string
+          org_name: string
+          org_id?: string | null
+          jobs?: Json
+          source_id?: string | null
+          source_title?: string | null
+          fetched_at?: string
+        }
+        Update: {
+          org_key: string
+          org_name: string
+          org_id?: string | null
+          jobs?: Json
+          source_id?: string | null
+          source_title?: string | null
+          fetched_at?: string
+        }
+        Relationships: []
+      }
+      ashby_channel_org_map: {
+        Row: {
+          channel_id: string
+          org_name: string
+          channel_name: string | null
+          learned_by: string | null
+          updated_at: string
+        }
+        Insert: {
+          channel_id: string
+          org_name: string
+          channel_name?: string | null
+          learned_by?: string | null
+          updated_at?: string
+        }
+        Update: {
+          channel_id: string
+          org_name: string
+          channel_name?: string | null
+          learned_by?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ashby_known_clients: {
         Row: {
           client_name: string

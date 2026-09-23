@@ -1,6 +1,7 @@
 {
   "version": "5",
   "remote": {
-    "https://esm.sh/@supabase/supabase-js@2.95.0": "8f03cc20a55700f9625b75c9b6de887287727b59f376fc3e8598785fea5e4d14"
+    "https://esm.sh/@supabase/supabase-js@2.95.0": "8f03cc20a55700f9625b75c9b6de887287727b59f376fc3e8598785fea5e4d14",
+    "https://esm.sh/@supabase/supabase-js@2.95.0/cors": "fa80f37e10c00e18f4855aca12f619ab648d7b720e6cb5b352a4dc339eda1162"
   }
 }

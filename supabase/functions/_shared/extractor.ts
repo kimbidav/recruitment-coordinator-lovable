@@ -11,7 +11,7 @@ const BASE = () => (Deno.env.get("ASHBY_AUTOMATION_API_BASE") ?? "https://ashby-
 export async function callExtractor<T = Record<string, unknown>>(
   path: string,
   payload: Record<string, unknown> | null,
-  opts: { timeoutMs?: number; userEmail?: string; method?: "GET" | "POST" } = {},
+  opts: { timeoutMs?: number; userEmail?: string; method?: "GET" | "POST" | "DELETE" } = {},
 ): Promise<ExtractorResult<T>> {
   const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
   const secret = Deno.env.get("EXTRACTOR_SHARED_SECRET");

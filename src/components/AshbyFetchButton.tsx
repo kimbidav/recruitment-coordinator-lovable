@@ -37,6 +37,7 @@ import {
 } from "@/lib/fetchJobs";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { normalizeTokenInput, validateToken } from "@/lib/ashbyToken";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -102,31 +103,6 @@ interface AshbyFetchButtonProps {
 type ConnectionStatus = "healthy" | "expired" | "disconnected" | "unknown";
 
 /** Strip common paste mistakes (whole cookie header, name=value form, quotes, whitespace). */
-function normalizeTokenInput(raw: string): string {
-  let v = raw.trim();
-  // Strip surrounding quotes
-  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-    v = v.slice(1, -1).trim();
-  }
-  // If they pasted a whole "cookie:" header, try to extract the token
-  const cookieHeaderMatch = v.match(/ashby_session_token\s*=\s*([^;\s]+)/i);
-  if (cookieHeaderMatch) v = cookieHeaderMatch[1];
-  // If they copied the DevTools row "ashby_session_token<TAB>value..."
-  if (v.toLowerCase().startsWith("ashby_session_token")) {
-    const parts = v.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) v = parts[1];
-  }
-  return v.trim();
-}
-
-function validateToken(v: string): { valid: boolean; hint: string | null } {
-  if (!v) return { valid: false, hint: null };
-  if (v.length < 20) return { valid: false, hint: "Token looks too short" };
-  if (/\s/.test(v)) return { valid: false, hint: "Token shouldn't contain spaces" };
-  if (v.includes("=")) return { valid: false, hint: "Looks like you pasted name=value — paste only the value" };
-  return { valid: true, hint: null };
-}
-
 const LOOM_WALKTHROUGH_URL = "https://www.loom.com/share/3423bbe88fdd4ad4819ce24afda058b1";
 
 function detectOS(): "mac" | "win" {
