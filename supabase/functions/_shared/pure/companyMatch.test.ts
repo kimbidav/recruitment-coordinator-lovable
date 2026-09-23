@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { companiesMatch, isAshbyCompany } from "@/lib/companyMatch";
+import { companiesMatch, isAshbyCompany } from "./companyMatch";
 
 describe("companiesMatch", () => {
   it("collapses lenient variants", () => {
@@ -27,5 +27,14 @@ describe("companiesMatch", () => {
     const ashbyOrgs = ["Anterior"];
     expect(isAshbyCompany("Anterior Vpe Cto", ashbyOrgs)).toBe(false);
     expect(isAshbyCompany("Anterior", ashbyOrgs)).toBe(true);
+  });
+});
+
+describe("org aliases", () => {
+  it("a renamed client matches its old channel-derived name", async () => {
+    const { companiesMatchWithAliases, canonicalCompany } = await import("./companyMatch");
+    expect(canonicalCompany("Forge")).toBe("Poetic");
+    expect(companiesMatchWithAliases("Forge", "Poetic")).toBe(true);
+    expect(companiesMatchWithAliases("Reducto", "Poetic")).toBe(false);
   });
 });

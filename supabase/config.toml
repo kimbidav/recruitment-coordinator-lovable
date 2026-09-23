@@ -4,3 +4,8 @@ project_id = "sjbygvfjxarfajzasajr"
 # Slack request signature (SLACK_SIGNING_SECRET), not a Supabase JWT.
 [functions.slack-events]
 verify_jwt = false
+
+# Local only: keep the worker alive after the response so EdgeRuntime.waitUntil
+# background work (Slack interactivity) runs under `supabase functions serve`.
+[edge_runtime]
+policy = "per_worker"

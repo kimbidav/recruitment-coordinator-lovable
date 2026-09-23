@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { consumeOAuthState } from "../_shared/oauthState.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -35,7 +36,12 @@ Deno.serve(async (req) => {
     const redirectUri: string = body.redirect_uri;
     const state: string = body.state;
     if (!code || !redirectUri) throw new Error("code and redirect_uri required");
-    if (state !== userData.user.id) {
+    // Use service role to upsert (bypasses RLS), but we still scope to userData.user.id
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    if (!(await consumeOAuthState(admin, state, userData.user.id, "slack"))) {
       return new Response(JSON.stringify({ error: "State mismatch" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -71,12 +77,6 @@ Deno.serve(async (req) => {
     if (!userAccessToken || !slackUserId || !teamId) {
       throw new Error("Slack OAuth response missing user token / id / team");
     }
-
-    // Use service role to upsert (bypasses RLS), but we still scope to userData.user.id
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
 
     const { error: upsertErr } = await admin
       .from("slack_tokens")

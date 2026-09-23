@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { issueOAuthState } from "../_shared/oauthState.ts";
 
 const USER_SCOPES = [
   "channels:read",
@@ -50,7 +51,11 @@ Deno.serve(async (req) => {
     const redirectUri: string = body.redirect_uri;
     if (!redirectUri) throw new Error("redirect_uri required");
 
-    const state = userData.user.id;
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const state = await issueOAuthState(admin, userData.user.id, "slack");
 
     const url = new URL("https://slack.com/oauth/v2/authorize");
     url.searchParams.set("client_id", clientId);

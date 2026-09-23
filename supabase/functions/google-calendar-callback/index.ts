@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { consumeOAuthState } from "../_shared/oauthState.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -31,7 +32,12 @@ Deno.serve(async (req) => {
 
     const { code, redirect_uri, state } = await req.json();
     if (!code || !redirect_uri) throw new Error("code and redirect_uri required");
-    if (state && state !== userId) throw new Error("State mismatch");
+    // Use service role to upsert (RLS-friendly upsert needs both insert+update; service role simplifies)
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    if (!(await consumeOAuthState(admin, state, userId, "google"))) throw new Error("State mismatch");
 
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -65,11 +71,6 @@ Deno.serve(async (req) => {
 
     const expiresAt = new Date(Date.now() + (expires_in ?? 3600) * 1000).toISOString();
 
-    // Use service role to upsert (RLS-friendly upsert needs both insert+update; service role simplifies)
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
     const { error: upsertErr } = await admin
       .from("google_calendar_tokens")
       .upsert({

@@ -1,0 +1,8 @@
+{
+  "tasks": {
+    "test": "deno test --allow-env _shared/pure/"
+  },
+  "imports": {
+    "@shared/": "./_shared/"
+  }
+}
