@@ -16,6 +16,12 @@ export type Database = {
     Tables: {
       agent_action_cards: {
         Row: {
+          act_error: string | null
+          act_idempotency_key: string | null
+          act_result: Json | null
+          act_status: string | null
+          acted_at: string | null
+          queue_section: string | null
           ashby_pair_key: string | null
           candidate_row_id: string | null
           created_at: string
@@ -29,6 +35,12 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          act_error?: string | null
+          act_idempotency_key?: string | null
+          act_result?: Json | null
+          act_status?: string | null
+          acted_at?: string | null
+          queue_section?: string | null
           ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string
@@ -42,6 +54,12 @@ export type Database = {
           user_id: string
         }
         Update: {
+          act_error?: string | null
+          act_idempotency_key?: string | null
+          act_result?: Json | null
+          act_status?: string | null
+          acted_at?: string | null
+          queue_section?: string | null
           ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string
@@ -134,6 +152,7 @@ export type Database = {
           created_at: string
           intro_stall_min_days: number
           recruiter_aliases: string[]
+          timezone: string | null
           updated_at: string
           user_id: string
         }
@@ -142,6 +161,7 @@ export type Database = {
           created_at?: string
           intro_stall_min_days?: number
           recruiter_aliases?: string[]
+          timezone?: string | null
           updated_at?: string
           user_id: string
         }
@@ -150,6 +170,7 @@ export type Database = {
           created_at?: string
           intro_stall_min_days?: number
           recruiter_aliases?: string[]
+          timezone?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -181,6 +202,141 @@ export type Database = {
           last_seeded_at?: string | null
           seeded_by?: string | null
           status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ashby_user_sessions: {
+        Row: {
+          user_id: string
+          email: string
+          status: string
+          identity_verified: boolean
+          org_count: number
+          last_seeded_at: string | null
+          last_ok_at: string | null
+          last_error: string | null
+          expires_estimate_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          email: string
+          status?: string
+          identity_verified?: boolean
+          org_count?: number
+          last_seeded_at?: string | null
+          last_ok_at?: string | null
+          last_error?: string | null
+          expires_estimate_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          user_id: string
+          email: string
+          status?: string
+          identity_verified?: boolean
+          org_count?: number
+          last_seeded_at?: string | null
+          last_ok_at?: string | null
+          last_error?: string | null
+          expires_estimate_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ashby_uploads: {
+        Row: {
+          id: string
+          session_id: string | null
+          user_id: string
+          extractor_job_id: string | null
+          candidate_name: string | null
+          org_name: string | null
+          status: string
+          http_status: number | null
+          result: Json | null
+          started_at: string
+          finished_at: string | null
+        }
+        Insert: {
+          id?: string
+          session_id?: string | null
+          user_id: string
+          extractor_job_id?: string | null
+          candidate_name?: string | null
+          org_name?: string | null
+          status?: string
+          http_status?: number | null
+          result?: Json | null
+          started_at?: string
+          finished_at?: string | null
+        }
+        Update: {
+          id?: string
+          session_id?: string | null
+          user_id: string
+          extractor_job_id?: string | null
+          candidate_name?: string | null
+          org_name?: string | null
+          status?: string
+          http_status?: number | null
+          result?: Json | null
+          started_at?: string
+          finished_at?: string | null
+        }
+        Relationships: []
+      }
+      ashby_open_jobs_cache: {
+        Row: {
+          org_key: string
+          org_name: string
+          org_id: string | null
+          jobs: Json
+          source_id: string | null
+          source_title: string | null
+          fetched_at: string
+        }
+        Insert: {
+          org_key: string
+          org_name: string
+          org_id?: string | null
+          jobs?: Json
+          source_id?: string | null
+          source_title?: string | null
+          fetched_at?: string
+        }
+        Update: {
+          org_key: string
+          org_name: string
+          org_id?: string | null
+          jobs?: Json
+          source_id?: string | null
+          source_title?: string | null
+          fetched_at?: string
+        }
+        Relationships: []
+      }
+      ashby_channel_org_map: {
+        Row: {
+          channel_id: string
+          org_name: string
+          channel_name: string | null
+          learned_by: string | null
+          updated_at: string
+        }
+        Insert: {
+          channel_id: string
+          org_name: string
+          channel_name?: string | null
+          learned_by?: string | null
+          updated_at?: string
+        }
+        Update: {
+          channel_id: string
+          org_name: string
+          channel_name?: string | null
+          learned_by?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -233,8 +389,86 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_org_aliases: {
+        Row: {
+          confirmed_by: string | null
+          created_at: string
+          current_name: string
+          source: string
+          stale_name: string
+          updated_at: string
+        }
+        Insert: {
+          confirmed_by?: string | null
+          created_at?: string
+          current_name: string
+          source?: string
+          stale_name: string
+          updated_at?: string
+        }
+        Update: {
+          confirmed_by?: string | null
+          created_at?: string
+          current_name?: string
+          source?: string
+          stale_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ashby_org_health: {
+        Row: {
+          audit: Json
+          checked_at: string
+          id: number
+        }
+        Insert: {
+          audit?: Json
+          checked_at?: string
+          id?: number
+        }
+        Update: {
+          audit?: Json
+          checked_at?: string
+          id?: number
+        }
+        Relationships: []
+      }
+      ashby_retired_orgs: {
+        Row: {
+          note: string | null
+          org_name: string
+          retired_at: string
+          retired_by: string | null
+        }
+        Insert: {
+          note?: string | null
+          org_name: string
+          retired_at?: string
+          retired_by?: string | null
+        }
+        Update: {
+          note?: string | null
+          org_name?: string
+          retired_at?: string
+          retired_by?: string | null
+        }
+        Relationships: []
+      }
       ashby_snapshot_candidates: {
         Row: {
+          access_restricted: boolean
+          added_via: string | null
+          archived_reason_type: string | null
+          archived_verified_live_at: string | null
+          credited_to_email: string | null
+          credited_to_user_id: string | null
+          linkedin_url: string | null
+          org_retired_at: string | null
+          org_status: string | null
+          previous_company_names: string[]
+          status_verified_live: string | null
+          status_verified_live_at: string | null
           application_id: string | null
           archived_detected_at: string | null
           archived_inferred: boolean | null
@@ -272,6 +506,18 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          access_restricted?: boolean
+          added_via?: string | null
+          archived_reason_type?: string | null
+          archived_verified_live_at?: string | null
+          credited_to_email?: string | null
+          credited_to_user_id?: string | null
+          linkedin_url?: string | null
+          org_retired_at?: string | null
+          org_status?: string | null
+          previous_company_names?: string[]
+          status_verified_live?: string | null
+          status_verified_live_at?: string | null
           application_id?: string | null
           archived_detected_at?: string | null
           archived_inferred?: boolean | null
@@ -309,6 +555,18 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          access_restricted?: boolean
+          added_via?: string | null
+          archived_reason_type?: string | null
+          archived_verified_live_at?: string | null
+          credited_to_email?: string | null
+          credited_to_user_id?: string | null
+          linkedin_url?: string | null
+          org_retired_at?: string | null
+          org_status?: string | null
+          previous_company_names?: string[]
+          status_verified_live?: string | null
+          status_verified_live_at?: string | null
           application_id?: string | null
           archived_detected_at?: string | null
           archived_inferred?: boolean | null
@@ -746,6 +1004,14 @@ export type Database = {
       }
       slack_submissions: {
         Row: {
+          channel_name: string | null
+          last_activity_at: string | null
+          last_refreshed_at: string | null
+          last_reply_at: string | null
+          migrated_from_channel_id: string | null
+          previous_client_names: string[]
+          reply_count: number
+          thread_ts: string | null
           candidate_name: string
           channel_id: string
           client_name: string
@@ -762,6 +1028,14 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          channel_name?: string | null
+          last_activity_at?: string | null
+          last_refreshed_at?: string | null
+          last_reply_at?: string | null
+          migrated_from_channel_id?: string | null
+          previous_client_names?: string[]
+          reply_count?: number
+          thread_ts?: string | null
           candidate_name?: string
           channel_id: string
           client_name: string
@@ -778,6 +1052,14 @@ export type Database = {
           user_id: string
         }
         Update: {
+          channel_name?: string | null
+          last_activity_at?: string | null
+          last_refreshed_at?: string | null
+          last_reply_at?: string | null
+          migrated_from_channel_id?: string | null
+          previous_client_names?: string[]
+          reply_count?: number
+          thread_ts?: string | null
           candidate_name?: string
           channel_id?: string
           client_name?: string
@@ -790,6 +1072,39 @@ export type Database = {
           raw_text?: string | null
           status?: string
           submitted_at?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      slack_sync_state: {
+        Row: {
+          channel_watermarks: Json
+          failed_channel_ids: string[]
+          last_full_sync_at: string | null
+          last_scan_method: string | null
+          last_sync_at: string | null
+          live_channel_ids: string[]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          channel_watermarks?: Json
+          failed_channel_ids?: string[]
+          last_full_sync_at?: string | null
+          last_scan_method?: string | null
+          last_sync_at?: string | null
+          live_channel_ids?: string[]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          channel_watermarks?: Json
+          failed_channel_ids?: string[]
+          last_full_sync_at?: string | null
+          last_scan_method?: string | null
+          last_sync_at?: string | null
+          live_channel_ids?: string[]
           updated_at?: string
           user_id?: string
         }

@@ -26,6 +26,83 @@ interface EmailComposerProps {
   initialSubject?: string;
   initialBody?: string;
   initialTo?: string;
+  /** When set, sending goes through this (e.g. agent-act) instead of gmail-helper. */
+  onSend?: (args: { to: string; subject: string; body: string }) => Promise<void>;
+}
+
+export interface EmailLookupResult {
+  email: string | null;
+  confidence: "high" | "medium" | "low" | "none";
+  evidence?: Array<{ kind: string; subject: string; date: string; detail: string }>;
+  candidates?: Array<{ email: string; confidence: string; display_names?: string[] }>;
+}
+
+const EVIDENCE_LABEL: Record<string, string> = {
+  you_emailed: "You emailed them",
+  they_emailed: "They emailed you",
+  calendly_invitee: "Calendly invitee",
+  mention: "Copied on a thread",
+  scheduling_notice: "Scheduling notice",
+};
+
+function formatEvidenceDate(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+}
+
+/**
+ * Why the resolver picked (or refused to pick) an address. Mirrors the
+ * desktop overlay: a confidence pill plus up to three evidence lines at
+ * high/medium; at low, amber copy and "Use" chips — never an auto-fill.
+ */
+function LookupEvidence({ lookup, onUse }: { lookup: EmailLookupResult; onUse: (email: string) => void }) {
+  const confident = !!lookup.email && (lookup.confidence === "high" || lookup.confidence === "medium");
+  if (confident) {
+    const pill =
+      lookup.confidence === "high"
+        ? "bg-status-success/10 text-status-success border-status-success/30"
+        : "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30";
+    return (
+      <div className="space-y-1 pt-1 text-xs">
+        <div className="flex items-center gap-2">
+          <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-medium ${pill}`}>
+            {lookup.confidence === "high" ? "Found" : "Likely"} · {lookup.confidence} confidence
+          </span>
+          <span className="text-muted-foreground">{lookup.email}</span>
+        </div>
+        <ul className="text-muted-foreground">
+          {(lookup.evidence ?? []).slice(0, 3).map((e, i) => (
+            <li key={i}>
+              {EVIDENCE_LABEL[e.kind] ?? e.detail}
+              {e.subject ? ` · “${e.subject}”` : ""}
+              {e.date ? ` · ${formatEvidenceDate(e.date)}` : ""}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  const chips = (lookup.candidates ?? []).map((c) => c.email).filter(Boolean).slice(0, 3);
+  if (chips.length === 0) return null;
+  return (
+    <div className="space-y-1 pt-1 text-xs">
+      <p className="text-amber-700 dark:text-amber-400">
+        Couldn't confirm an address — pick one only if you recognize it.
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {chips.map((email) => (
+          <button
+            key={email}
+            type="button"
+            onClick={() => onUse(email)}
+            className="rounded border border-border bg-card px-2 py-0.5 hover:bg-muted transition-colors"
+          >
+            Use {email}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function firstName(full: string): string {
@@ -85,6 +162,7 @@ export function EmailComposer({
   initialSubject,
   initialBody,
   initialTo,
+  onSend,
 }: EmailComposerProps) {
   const { user } = useAuth();
   // Sign-off name: Google OAuth full name when available, else the email
@@ -107,7 +185,9 @@ export function EmailComposer({
   const [lookingUp, setLookingUp] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState<null | "google_not_connected" | "gmail_scope_missing">(null);
-  const [suggestions, setSuggestions] = useState<{ email: string; count: number }[]>([]);
+  // Resolver output. `email` is set only at high/medium confidence; at low
+  // the candidates are shown as chips the user must pick deliberately.
+  const [lookup, setLookup] = useState<EmailLookupResult | null>(null);
 
   // Reset content when reopened for a different candidate.
   useEffect(() => {
@@ -115,7 +195,7 @@ export function EmailComposer({
       setTo(initialTo ?? "");
       setSubject(initialSubject ?? draft.subject);
       setBody(initialBody ?? draft.body);
-      setSuggestions([]);
+      setLookup(null);
       setNeedsReconnect(null);
     }
   }, [open, draft.subject, draft.body, initialSubject, initialBody, initialTo]);
@@ -179,12 +259,15 @@ export function EmailComposer({
         return;
       }
       setNeedsReconnect(null);
-      const results = (data.results ?? []) as { email: string; count: number }[];
-      setSuggestions(results);
-      if (results.length === 0) {
+      const result = data as EmailLookupResult;
+      setLookup(result);
+      if (result.email && (result.confidence === "high" || result.confidence === "medium")) {
+        // Confident: fill the field (the pill + evidence below say why).
+        if (!to || to === lookup?.email) setTo(result.email);
+      } else if ((result.candidates ?? []).length > 0) {
+        toast.info(`Couldn't confirm ${candidateName}'s email — pick one below only if you recognize it.`);
+      } else {
         toast.info(`No email found for ${candidateName} in your Gmail.`);
-      } else if (!to) {
-        setTo(results[0].email);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Lookup failed";
@@ -202,6 +285,12 @@ export function EmailComposer({
     }
     setSending(true);
     try {
+      if (onSend) {
+        await onSend({ to: to.trim(), subject, body });
+        toast.success("Email sent");
+        onOpenChange(false);
+        return;
+      }
       const { data, error } = await supabase.functions.invoke("gmail-helper", {
         body: { action: "send", to: to.trim(), subject, body },
       });
@@ -289,21 +378,7 @@ export function EmailComposer({
                 Look up from Gmail
               </Button>
             </div>
-            {suggestions.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {suggestions.map((s) => (
-                  <button
-                    key={s.email}
-                    type="button"
-                    onClick={() => setTo(s.email)}
-                    className="text-xs px-2 py-0.5 rounded border border-border bg-card hover:bg-muted transition-colors"
-                    title={`Found in ${s.count} message${s.count === 1 ? "" : "s"}`}
-                  >
-                    {s.email}
-                  </button>
-                ))}
-              </div>
-            )}
+            {lookup && <LookupEvidence lookup={lookup} onUse={setTo} />}
           </div>
 
           <div className="space-y-1.5">

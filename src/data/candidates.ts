@@ -69,6 +69,16 @@ export interface Candidate {
    *  vanished from a swept org and the reason couldn't be verified. */
   archived_reason?: string | null;
   archived_inferred?: boolean;
+  /** Ashby's reason type for the archive ("Hired", "Lacks Skills", …). */
+  archived_reason_type?: string | null;
+  /** LinkedIn profile from Ashby's social links — the strongest identity key. */
+  linkedin_url?: string | null;
+  /** Recruiter credited in Ashby, as their login email. */
+  credited_to_email?: string | null;
+  /** Application on a job this seat cannot see; stage/events are invisible, not missing. */
+  access_restricted?: boolean;
+  /** "retired" = the team seat no longer reaches this org; says nothing about the candidate. */
+  org_status?: string | null;
 }
 
 // Empty by default - data is loaded from Ashby fetch / CSV uploads

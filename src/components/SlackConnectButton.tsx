@@ -58,36 +58,41 @@ export function SlackConnectButton({ onSynced }: SlackConnectButtonProps) {
     }
   };
 
-  const handleSync = async () => {
+  // Incremental by default (one search for your new posts + one thread read
+  // per open submission). Shift-click forces the full weekly rescan.
+  const handleSync = async (full = false) => {
     setBusy(true);
-    const t = toast.loading("Syncing from Slack…");
+    const t = toast.loading(full ? "Full Slack rescan…" : "Syncing from Slack…");
     try {
-      const { data, error } = await supabase.functions.invoke("slack-sync", { body: {} });
+      const { data, error } = await supabase.functions.invoke("slack-sync", { body: full ? { full: true } : {} });
       if (error || data?.error) {
         toast.error(`Slack sync failed: ${error?.message || data?.error}`, { id: t });
         return;
       }
       const s = data as {
+        mode?: string;
         channels_scanned?: number;
         submissions_saved?: number;
-        missing_name_count?: number;
+        new_submissions?: number;
+        threads_refreshed?: number;
+        migrated_threads?: number;
+        renamed?: number;
         partial?: boolean;
+        remaining?: number;
         channels_remaining?: string[];
       };
-      const missing =
-        s.missing_name_count && s.missing_name_count > 0
-          ? ` (${s.missing_name_count} need review)`
-          : "";
+      const extras = [
+        s.migrated_threads ? `${s.migrated_threads} migrated thread${s.migrated_threads === 1 ? "" : "s"} merged` : "",
+        s.renamed ? `${s.renamed} row${s.renamed === 1 ? "" : "s"} relabelled after a channel rename` : "",
+      ].filter(Boolean);
+      const summary = `${s.new_submissions ?? 0} new, ${s.threads_refreshed ?? 0} threads refreshed across ${s.channels_scanned ?? 0} channels${extras.length ? ` · ${extras.join(" · ")}` : ""}`;
       if (s.partial) {
         toast.warning(
-          `Synced ${s.submissions_saved ?? 0} submissions from ${s.channels_scanned ?? 0} channels, but Slack rate limits stopped the scan early (${s.channels_remaining?.length ?? 0} channels left). Run Sync again — it picks up where it left off.`,
+          `${summary}. Slack's rate limits stopped the scan early (${s.remaining ?? s.channels_remaining?.length ?? 0} left). Run Sync again — it picks up where it left off.`,
           { id: t, duration: 12000 },
         );
       } else {
-        toast.success(
-          `Synced ${s.submissions_saved ?? 0} submissions from ${s.channels_scanned ?? 0} channels${missing}`,
-          { id: t },
-        );
+        toast.success(`${s.mode === "full" ? "Full rescan" : "Synced"}: ${summary}`, { id: t });
       }
       await reload();
       onSynced?.();
@@ -160,7 +165,8 @@ export function SlackConnectButton({ onSynced }: SlackConnectButtonProps) {
 
   return (
     <div className="flex items-center gap-1">
-      <Button variant="outline" className="gap-2" onClick={handleSync} disabled={busy}>
+      <Button variant="outline" className="gap-2" onClick={(e) => void handleSync(e.shiftKey)}
+          title="Sync new submissions and refresh open threads. Shift-click for a full rescan." disabled={busy}>
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         Sync Slack{teamName ? ` (${teamName})` : ""}
       </Button>

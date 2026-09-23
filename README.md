@@ -6,6 +6,8 @@
 
 ## Documentation
 
+- [CLAUDE.md](CLAUDE.md) — business context and the rules that encode it; read this before changing pipeline logic.
+- [docs/v2-rollout.md](docs/v2-rollout.md) — the v2 release runbook: migration order, Railway/Supabase secrets, Slack app changes, per-recruiter onboarding, pilot.
 - [docs/ashby-architecture.md](docs/ashby-architecture.md) — how the Ashby pipeline integration works end-to-end (browser → Supabase edge function → Railway extractor → Ashby): the shared-session auth model, the async sweep, accumulate-and-merge, and storage. Read this first for the Ashby feature.
 - [docs/ashby-data-schemas.md](docs/ashby-data-schemas.md) — record shapes at each hop, the Supabase table DDL, and the Ashby REST/GraphQL API inventory.
 - [docs/shared-ashby-session-setup.md](docs/shared-ashby-session-setup.md) — one-time infra checklist (Railway volume + secrets + migrations) to activate the shared team session.

@@ -32,6 +32,8 @@ export interface AgentCardPayload {
     at: string;
     source: string;
   }>;
+  unscheduled_group?: { client: string; count: number };
+  draft_provider?: string;
   ashby_tracked?: boolean;
   ashby_last_activity_at?: string | null;
   ashby_stale?: boolean;
@@ -64,9 +66,14 @@ export interface AgentCard {
     | "intro_stall"
     | "post_interview_followup"
     | "batch_followup"
+    | "unscheduled_followup"
     | "ashby_needs_scheduling"
     | "ashby_missing_feedback";
   status: "open" | "snoozed" | "dismissed" | "resolved";
+  /** Authoritative review-queue routing, computed once at enqueue time. */
+  queue_section?: "slack" | "ashby" | null;
+  act_status?: string | null;
+  act_error?: string | null;
   snooze_until: string | null;
   created_at: string;
   updated_at: string;
@@ -185,6 +192,34 @@ export function useAgentCards() {
     }
   }, [reload]);
 
+  /**
+   * Deliver a reviewed action through agent-act: the card is claimed with an
+   * idempotency key, the Slack/Gmail side effect runs, and the card is marked
+   * resolved only once the provider confirms. Nothing here auto-sends — it is
+   * only reached from a button on a card showing exactly what will be sent.
+   */
+  const actOnCard = useCallback(async (
+    id: string,
+    action: "slack_reply" | "slack_post" | "email" | "close",
+    args: Record<string, unknown> = {},
+  ) => {
+    const idempotency_key = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${id}-${Date.now()}`;
+    const { data, error } = await supabase.functions.invoke("agent-act", {
+      body: { card_id: id, action, idempotency_key, ...args },
+    });
+    if (error) {
+      let detail = error.message;
+      try {
+        const ctx = (error as { context?: Response }).context;
+        if (ctx) { const j = await ctx.json(); if (j?.error) detail = j.error; }
+      } catch { /* ignore */ }
+      throw new Error(detail);
+    }
+    if (data?.error) throw new Error(data.error);
+    await reload();
+    return data as { ok: boolean; status: string; result?: Record<string, unknown>; replayed?: boolean };
+  }, [reload]);
+
   const updateStatus = useCallback(async (id: string, status: AgentCard["status"], snooze_until?: string | null) => {
     const patch: Record<string, unknown> = { status };
     if (snooze_until !== undefined) patch.snooze_until = snooze_until;
@@ -204,6 +239,7 @@ export function useAgentCards() {
     reload,
     runScan,
     updateStatus,
+    actOnCard,
   };
 }
 

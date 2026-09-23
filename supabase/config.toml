@@ -4,3 +4,18 @@ project_id = "sjbygvfjxarfajzasajr"
 # Slack request signature (SLACK_SIGNING_SECRET), not a Supabase JWT.
 [functions.slack-events]
 verify_jwt = false
+
+# Slack interactivity (the "Add to Ashby" shortcut, modal submits, buttons).
+# Same authentication: the Slack request signature.
+[functions.slack-interactions]
+verify_jwt = false
+
+# The Ashby extractor posts upload results here; authenticated by
+# X-Extractor-Callback-Secret, not a user JWT.
+[functions.slack-upload-callback]
+verify_jwt = false
+
+# Local only: keep the worker alive after the response so EdgeRuntime.waitUntil
+# background work (Slack interactivity) runs under `supabase functions serve`.
+[edge_runtime]
+policy = "per_worker"

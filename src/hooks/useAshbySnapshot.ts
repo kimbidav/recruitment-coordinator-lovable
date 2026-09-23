@@ -4,8 +4,10 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Candidate, InterviewEvent } from "@/data/candidates";
 import { getAshbyPipelineWarnings } from "@/lib/pipelineWarnings";
 import type { Tables } from "@/integrations/supabase/types";
+import type { OrgAudit } from "@shared/pure/orgHealth";
 
 type SnapshotRow = Tables<"ashby_snapshot_candidates">;
+export type OrgAliasRow = Tables<"ashby_org_aliases">;
 
 const PAGE_SIZE = 1000;
 
@@ -46,6 +48,11 @@ function rowToCandidate(row: SnapshotRow): Candidate {
     pipeline_data_source: "ashby",
     archived_reason: row.archived_reason,
     archived_inferred: row.archived_inferred ?? undefined,
+    archived_reason_type: row.archived_reason_type,
+    linkedin_url: row.linkedin_url,
+    credited_to_email: row.credited_to_email,
+    access_restricted: row.access_restricted ?? false,
+    org_status: row.org_status,
   };
   const warnings = getAshbyPipelineWarnings(candidate);
   if (warnings.length > 0) candidate.data_quality_warnings = warnings;
@@ -62,6 +69,9 @@ export function useAshbySnapshot() {
   const { user } = useAuth();
   const [rows, setRows] = useState<SnapshotRow[]>([]);
   const [orgNames, setOrgNames] = useState<string[]>([]);
+  const [orgAliases, setOrgAliases] = useState<Record<string, string>>({});
+  const [retiredOrgs, setRetiredOrgs] = useState<string[]>([]);
+  const [orgHealth, setOrgHealth] = useState<OrgAudit | null>(null);
   const [snapshotLoaded, setSnapshotLoaded] = useState(false);
 
   const refreshSnapshot = useCallback(async () => {
@@ -85,6 +95,25 @@ export function useAshbySnapshot() {
       if (orgErr) throw orgErr;
       setOrgNames((orgs ?? []).map((o) => o.org_name).filter(Boolean));
       setSnapshotLoaded(true);
+
+      // Org reachability (Package 4). Missing tables just mean the migration
+      // is pending — the snapshot itself is already usable.
+      try {
+        const [{ data: aliasRows }, { data: retiredRows }, { data: healthRow }] = await Promise.all([
+          supabase.from("ashby_org_aliases").select("stale_name,current_name,source"),
+          supabase.from("ashby_retired_orgs").select("org_name"),
+          supabase.from("ashby_org_health").select("audit").eq("id", 1).maybeSingle(),
+        ]);
+        const aliases: Record<string, string> = {};
+        for (const r of [...(aliasRows ?? [])].sort((a, b) => (a.source === "manual" ? 1 : 0) - (b.source === "manual" ? 1 : 0))) {
+          aliases[r.stale_name.trim().toLowerCase()] = r.current_name;
+        }
+        setOrgAliases(aliases);
+        setRetiredOrgs((retiredRows ?? []).map((r) => r.org_name));
+        setOrgHealth(((healthRow?.audit ?? null) as unknown as OrgAudit | null) ?? null);
+      } catch (err) {
+        console.warn("[snapshot] org health tables unavailable:", err);
+      }
     } catch (err) {
       // Tables may not exist yet (migration pending) — the dashboard falls
       // back to the per-user candidates path.
@@ -103,7 +132,10 @@ export function useAshbySnapshot() {
     for (const row of rows) {
       const candidate = rowToCandidate(row);
       const decision = (row.decision_status ?? "").trim().toLowerCase();
-      if (DONE_DECISIONS.has(decision)) {
+      if (DONE_DECISIONS.has(decision) || row.org_status === "retired") {
+        // Retired = the team can no longer see this client's ATS. The row
+        // leaves the active table like a done one, but its decision_status
+        // is untouched — nothing is claimed about the candidate.
         candidate.is_historical = true;
         archived.push(candidate);
       } else {
@@ -113,5 +145,5 @@ export function useAshbySnapshot() {
     return { activeSnapshot: active, archivedSnapshot: archived };
   }, [rows]);
 
-  return { activeSnapshot, archivedSnapshot, orgNames, snapshotLoaded, refreshSnapshot };
+  return { activeSnapshot, archivedSnapshot, orgNames, orgAliases, retiredOrgs, orgHealth, snapshotLoaded, refreshSnapshot };
 }

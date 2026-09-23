@@ -8,6 +8,7 @@ import { Check, Loader2, LogOut, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SlackConnectButton } from "@/components/SlackConnectButton";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
+import { AshbyUserConnect } from "@/components/AshbyUserConnect";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
 import { RecruiterAliasStep } from "@/components/RecruiterAliasStep";
@@ -71,7 +72,12 @@ const Onboarding = () => {
   const { aliases, refreshAliases } = useRecruiterAliases();
 
   useEffect(() => {
-    document.title = "Welcome — Candidate Pipeline";
+    document.title = "Welcome — Candidate Compass";
+    // /onboarding?step=ashby (from the Slack modal's Reconnect button and the
+    // expiry banner) lands on the Ashby step.
+    if (new URLSearchParams(window.location.search).get("step") === "ashby") {
+      setTimeout(() => document.getElementById("step-ashby")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+    }
   }, []);
 
   if (authLoading) {
@@ -119,7 +125,7 @@ const Onboarding = () => {
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">Let's get you set up</h1>
           <p className="text-sm text-muted-foreground">
-            Three quick connections so your pipeline stays in sync.
+            Three quick connections, then Add to Ashby works from Slack.
             {user.email && <> Signed in as <span className="font-medium text-foreground">{user.email}</span>.</>}
           </p>
         </div>
@@ -151,11 +157,23 @@ const Onboarding = () => {
             action={<SlackConnectButton onSynced={() => void status.refresh()} />}
           />
 
+          <div id="step-ashby">
+            <StepRow
+              index={3}
+              title="Connect Ashby (yours)"
+              caption="Add to Ashby in Slack uploads candidates under YOUR Ashby login, so they're credited to you and only reach clients you have access to. Ashby logins last about a week."
+              done={status.ashbyConnected}
+              doneLabel="Connected"
+              action={<AshbyUserConnect onChanged={() => void status.refresh()} />}
+            />
+          </div>
+
           <StepRow
-            index={3}
-            title="Ashby (shared by the team)"
-            caption="One Ashby connection serves the whole team. If it's already connected you can skip this; if it shows Reconnect, any teammate's Ashby login fixes it for everyone."
-            done={status.ashbyConnected}
+            index={4}
+            title="Team pipeline sync"
+            caption="Reading the whole team's Ashby pipeline uses one shared connection. If it's already healthy you can skip this; if it shows Reconnect, any teammate's login fixes it for everyone."
+            done={status.teamAshbyConnected}
+            optional
             action={
               <AshbyFetchButton
                 onSyncComplete={async () => {
@@ -166,11 +184,12 @@ const Onboarding = () => {
           />
 
           <StepRow
-            index={4}
+            index={5}
             title="Your name in Ashby"
-            caption="Pick how you appear as the submitter in Ashby so the dashboard can default to YOUR candidates (the team shares one Ashby pipeline)."
+            caption="Pick how you appear as the submitter in Ashby so the dashboard can default to YOUR candidates."
             done={aliases.length > 0}
             doneLabel={aliases.length > 0 ? aliases[0] : undefined}
+            optional
             action={<RecruiterAliasStep onSaved={() => void refreshAliases()} />}
           />
         </Card>

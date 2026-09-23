@@ -1,10 +1,19 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 import {
+  type ArchiveVerdict,
   type RawRecord,
   mergeCandidateRecords,
   inferArchivedCandidates,
 } from "../_shared/ashbyMerge.ts";
+import {
+  applyOrgAliases,
+  auditOrgCoverage,
+  formatAuditForLog,
+  learnAliasesFromRows,
+  markRetiredOrgs,
+  resolveAliases,
+} from "../_shared/pure/orgHealth.ts";
 
 const ASHBY_AUTOMATION_API_BASE =
   Deno.env.get("ASHBY_AUTOMATION_API_BASE") || "https://ashby-automation-production.up.railway.app";
@@ -254,8 +263,20 @@ function snapshotRow(rec: RawRecord): Record<string, unknown> {
     last_activity_at: txt(rec.last_activity_at),
     interview_events: Array.isArray(rec.interview_events) ? rec.interview_events : [],
     archived_reason: txt(rec.archived_reason),
+    archived_reason_type: txt(rec.archived_reason_type),
     archived_inferred: typeof rec.archived_inferred === "boolean" ? rec.archived_inferred : null,
     archived_detected_at: tstamp(rec.archived_detected_at),
+    archived_verified_live_at: tstamp(rec.archived_verified_live_at),
+    status_verified_live: txt(rec.status_verified_live),
+    status_verified_live_at: tstamp(rec.status_verified_live_at),
+    linkedin_url: txt(rec.linkedin_url),
+    access_restricted: rec.access_restricted === true,
+    credited_to_email: txt(rec.credited_to_email),
+    credited_to_user_id: txt(rec.credited_to_user_id),
+    org_status: txt(rec.org_status),
+    org_retired_at: tstamp(rec.org_retired_at),
+    added_via: txt(rec.added_via),
+    previous_company_names: Array.isArray(rec.previous_company_names) ? rec.previous_company_names : [],
     fetched_at: tstamp(rec.fetched_at),
     fetch_source: txt(rec.fetch_source),
     updated_at: new Date().toISOString(),
@@ -288,7 +309,7 @@ async function loadSnapshotRecords(admin: Admin): Promise<RawRecord[]> {
 
 async function verifyArchiveStatuses(
   apps: { application_id: string; org_id: string }[],
-): Promise<{ application_id?: string }[]> {
+): Promise<ArchiveVerdict[]> {
   const res = await fetchWithTimeout(
     `${ASHBY_AUTOMATION_API_BASE}/api/applications/archive-status`,
     {
@@ -308,6 +329,27 @@ async function verifyArchiveStatuses(
  * a persist failure must not fail the poll (the dashboard still gets the
  * payload; the next completed fetch retries the snapshot).
  */
+async function loadOrgConfig(admin: Admin): Promise<{ aliases: Record<string, string>; retired: Set<string> }> {
+  const aliases: Record<string, string> = {};
+  const retired = new Set<string>();
+  try {
+    const { data } = await admin.from("ashby_org_aliases").select("stale_name,current_name,source");
+    // Learned rows first, manual rows layered on top so a human decision wins.
+    const rows = ((data ?? []) as Array<{ stale_name: string; current_name: string; source: string }>)
+      .sort((a, b) => (a.source === "manual" ? 1 : 0) - (b.source === "manual" ? 1 : 0));
+    for (const r of rows) aliases[r.stale_name.trim().toLowerCase()] = r.current_name;
+  } catch (e) {
+    console.warn("[ashby-sync] ashby_org_aliases unavailable (migration pending?)", e);
+  }
+  try {
+    const { data } = await admin.from("ashby_retired_orgs").select("org_name");
+    for (const r of (data ?? []) as Array<{ org_name: string }>) retired.add(r.org_name.trim().toLowerCase());
+  } catch (e) {
+    console.warn("[ashby-sync] ashby_retired_orgs unavailable (migration pending?)", e);
+  }
+  return { aliases, retired };
+}
+
 async function persistSnapshot(
   admin: Admin,
   candidates: unknown[],
@@ -315,12 +357,38 @@ async function persistSnapshot(
 ): Promise<void> {
   const incoming = candidates.filter((c): c is RawRecord => !!c && typeof c === "object");
   const existing = await loadSnapshotRecords(admin);
-  const outcome = mergeCandidateRecords(existing, incoming);
-
   const trusted = new Set(companies.map((c) => c.toLowerCase()));
-  const archive = await inferArchivedCandidates(outcome, trusted, verifyArchiveStatuses);
+  const { aliases: configuredAliases, retired } = await loadOrgConfig(admin);
 
-  const toUpsert = [...outcome.touched, ...archive.stamped]
+  // Org hygiene BEFORE anything reads company_name: a renamed client
+  // (Forge -> Poetic, Klarity -> Within) must be seen under the name that IS
+  // in the trusted set so archival inference resolves it normally.
+  const learned = learnAliasesFromRows([...existing, ...incoming], companies);
+  const aliases = resolveAliases([...existing, ...incoming], companies, configuredAliases);
+  const renamedExisting = applyOrgAliases(existing, aliases);
+  const renamedIncoming = applyOrgAliases(incoming, aliases);
+  const moves = { ...renamedExisting.companies, ...renamedIncoming.companies };
+  if (Object.keys(moves).length) {
+    console.log(
+      `[ashby-sync] org rename: ${renamedExisting.renamed.length + renamedIncoming.renamed.length} row(s) relabelled — ` +
+        Object.entries(moves).map(([o, n]) => `${o} -> ${n}`).join(", "),
+    );
+  }
+
+  const outcome = mergeCandidateRecords(existing, incoming);
+  const archive = await inferArchivedCandidates(outcome, trusted, verifyArchiveStatuses, { log: console.log });
+
+  // Retirement is a human statement about ACCESS, applied here; never inferred.
+  const retire = markRetiredOrgs(outcome.records, retired);
+  if (retire.marked.length || retire.cleared.length) {
+    console.log(`[ashby-sync] retired orgs: ${retire.marked.length} row(s) marked, ${retire.cleared.length} un-retired (access returned).`);
+  }
+
+  const toUpsertMap = new Map<string, RawRecord>();
+  for (const r of [...outcome.touched, ...archive.stamped, ...renamedExisting.renamed, ...retire.marked, ...retire.cleared]) {
+    toUpsertMap.set(`${r.candidate_id}::${r.job_id ?? ""}`, r);
+  }
+  const toUpsert = Array.from(toUpsertMap.values())
     .map(snapshotRow)
     .filter((r) => (r.ashby_candidate_id as string).length > 0);
 
@@ -343,12 +411,35 @@ async function persistSnapshot(
     }));
     const { error } = await admin.from("ashby_orgs").upsert(orgRows, { onConflict: "org_name" });
     if (error) throw error;
+
+    // Learned renames are recorded so the dashboard can read them; manual
+    // rows are never overwritten (insert ignores conflicts).
+    const learnedRows = Object.entries(learned).map(([stale_name, current_name]) => ({
+      stale_name, current_name, source: "learned", updated_at: now,
+    }));
+    if (learnedRows.length) {
+      const { error: aliasErr } = await admin
+        .from("ashby_org_aliases")
+        .upsert(learnedRows, { onConflict: "stale_name", ignoreDuplicates: true });
+      if (aliasErr) console.warn("[ashby-sync] could not record learned aliases:", aliasErr.message);
+    }
+
+    // The check that makes a silently-lost org impossible to miss. Runs on
+    // every refresh, even a healthy one. ONLY with a swept-org list: auditing
+    // against an empty set would flag every client as a blind spot.
+    const audit = auditOrgCoverage(outcome.records, companies, aliases, retired);
+    for (const line of formatAuditForLog(audit)) console.log(line);
+    const { error: healthErr } = await admin
+      .from("ashby_org_health")
+      .upsert({ id: 1, checked_at: audit.checked_at, audit }, { onConflict: "id" });
+    if (healthErr) console.warn("[ashby-sync] could not save org health:", healthErr.message);
   }
 
   console.log(
     `[ashby-sync] snapshot merge: +${outcome.stats.added} new, ~${outcome.stats.updated} updated, ` +
       `=${outcome.stats.kept} kept, ↧${outcome.stats.downgrade_skipped} downgrade-skipped, ` +
       `⊘${archive.archived_inferred} archived, ★${archive.hired_detected} hired, ` +
+      `?${archive.unverified_skipped} unverified-left-alone${archive.guard_tripped ? ", GUARD TRIPPED" : ""}, ` +
       `${outcome.stats.skipped_no_id} skipped (no ashby id), total=${outcome.stats.total}, ` +
       `orgs=${companies.length}`,
   );

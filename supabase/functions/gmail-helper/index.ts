@@ -1,9 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { resolveCandidateEmail } from "../_shared/emailResolver.ts";
 
 // Gmail helper. Reuses the google_calendar_tokens row (same Google account).
-//   action=lookup -> search the user's Gmail for messages mentioning a candidate name,
-//                    return up to N candidate email addresses derived from To/Cc/From headers.
+//   action=lookup -> resolve a candidate's personal email from the user's Gmail
+//                    (surname-anchored, evidence-based, confidence-gated — see
+//                    _shared/pure/emailResolver.ts). `email` is set only at
+//                    high/medium confidence; low guesses come back as `candidates`.
 //   action=send   -> send a plain-text email as the connected Gmail user.
 
 async function refreshAccessToken(refreshToken: string) {
@@ -152,54 +155,15 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Search both sent and received messages for the candidate name.
-      const q = `"${name.replace(/"/g, "")}"`;
-      const listRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=${encodeURIComponent(q)}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-      );
-      const listJson = await listRes.json();
-      if (!listRes.ok) throw new Error(`Gmail list failed: ${JSON.stringify(listJson)}`);
-
-      const ids: string[] = (listJson.messages ?? []).map((m: { id: string }) => m.id).slice(0, 10);
-      const myEmail: string = (tokenRow.google_email ?? "").toLowerCase();
-      const counts = new Map<string, number>();
-
-      await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const r = await fetch(
-              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc`,
-              { headers: { Authorization: `Bearer ${accessToken}` } },
-            );
-            const j = await r.json();
-            if (!r.ok) return;
-            const headers: { name: string; value: string }[] = j.payload?.headers ?? [];
-            const get = (n: string) =>
-              headers.find((h) => h.name.toLowerCase() === n.toLowerCase())?.value;
-            const all = [
-              ...extractEmails(get("From")),
-              ...extractEmails(get("To")),
-              ...extractEmails(get("Cc")),
-            ];
-            for (const e of all) {
-              const lower = e.toLowerCase();
-              if (lower === myEmail) continue;
-              counts.set(lower, (counts.get(lower) ?? 0) + 1);
-            }
-          } catch {
-            /* ignore */
-          }
-        }),
-      );
-
-      const ranked = [...counts.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([email, count]) => ({ email, count }));
-
+      const result = await resolveCandidateEmail(accessToken, tokenRow.google_email ?? "", name);
       return new Response(
-        JSON.stringify({ ok: true, results: ranked }),
+        JSON.stringify({
+          ok: true,
+          ...result,
+          // Back-compat for older clients that read `results[]`: only
+          // confident addresses, never a first-hit guess.
+          results: result.email ? [{ email: result.email, count: result.evidence.length }] : [],
+        }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }

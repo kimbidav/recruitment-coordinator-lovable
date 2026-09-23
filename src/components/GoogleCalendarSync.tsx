@@ -25,9 +25,38 @@ interface PreparedEvent {
   interview_title: string;
   start_time: string;
   end_time: string;
+  /** YYYY-MM-DD, the interview's calendar date. */
+  interview_date: string;
   candidate_name: string;
   company_name: string;
   credited_to: string;
+  credited_to_email: string | null;
+}
+
+const COMMON_TIMEZONES = [
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "Europe/London",
+  "Europe/Berlin",
+  "Asia/Kolkata",
+  "Asia/Singapore",
+];
+
+function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
+  } catch {
+    return "America/Los_Angeles";
+  }
+}
+
+function localIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
@@ -35,6 +64,8 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   const [email, setEmail] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [timeZone, setTimeZone] = useState<string>(browserTimeZone());
+  const [preview, setPreview] = useState<{ message: string; results: Array<{ title: string; date: string; outcome: string; detail?: string }> } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +81,9 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
       }
       setConnected(!!data);
       setEmail(data?.google_email ?? null);
+      // The saved reminder timezone, if the recruiter chose one before.
+      const { data: settings } = await supabase.from("agent_settings").select("timezone").maybeSingle();
+      if (!cancelled && settings?.timezone) setTimeZone(settings.timezone);
     })();
     return () => {
       cancelled = true;
@@ -108,14 +142,19 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
           c.current_stage_date,
         );
         if (!stageDate || isNaN(stageDate.getTime())) return null;
+        const first = c.candidate_name.trim().split(/\s+/)[0] || c.candidate_name;
         return {
           id: c.candidate_id,
-          interview_title: `${c.candidate_name} x ${c.company_name} (${c.pipeline_stage})`,
+          // Reminder title is "{First} x {Client}" — the server derives the
+          // dedup identity from candidate/company/date, not from this string.
+          interview_title: `${first} x ${c.company_name}`,
           start_time: stageDate.toISOString(),
           end_time: new Date(stageDate.getTime() + 30 * 60 * 1000).toISOString(),
+          interview_date: localIsoDate(stageDate),
           candidate_name: c.candidate_name,
           company_name: c.company_name,
           credited_to: c.credited_to ?? "",
+          credited_to_email: c.credited_to_email ?? null,
         };
       })
       .filter((e): e is PreparedEvent => e !== null && new Date(e.start_time) >= now)
@@ -130,34 +169,40 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
     setConfirmOpen(true);
   };
 
-  const handleConfirmSync = async () => {
+  const buildPayload = () =>
+    // credited_to / credited_to_email ride along so the server can enforce the
+    // only-my-candidates guard — the org shares one pipeline, and a stray
+    // "Everyone" filter must not schedule teammates' interviews.
+    upcomingEvents.map(({ id, interview_title, start_time, end_time, interview_date, candidate_name, company_name, credited_to, credited_to_email }) => ({
+      id, interview_title, start_time, end_time, interview_date, candidate_name, company_name, credited_to, credited_to_email,
+    }));
+
+  const runSync = async (dryRun: boolean) => {
     setIsLoading(true);
     try {
-      // Strip the display-only fields before sending. credited_to rides along
-      // so the server can enforce the only-my-candidates guard — the org
-      // shares one pipeline, and a stray "Everyone" filter must not schedule
-      // teammates' interviews on this user's calendar.
-      const payload = upcomingEvents.map(({ id, interview_title, start_time, end_time, credited_to }) => ({
-        id,
-        interview_title,
-        start_time,
-        end_time,
-        credited_to,
-      }));
+      const payload = buildPayload();
       const { data, error } = await supabase.functions.invoke("google-calendar-sync", {
-        body: { events: payload },
+        body: { events: payload, timezone: timeZone, dry_run: dryRun },
       });
       if (error || data?.error) {
-        toast.error(`Sync failed: ${error?.message || data?.error}`);
+        toast.error(`${dryRun ? "Preview" : "Sync"} failed: ${error?.message || data?.error}`);
         if ((data?.error || "").toLowerCase().includes("not connected")) setConnected(false);
         return;
       }
-      toast.success(data?.message || `Synced ${payload.length} events`);
+      if (dryRun) {
+        setPreview({ message: data?.message ?? "", results: data?.results ?? [] });
+        return;
+      }
+      const errs: string[] = data?.errors ?? [];
+      if (errs.length) toast.warning(`${data?.message}. ${errs.length} error${errs.length === 1 ? "" : "s"}: ${errs[0]}`);
+      else toast.success(data?.message || `Synced ${payload.length} events`);
+      setPreview(null);
       setConfirmOpen(false);
     } finally {
       setIsLoading(false);
     }
   };
+  const handleConfirmSync = () => void runSync(false);
 
   if (connected === null) {
     return (
@@ -186,12 +231,7 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
   const previewed = upcomingEvents.slice(0, previewLimit);
   const remaining = upcomingEvents.length - previewed.length;
   const formatDate = (iso: string) =>
-    new Date(iso).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
   return (
     <>
@@ -236,6 +276,20 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
                   )}{" "}
                   Adjust your filters first if you only want to push a subset (e.g. by Submitter).
                 </p>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  Reminder at 5:00 PM in
+                  <select
+                    className="rounded border border-border bg-background px-1.5 py-0.5 text-xs text-foreground"
+                    value={timeZone}
+                    onChange={(e) => setTimeZone(e.target.value)}
+                  >
+                    {Array.from(new Set([timeZone, browserTimeZone(), ...COMMON_TIMEZONES])).map((tz) => (
+                      <option key={tz} value={tz}>
+                        {tz.replace(/_/g, " ")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <ul className="max-h-64 overflow-y-auto rounded-md border border-border bg-muted/40 p-2 text-xs space-y-1">
                   {previewed.map((ev) => (
                     <li key={ev.id} className="flex justify-between gap-2">
@@ -254,11 +308,27 @@ export const GoogleCalendarSync = ({ candidates }: GoogleCalendarSyncProps) => {
                     </li>
                   )}
                 </ul>
+                {preview && (
+                  <div className="rounded-md border border-border bg-muted/40 p-2 text-xs">
+                    <p className="font-medium text-foreground">{preview.message}</p>
+                    <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-muted-foreground">
+                      {preview.results.map((r, i) => (
+                        <li key={i}>
+                          {r.title} · {r.date} — {r.outcome.replace(/_/g, " ")}
+                          {r.detail ? ` (${r.detail})` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
+            <Button type="button" variant="outline" onClick={() => void runSync(true)} disabled={isLoading}>
+              Preview (dry run)
+            </Button>
             <AlertDialogAction onClick={handleConfirmSync} disabled={isLoading}>
               {isLoading ? (
                 <>

@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { issueOAuthState } from "../_shared/oauthState.ts";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
@@ -41,8 +42,11 @@ Deno.serve(async (req) => {
     const redirectUri: string = body.redirect_uri;
     if (!redirectUri) throw new Error("redirect_uri required");
 
-    // state = user id (signed by being only retrievable via authenticated user)
-    const state = userData.user.id;
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const state = await issueOAuthState(admin, userData.user.id, "google");
 
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     url.searchParams.set("client_id", clientId);
