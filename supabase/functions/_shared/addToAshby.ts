@@ -13,6 +13,8 @@ import { jobOrgCheck, stripLandedSteps, uniqueOrgByPrefix } from "./pure/addToAs
 import { slackDownload, slackGet } from "./slackApi.ts";
 import { callExtractor } from "./extractor.ts";
 import { matchJob } from "./llm.ts";
+import { googleAccessToken, hasScope } from "./google.ts";
+import { resolveCandidateEmail } from "./emailResolver.ts";
 
 export interface Ctx {
   admin: SupabaseClient;
@@ -203,7 +205,7 @@ export interface Enrichment {
   resume: { filename: string; size: number } | null;
   resume_path: string | null;
   resume_status: "found" | "not_found" | "scope_missing" | "download_failed";
-  email_lookup: { email: string | null; confidence: string; evidence: unknown[]; candidates: unknown[] };
+  email_lookup: { email: string | null; confidence: string; evidence: unknown[]; candidates: unknown[]; reason?: string };
   suggested_job: { job_id: string; job_title: string | null; confidence: string; reasoning: string } | null;
 }
 
@@ -227,19 +229,34 @@ async function fetchResume(ctx: Ctx, sid: string, channelId: string, threadTs: s
   return { resume: { filename, size: dl.bytes.length }, resume_path: path, resume_status: "found" };
 }
 
+/** The recruiter's Gmail-backed resolver. Any failure (Google not connected,
+ * scope missing, Gmail error) yields "none" — blank is the safe direction,
+ * since this address becomes the candidate's primary email in the client's ATS. */
+async function lookupEmail(ctx: Ctx, candidateName: string): Promise<Enrichment["email_lookup"]> {
+  const none = { email: null, confidence: "none", evidence: [], candidates: [] };
+  try {
+    const token = await googleAccessToken(ctx.admin, ctx.userId);
+    if (!hasScope(token, "gmail.readonly")) return { ...none, reason: "gmail_scope_missing" };
+    const r = await resolveCandidateEmail(token.access_token, token.google_email ?? ctx.userEmail, candidateName);
+    return { email: r.email, confidence: r.confidence, evidence: r.evidence, candidates: r.candidates };
+  } catch (e) {
+    return { ...none, reason: (e as { code?: string })?.code ?? "lookup_failed" };
+  }
+}
+
 export async function enrich(ctx: Ctx, sid: string, prefill: Prefill): Promise<Enrichment> {
-  const [resume, suggestion] = await Promise.allSettled([
+  const [resume, suggestion, email] = await Promise.allSettled([
     fetchResume(ctx, sid, prefill.channel_id, prefill.thread_ts),
     prefill.jobs.length && prefill.note_text ? matchJob(prefill.note_text, prefill.jobs) : Promise.resolve(null),
+    lookupEmail(ctx, prefill.candidate.name),
   ]);
   const r = resume.status === "fulfilled" ? resume.value : { resume: null, resume_path: null, resume_status: "download_failed" as const };
   const m = suggestion.status === "fulfilled" ? suggestion.value : null;
   return {
     ...r,
-    // The surname-anchored Gmail resolver lands with the email work package;
-    // until then the field stays blank, which is the safe direction (an
-    // address here becomes the candidate's primary email in the client's ATS).
-    email_lookup: { email: null, confidence: "none", evidence: [], candidates: [] },
+    // Prefilled in the modal only at HIGH confidence; medium is a "Use" button,
+    // low is a chip list (slackViews.emailBlocks enforces the gating).
+    email_lookup: email.status === "fulfilled" ? email.value : { email: null, confidence: "none", evidence: [], candidates: [] },
     suggested_job: m?.job_id ? { job_id: m.job_id, job_title: m.job_title, confidence: m.confidence, reasoning: m.reasoning } : null,
   };
 }

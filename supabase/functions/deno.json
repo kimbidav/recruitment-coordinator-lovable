@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "check": "deno check _shared/*.ts slack-interactions/index.ts slack-upload-callback/index.ts ashby-user-session/index.ts agent-scan/index.ts"
+    "check": "deno check _shared/*.ts slack-interactions/index.ts slack-upload-callback/index.ts ashby-user-session/index.ts agent-scan/index.ts gmail-helper/index.ts google-calendar-sync/index.ts"
   },
   "imports": {
     "@shared/": "./_shared/"

@@ -134,6 +134,7 @@ export type Database = {
           created_at: string
           intro_stall_min_days: number
           recruiter_aliases: string[]
+          timezone: string | null
           updated_at: string
           user_id: string
         }
@@ -142,6 +143,7 @@ export type Database = {
           created_at?: string
           intro_stall_min_days?: number
           recruiter_aliases?: string[]
+          timezone?: string | null
           updated_at?: string
           user_id: string
         }
@@ -150,6 +152,7 @@ export type Database = {
           created_at?: string
           intro_stall_min_days?: number
           recruiter_aliases?: string[]
+          timezone?: string | null
           updated_at?: string
           user_id?: string
         }
