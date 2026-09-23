@@ -275,6 +275,22 @@ export function CandidateTable({
                           )}
                         </div>
                       </div>
+                      {candidate.org_status === "retired" && (
+                        <span
+                          title="The team no longer has Ashby access to this client, so this row cannot refresh. This says nothing about the candidate's outcome."
+                          className="inline-flex items-center gap-1 w-fit text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border cursor-help whitespace-nowrap"
+                        >
+                          ATS access lost
+                        </span>
+                      )}
+                      {candidate.access_restricted && (
+                        <span
+                          title="This application is on a job your Ashby seat cannot see. Stage and interview details are invisible, not missing."
+                          className="inline-flex items-center gap-1 w-fit text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border cursor-help whitespace-nowrap"
+                        >
+                          No-access job
+                        </span>
+                      )}
                       {candidate.missing_from_ashby && (
                         <span
                           title="This client runs Ashby, but this candidate has no Ashby record (not even an archived one) — they may be missing from the ATS."

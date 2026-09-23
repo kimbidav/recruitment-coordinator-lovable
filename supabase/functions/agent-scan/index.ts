@@ -1,5 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { sameCandidateName } from "../_shared/pure/nameMatch.ts";
+import { normalizeLinkedin } from "../_shared/pure/slackText.ts";
+import { ashbyIsScheduled, runLiveArchiveCheck, selectApplications, type Row as SnapRow } from "../_shared/pure/liveCheck.ts";
+import type { ArchiveVerdict } from "../_shared/pure/ashbyMerge.ts";
+import { callExtractor } from "../_shared/extractor.ts";
 
 // Agent scan v2: detects intro_stall, post_interview_followup, and batch_followup cards.
 // Adds: email-based scheduling detection (intro_stall + post-interview suppression),
@@ -668,6 +673,17 @@ Deno.serve(async (req) => {
     const { data: settings } = await admin
       .from("agent_settings").select("*").eq("user_id", userId).maybeSingle();
     const introStallMinDays: number = settings?.intro_stall_min_days ?? 3;
+    // The signed-in recruiter's email is the strongest ownership signal:
+    // snapshot rows now carry credited_to_email straight from Ashby, so a
+    // row is "mine" when the emails match, with recruiter_aliases as the
+    // fallback for legacy rows that only carry a display name.
+    let userEmail = "";
+    try {
+      const { data: userData } = await admin.auth.admin.getUserById(userId);
+      userEmail = (userData?.user?.email ?? "").trim().toLowerCase();
+    } catch (e) {
+      console.warn("agent-scan: could not resolve user email", e);
+    }
     const batchThreshold: number = settings?.batch_followup_threshold ?? 3;
 
     if (reuseRunId) {
@@ -869,6 +885,19 @@ Deno.serve(async (req) => {
         .trim();
     };
     const pairKey = (company: string, name: string) => `${normalizeCompany(company)}::${normalizeName(name)}`;
+    const aliasNorms = ((settings?.recruiter_aliases ?? []) as string[])
+      .map((a) => normalizeName(a))
+      .filter(Boolean);
+    // Ownership of a snapshot row. Email from Ashby's creditedTo user wins;
+    // recruiter_aliases cover legacy rows. Unattributed rows are NOBODY's —
+    // otherwise every teammate gets nagged about the same unowned candidate.
+    const isMineRow = (credited: string, email: string): boolean => {
+      const e = (email || "").trim().toLowerCase();
+      if (e && userEmail) return e === userEmail;
+      const c = normalizeName(credited || "");
+      if (!c || c === "unknown") return false;
+      return aliasNorms.includes(c);
+    };
     const mergeAshby = (rawName: string, latest: number | null) => {
       const key = normalizeCompany(rawName);
       if (!key) return;
@@ -957,6 +986,14 @@ Deno.serve(async (req) => {
       last_activity_at: string | null;
       archived_reason: string | null;
       interview_events: unknown;
+      application_id: string | null;
+      org_id: string | null;
+      linkedin_url: string | null;
+      credited_to_email: string | null;
+      access_restricted: boolean | null;
+      org_status: string | null;
+      status_verified_live: string | null;
+      status_verified_live_at: string | null;
     };
     const DONE_DECISIONS = new Set(["archived", "hired", "closed", "rejected"]);
     let snapshotRows: SnapshotScanRow[] = [];
@@ -968,12 +1005,70 @@ Deno.serve(async (req) => {
       const { data: snapRows } = await admin
         .from("ashby_snapshot_candidates")
         .select(
-          "ashby_candidate_id,ashby_job_id,candidate_name,company_name,job_title,pipeline_stage,stage_type,decision_status,stage_progress,current_stage_index,total_stages,days_in_stage,needs_scheduling,credited_to,feedback_count,latest_recommendation,latest_feedback_author,latest_feedback_date,current_stage_avg_score,current_stage_date,current_stage_interviews,interview_history_summary,last_activity_at,archived_reason,interview_events",
+          "ashby_candidate_id,ashby_job_id,candidate_name,company_name,job_title,pipeline_stage,stage_type,decision_status,stage_progress,current_stage_index,total_stages,days_in_stage,needs_scheduling,credited_to,feedback_count,latest_recommendation,latest_feedback_author,latest_feedback_date,current_stage_avg_score,current_stage_date,current_stage_interviews,interview_history_summary,last_activity_at,archived_reason,interview_events,application_id,org_id,linkedin_url,credited_to_email,access_restricted,org_status,status_verified_live,status_verified_live_at",
         )
         .limit(5000);
       snapshotRows = (snapRows ?? []) as SnapshotScanRow[];
+
+      // Live Ashby archive check (desktop Step 1). The snapshot only changes
+      // when a sweep PERSISTS, and sweeps get lost; an Ashby follow-up card
+      // should only exist when Ashby agrees there is something to follow up.
+      // Verify this recruiter's live applications against Ashby right now
+      // (team session, confirm-or-skip) BEFORE the archived/scheduled
+      // suppression and Step 5b read the rows. First page only; capped so
+      // it fits the edge-function budget (~2s per org switch).
+      if (isFirstInvocation && (Deno.env.get("ASHBY_LIVE_ARCHIVE_CHECK") ?? "1") !== "0") {
+        try {
+          const maxApps = Number(Deno.env.get("ASHBY_LIVE_CHECK_MAX_APPS") ?? 60);
+          const apps = selectApplications(
+            snapshotRows as unknown as SnapRow[],
+            (r) => isMineRow(String(r.credited_to ?? ""), String(r.credited_to_email ?? "")),
+            { maxApps },
+          );
+          if (apps.length) {
+            const res = await runLiveArchiveCheck(snapshotRows as unknown as SnapRow[], apps, async (batch) => {
+              const r = await callExtractor<{ results?: ArchiveVerdict[] }>(
+                "/api/applications/archive-status",
+                { applications: batch },
+                { timeoutMs: 120_000 },
+              );
+              if (r.error) throw new Error(String(r.error.body.error ?? r.error.body.detail ?? r.error.status));
+              return r.data.results ?? [];
+            });
+            for (const row of res.changed as unknown as SnapshotScanRow[]) {
+              const stamped = row as unknown as Record<string, unknown>;
+              await admin.from("ashby_snapshot_candidates").update({
+                decision_status: stamped.decision_status ?? null,
+                archived_reason: stamped.archived_reason ?? null,
+                archived_reason_type: stamped.archived_reason_type ?? null,
+                archived_inferred: stamped.archived_inferred ?? null,
+                archived_detected_at: stamped.archived_detected_at ?? null,
+                archived_verified_live_at: stamped.archived_verified_live_at ?? null,
+                status_verified_live: stamped.status_verified_live ?? null,
+                status_verified_live_at: stamped.status_verified_live_at ?? null,
+                updated_at: new Date().toISOString(),
+              }).eq("ashby_candidate_id", row.ashby_candidate_id).eq("ashby_job_id", row.ashby_job_id);
+            }
+            console.log(
+              `[agent-scan] live archive check: ${res.requested} app(s) / ${res.orgs} org(s), answered ${res.answered}, ` +
+                `archived ${res.archived.length}, hired ${res.hired.length}, status synced ${res.status_synced.length}, ` +
+                `unverifiable ${res.unverifiable}${res.errors.length ? `, errors: ${res.errors.join("; ")}` : ""}`,
+            );
+            for (const line of [...res.archived.map((l) => `archived: ${l}`), ...res.hired.map((l) => `hired: ${l}`), ...res.status_synced]) {
+              console.log(`[agent-scan]   ${line}`);
+            }
+          }
+        } catch (e) {
+          // Couldn't check is not evidence — the saved snapshot stands.
+          console.warn("[agent-scan] live archive check skipped:", e);
+        }
+      }
+
       for (const r of snapshotRows) {
         if (!r.stage_type || !r.company_name) continue; // placeholders never count
+        // An org we no longer have access to is not an Ashby client for
+        // routing: a card there promises an ATS panel that cannot refresh.
+        if (r.org_status === "retired") continue;
         const tsList = [r.last_activity_at, r.current_stage_date, r.latest_feedback_date]
           .map((s) => (s ? new Date(s).getTime() : NaN))
           .filter((n) => !isNaN(n));
@@ -997,13 +1092,33 @@ Deno.serve(async (req) => {
       // per-user sources above still drive routing.
       console.error("snapshot routing load failed", e);
     }
-    const archivedPairs = new Set<string>();
-    for (const r of snapshotRows) {
-      if (!r.stage_type) continue;
-      if (DONE_DECISIONS.has((r.decision_status ?? "").trim().toLowerCase())) {
-        archivedPairs.add(pairKey(r.company_name, r.candidate_name));
-      }
-    }
+    // Archived / scheduled suppression is FUZZY: LinkedIn URL first, then the
+    // nickname-tolerant name match, always with a company match (identity is
+    // person-level; one candidate runs parallel loops). Exact-name lookups
+    // used to leak archived candidates back into the queue (Sai Xiao @
+    // Reducto) and whitespace tokenization leaked scheduled ones (Robert Hu @
+    // Luminai). An active sibling row always outranks archived history
+    // (Charles Lin @ Reducto: archived on one job, live on a no-access one).
+    const doneSnapshotRows = snapshotRows.filter(
+      (r) => !!r.stage_type && DONE_DECISIONS.has((r.decision_status ?? "").trim().toLowerCase()),
+    );
+    const liveSnapshotRows = snapshotRows.filter(
+      (r) => !!r.stage_type && !DONE_DECISIONS.has((r.decision_status ?? "").trim().toLowerCase()) && r.org_status !== "retired",
+    );
+    const findSnapshotRow = (pool: SnapshotScanRow[], company: string, name: string, linkedin?: string | null) => {
+      const li = normalizeLinkedin(linkedin ?? "");
+      return pool.find(
+        (r) =>
+          companiesMatch(company, r.company_name) &&
+          ((!!li && !!r.linkedin_url && normalizeLinkedin(r.linkedin_url) === li) || sameCandidateName(r.candidate_name, name)),
+      );
+    };
+    const isArchivedInAshby = (company: string, name: string, linkedin?: string | null): boolean =>
+      !!findSnapshotRow(doneSnapshotRows, company, name, linkedin) && !findSnapshotRow(liveSnapshotRows, company, name, linkedin);
+    const scheduledSnapshotRow = (company: string, name: string, linkedin?: string | null): SnapshotScanRow | null => {
+      const r = findSnapshotRow(liveSnapshotRows, company, name, linkedin);
+      return r && ashbyIsScheduled(r as unknown as SnapRow) ? r : null;
+    };
     const lookupAshbyClient = (rawCompany: string): number | null | undefined => {
       const key = normalizeCompany(rawCompany);
       if (!key) return undefined;
@@ -1086,13 +1201,29 @@ Deno.serve(async (req) => {
         }
         // Ashby already decided this process is over (Archived/Hired/etc.) —
         // surfacing follow-ups for it would be noise.
-        if (archivedPairs.has(pairKey(company, candidateName))) {
+        const subLinkedin = (sub as { linkedin_url?: string | null }).linkedin_url ?? null;
+        if (isArchivedInAshby(company, candidateName, subLinkedin)) {
           await admin.from("agent_scan_items").insert({
             user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
             candidate_name: candidateName, client_name: company,
             outcome: "suppressed", reason: "archived_in_ashby",
           });
           continue;
+        }
+        // Ashby already has the next round on the calendar (a future
+        // interview event, or a freshly live-verified "Scheduled") — nudging
+        // the client to schedule would be noise.
+        {
+          const sched = scheduledSnapshotRow(company, candidateName, subLinkedin);
+          if (sched) {
+            await admin.from("agent_scan_items").insert({
+              user_id: userId, scan_run_id: runId, slack_submission_id: sub.id,
+              candidate_name: candidateName, client_name: company,
+              outcome: "suppressed", reason: "scheduled_in_ashby",
+              signal: { decision_status: sched.decision_status, status_verified_live_at: sched.status_verified_live_at },
+            });
+            continue;
+          }
         }
 
 
@@ -1628,17 +1759,7 @@ Deno.serve(async (req) => {
     // (enrichment back-fill), keyed by (company,candidate) pair for dedup.
     if (isFirstInvocation) {
       try {
-        const aliasNorms = ((settings?.recruiter_aliases ?? []) as string[])
-          .map((a) => normalizeName(a))
-          .filter(Boolean);
-        const isMine = (credited: string | null): boolean => {
-          const c = normalizeName(credited ?? "");
-          // Unlike the dashboard's benefit-of-the-doubt, unattributed rows
-          // generate cards for NO ONE — otherwise every teammate gets nagged
-          // about the same unowned candidate.
-          if (!c || c === "unknown") return false;
-          return aliasNorms.includes(c);
-        };
+        const isMine = (credited: string | null, email?: string | null): boolean => isMineRow(credited ?? "", email ?? "");
 
         // Slack cross-link pool: the user's submissions, matched by fuzzy
         // name+company so the card gets an inline thread.
@@ -1706,7 +1827,12 @@ Deno.serve(async (req) => {
           if (!r.stage_type || !r.candidate_name || !r.company_name) continue;
           if (DONE_DECISIONS.has((r.decision_status ?? "").trim().toLowerCase())) continue;
           if (isInternalPipeline(r.company_name)) continue;
-          if (!isMine(r.credited_to)) continue;
+          if (!isMine(r.credited_to, r.credited_to_email)) continue;
+          // Restricted-access applications are invisible-not-missing: their
+          // events and scheduling status cannot be seen, so "N days in stage
+          // with no events" would be a false claim. Retired orgs cannot
+          // refresh at all. The Slack/calendar/email steps own those pairs.
+          if (r.access_restricted || r.org_status === "retired") continue;
 
           const events = Array.isArray(r.interview_events)
             ? (r.interview_events as Array<Record<string, unknown>>)
@@ -1736,7 +1862,7 @@ Deno.serve(async (req) => {
             kind = "ashby_missing_feedback";
             summary = `${r.candidate_name} has completed interviews with missing feedback. Last interview on ${fmtDate(new Date(past[0].t).toISOString())}.`;
             slackMsg = `Hey team! ${fnNm} has interviews completed but feedback is still missing in Ashby — any chance we can get scorecards in? Happy to help chase.`;
-          } else if (!upcoming && (r.needs_scheduling || r.days_in_stage >= 3)) {
+          } else if (!upcoming && !ashbyIsScheduled(r as unknown as SnapRow) && (r.needs_scheduling || r.days_in_stage >= 3)) {
             kind = "ashby_needs_scheduling";
             summary = r.needs_scheduling
               ? `Ashby flags ${r.candidate_name} as needing scheduling in ${stageLabel}.`

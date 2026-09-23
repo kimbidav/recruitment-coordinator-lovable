@@ -368,8 +368,86 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_org_aliases: {
+        Row: {
+          confirmed_by: string | null
+          created_at: string
+          current_name: string
+          source: string
+          stale_name: string
+          updated_at: string
+        }
+        Insert: {
+          confirmed_by?: string | null
+          created_at?: string
+          current_name: string
+          source?: string
+          stale_name: string
+          updated_at?: string
+        }
+        Update: {
+          confirmed_by?: string | null
+          created_at?: string
+          current_name?: string
+          source?: string
+          stale_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ashby_org_health: {
+        Row: {
+          audit: Json
+          checked_at: string
+          id: number
+        }
+        Insert: {
+          audit?: Json
+          checked_at?: string
+          id?: number
+        }
+        Update: {
+          audit?: Json
+          checked_at?: string
+          id?: number
+        }
+        Relationships: []
+      }
+      ashby_retired_orgs: {
+        Row: {
+          note: string | null
+          org_name: string
+          retired_at: string
+          retired_by: string | null
+        }
+        Insert: {
+          note?: string | null
+          org_name: string
+          retired_at?: string
+          retired_by?: string | null
+        }
+        Update: {
+          note?: string | null
+          org_name?: string
+          retired_at?: string
+          retired_by?: string | null
+        }
+        Relationships: []
+      }
       ashby_snapshot_candidates: {
         Row: {
+          access_restricted: boolean
+          added_via: string | null
+          archived_reason_type: string | null
+          archived_verified_live_at: string | null
+          credited_to_email: string | null
+          credited_to_user_id: string | null
+          linkedin_url: string | null
+          org_retired_at: string | null
+          org_status: string | null
+          previous_company_names: string[]
+          status_verified_live: string | null
+          status_verified_live_at: string | null
           application_id: string | null
           archived_detected_at: string | null
           archived_inferred: boolean | null
@@ -407,6 +485,18 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          access_restricted?: boolean
+          added_via?: string | null
+          archived_reason_type?: string | null
+          archived_verified_live_at?: string | null
+          credited_to_email?: string | null
+          credited_to_user_id?: string | null
+          linkedin_url?: string | null
+          org_retired_at?: string | null
+          org_status?: string | null
+          previous_company_names?: string[]
+          status_verified_live?: string | null
+          status_verified_live_at?: string | null
           application_id?: string | null
           archived_detected_at?: string | null
           archived_inferred?: boolean | null
@@ -444,6 +534,18 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          access_restricted?: boolean
+          added_via?: string | null
+          archived_reason_type?: string | null
+          archived_verified_live_at?: string | null
+          credited_to_email?: string | null
+          credited_to_user_id?: string | null
+          linkedin_url?: string | null
+          org_retired_at?: string | null
+          org_status?: string | null
+          previous_company_names?: string[]
+          status_verified_live?: string | null
+          status_verified_live_at?: string | null
           application_id?: string | null
           archived_detected_at?: string | null
           archived_inferred?: boolean | null

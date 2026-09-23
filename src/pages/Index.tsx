@@ -9,6 +9,10 @@ import { CsvUpload } from "@/components/CsvUpload";
 import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { AshbyConnectionBanner } from "@/components/AshbyConnectionBanner";
 import { AshbyUserSessionBanner } from "@/components/AshbyUserSessionBanner";
+import { AshbyOrgHealthBanner } from "@/components/AshbyOrgHealthBanner";
+import { sameCandidateName } from "@shared/pure/nameMatch";
+import { normalizeLinkedin } from "@shared/pure/slackText";
+import { canonicalCompany } from "@shared/pure/companyMatch";
 import { GoogleCalendarSync } from "@/components/GoogleCalendarSync";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
 import { SlackConnectButton } from "@/components/SlackConnectButton";
@@ -31,7 +35,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Users, Loader2, Clock, LogOut, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  normalizeMatchKey,
   slackStatusToDecision,
   slackStatusToPipelineStage,
 } from "@/lib/slackParse";
@@ -42,7 +45,7 @@ const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 const Index = () => {
   const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
-  const { activeSnapshot, archivedSnapshot, orgNames, snapshotLoaded, refreshSnapshot } = useAshbySnapshot();
+  const { activeSnapshot, archivedSnapshot, orgNames, orgAliases, orgHealth, snapshotLoaded, refreshSnapshot } = useAshbySnapshot();
   const { aliases, aliasesLoaded } = useRecruiterAliases();
   const { submissions: slackSubs, reload: reloadSlack } = useSlackSubmissions();
   const { user, signOut } = useAuth();
@@ -193,76 +196,49 @@ const Index = () => {
     // rows — candidate-derived sets can never reveal those). Fallbacks: the
     // legacy per-user ashby_known_clients set and companies present in the
     // current Ashby rows.
-    const ashbyCompanySet = new Set<string>([...orgNames, ...ashbyClientNames]);
+    // Coverage is DERIVED at render and can shrink: when the org-shared
+    // snapshot is the truth, the set is the currently swept org list plus the
+    // companies of live real rows (retired rows are already demoted), never
+    // the per-user legacy list or archived-only companies — an org that
+    // dropped off the access list must stop counting as Ashby-covered.
+    const ashbyCompanySet = new Set<string>(
+      snapshotIsTruth ? [...orgNames] : [...orgNames, ...ashbyClientNames],
+    );
     for (const c of ashbySourceCandidates) {
-      const name = (c.company_name ?? "").trim();
+      const name = canonicalCompany((c.company_name ?? "").trim(), orgAliases);
       if (name) ashbyCompanySet.add(name);
     }
-    for (const c of archivedSnapshot) {
-      const name = (c.company_name ?? "").trim();
-      if (name) ashbyCompanySet.add(name);
+    if (!snapshotIsTruth) {
+      for (const c of archivedSnapshot) {
+        const name = (c.company_name ?? "").trim();
+        if (name) ashbyCompanySet.add(name);
+      }
     }
     const companyIsAshby = (companyName: string): boolean =>
       isAshbyCompany(companyName, ashbyCompanySet);
 
-    // Build candidate-name -> [slack rows] indexes, then match Ashby rows that
-    // share BOTH a name (fuzzy) AND a fuzzy company-key match. We do NOT
-    // attach Slack threads across companies — a candidate may be in multiple
+    // Match Ashby rows to Slack submissions by IDENTITY: the LinkedIn URL
+    // when both sides carry one, else the nickname-tolerant name match
+    // ("Dan Clark" ≡ "Daniel Clark", "Zhaohan (Robert) Hu" ≡ "Robert (Zhaohan)
+    // Hu"). Always with a fuzzy company match — a candidate may be in several
     // pipelines and each row should only show its own thread.
-    //
-    // Name matching is intentionally fuzzy: people often appear in Slack with
-    // their full legal name and in Ashby with a short form, or vice versa.
-    const nameTokens = (s: string): string[] =>
-      normalizeMatchKey(s || "")
-        .split(" ")
-        .filter((t) => t.length > 0);
-    const firstLastKey = (s: string): string | null => {
-      const toks = nameTokens(s);
-      if (toks.length < 2) return null;
-      return `${toks[0]}::${toks[toks.length - 1]}`;
-    };
-    const initialLastKey = (s: string): string | null => {
-      const toks = nameTokens(s);
-      if (toks.length < 2) return null;
-      return `${toks[0][0]}::${toks[toks.length - 1]}`;
-    };
-
-    const slackByCandidateName = new Map<string, typeof slackSubs>();
-    const slackByFirstLast = new Map<string, typeof slackSubs>();
-    const slackByInitialLast = new Map<string, typeof slackSubs>();
-    const pushInto = (
-      m: Map<string, typeof slackSubs>,
-      key: string | null,
+    const samePerson = (
       s: (typeof slackSubs)[number],
-    ) => {
-      if (!key) return;
-      const arr = m.get(key) ?? [];
-      arr.push(s);
-      m.set(key, arr);
+      name: string,
+      linkedin?: string | null,
+    ): boolean => {
+      const a = normalizeLinkedin(s.linkedin_url ?? "");
+      const b = normalizeLinkedin(linkedin ?? "");
+      if (a && b) return a === b;
+      return sameCandidateName(s.candidate_name || "", name);
     };
-    for (const s of slackSubs) {
-      const nameKey = normalizeMatchKey(s.candidate_name || "");
-      if (nameKey) pushInto(slackByCandidateName, nameKey, s);
-      pushInto(slackByFirstLast, firstLastKey(s.candidate_name || ""), s);
-      pushInto(slackByInitialLast, initialLastKey(s.candidate_name || ""), s);
-    }
 
     const matchedSlackIds = new Set<string>();
     const enriched: Candidate[] = ashbySourceCandidates.map((c) => {
-      const buckets: (typeof slackSubs)[] = [
-        slackByCandidateName.get(normalizeMatchKey(c.candidate_name)) ?? [],
-        slackByFirstLast.get(firstLastKey(c.candidate_name) ?? "") ?? [],
-        slackByInitialLast.get(initialLastKey(c.candidate_name) ?? "") ?? [],
-      ];
-      const seen = new Set<string>();
-      const pool = buckets.flat().filter((s) => {
-        if (seen.has(s.id)) return false;
-        seen.add(s.id);
-        return true;
-      });
-      const matches = pool
-        .filter((s) => companiesMatch(s.client_name, c.company_name))
+      const matches = slackSubs
         .filter((s) => !matchedSlackIds.has(s.id))
+        .filter((s) => companiesMatch(canonicalCompany(s.client_name, orgAliases), c.company_name))
+        .filter((s) => samePerson(s, c.candidate_name, c.linkedin_url))
         .sort(
           (a, b) =>
             new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime(),
@@ -291,18 +267,15 @@ const Index = () => {
     // resurface as an active Slack-only row (or a false "missing from
     // Ashby" flag) — the archived snapshot row already represents that loop
     // and is visible under the archive toggle.
-    const archivedNameKeys = new Map<string, string[]>();
-    for (const a of archivedSnapshot) {
-      const key = normalizeMatchKey(a.candidate_name);
-      if (!key) continue;
-      const list = archivedNameKeys.get(key) ?? [];
-      list.push(a.company_name);
-      archivedNameKeys.set(key, list);
-    }
-    const matchesArchived = (s: (typeof slackSubs)[number]): boolean => {
-      const companies = archivedNameKeys.get(normalizeMatchKey(s.candidate_name || "")) ?? [];
-      return companies.some((companyName) => companiesMatch(s.client_name, companyName));
-    };
+    // Only DONE rows demote a Slack loop; a retired org says nothing about
+    // the candidate, so its (demoted) rows must not hide the Slack thread.
+    const doneSnapshot = archivedSnapshot.filter((a) => a.org_status !== "retired");
+    const matchesArchived = (s: (typeof slackSubs)[number]): boolean =>
+      doneSnapshot.some(
+        (a) =>
+          companiesMatch(canonicalCompany(s.client_name, orgAliases), a.company_name) &&
+          samePerson(s, a.candidate_name, a.linkedin_url),
+      );
 
     const slackOnly: Candidate[] = slackSubs
       .filter((s) => !matchedSlackIds.has(s.id))
@@ -350,7 +323,7 @@ const Index = () => {
       });
 
     return [...enriched, ...slackOnly];
-  }, [ashbySourceCandidates, archivedSnapshot, slackSubs, user?.email, ashbyClientNames, orgNames]);
+  }, [ashbySourceCandidates, archivedSnapshot, slackSubs, user?.email, ashbyClientNames, orgNames, orgAliases, snapshotIsTruth]);
 
   // Per-user view + archive split, applied AFTER the merge so both respect
   // the same identity rules. "My candidates" filters the org-shared data to
@@ -599,6 +572,7 @@ const Index = () => {
       <main className="container py-6 space-y-6">
         <AshbyConnectionBanner />
         <AshbyUserSessionBanner />
+        <AshbyOrgHealthBanner audit={orgHealth} onChanged={refreshSnapshot} />
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>
             <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
