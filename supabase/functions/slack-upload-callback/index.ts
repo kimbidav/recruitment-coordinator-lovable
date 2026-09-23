@@ -10,7 +10,7 @@ import { slackPost } from "../_shared/slackApi.ts";
 import { recordSuccess, type Ctx } from "../_shared/addToAshby.ts";
 import * as views from "../_shared/pure/slackViews.ts";
 
-const COMPASS_URL = (Deno.env.get("COMPASS_URL") ?? "https://candidate-compass.lovable.app").replace(/\/$/, "");
+const COMPASS_URL = (Deno.env.get("COMPASS_URL") ?? "https://ashbypipeline.lovable.app").replace(/\/$/, "");
 const reconnectUrl = `${COMPASS_URL}/onboarding?step=ashby`;
 
 function secretOk(req: Request): boolean {

@@ -30,7 +30,7 @@ const background = (p: Promise<unknown>) => {
 };
 
 const admin = () => createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-const COMPASS_URL = (Deno.env.get("COMPASS_URL") ?? "https://candidate-compass.lovable.app").replace(/\/$/, "");
+const COMPASS_URL = (Deno.env.get("COMPASS_URL") ?? "https://ashbypipeline.lovable.app").replace(/\/$/, "");
 const reconnectUrl = `${COMPASS_URL}/onboarding?step=ashby`;
 const callbackUrl = () => `${Deno.env.get("SUPABASE_URL")}/functions/v1/slack-upload-callback`;
 

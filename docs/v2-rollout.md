@@ -30,7 +30,7 @@ suppress; the internal Ashby API stays feature-frozen.
    The domain lock deletes any non-`@candidatelabs.com` user.
 3. **Supabase secrets** (Edge Functions → Secrets):
    - `EXTRACTOR_CALLBACK_SECRET` (same value as Railway)
-   - `COMPASS_URL=https://candidate-compass.lovable.app` (or the custom domain)
+   - `COMPASS_URL=https://ashbypipeline.lovable.app` (or the custom domain)
    - already present: `EXTRACTOR_SHARED_SECRET`, `SLACK_CLIENT_ID/SECRET`,
      `SLACK_SIGNING_SECRET`, `GOOGLE_OAUTH_CLIENT_ID/SECRET`, `LOVABLE_API_KEY`
    - optional: `LLM_COMPOSE_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`,
