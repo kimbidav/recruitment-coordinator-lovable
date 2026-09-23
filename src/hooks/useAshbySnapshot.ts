@@ -110,7 +110,11 @@ export function useAshbySnapshot() {
         }
         setOrgAliases(aliases);
         setRetiredOrgs((retiredRows ?? []).map((r) => r.org_name));
-        setOrgHealth(((healthRow?.audit ?? null) as unknown as OrgAudit | null) ?? null);
+        // Read `audit` off an untyped row: Lovable's generated types may lag
+        // the migration, and a stricter compiler flags the typed chain.
+        const healthRaw: unknown = healthRow;
+        const audit = healthRaw && typeof healthRaw === "object" && "audit" in healthRaw ? (healthRaw as { audit: unknown }).audit : null;
+        setOrgHealth(audit && typeof audit === "object" ? (audit as OrgAudit) : null);
       } catch (err) {
         console.warn("[snapshot] org health tables unavailable:", err);
       }
