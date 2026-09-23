@@ -16,6 +16,12 @@ export type Database = {
     Tables: {
       agent_action_cards: {
         Row: {
+          act_error: string | null
+          act_idempotency_key: string | null
+          act_result: Json | null
+          act_status: string | null
+          acted_at: string | null
+          queue_section: string | null
           ashby_pair_key: string | null
           candidate_row_id: string | null
           created_at: string
@@ -29,6 +35,12 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          act_error?: string | null
+          act_idempotency_key?: string | null
+          act_result?: Json | null
+          act_status?: string | null
+          acted_at?: string | null
+          queue_section?: string | null
           ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string
@@ -42,6 +54,12 @@ export type Database = {
           user_id: string
         }
         Update: {
+          act_error?: string | null
+          act_idempotency_key?: string | null
+          act_result?: Json | null
+          act_status?: string | null
+          acted_at?: string | null
+          queue_section?: string | null
           ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string

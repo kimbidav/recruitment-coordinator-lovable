@@ -18,6 +18,7 @@ export function AgentTab() {
   const {
     cards, loading, scanning, scanProgress, lastScanAt, lastRunId, gmailScopeMissing,
     runScan, updateStatus, reload,
+    actOnCard,
   } = useAgentCards();
   const [slackFor, setSlackFor] = useState<AgentCard | null>(null);
   const [emailFor, setEmailFor] = useState<AgentCard | null>(null);
@@ -32,11 +33,16 @@ export function AgentTab() {
 
   const open = useMemo(() => visibleCards(cards), [cards]);
 
+  // queue_section is authoritative (computed once at enqueue time); the
+  // ashby_tracked payload flag is the fallback for cards written before it.
+  const sectionOf = (c: AgentCard): "slack" | "ashby" =>
+    c.queue_section ?? (c.payload.ashby_tracked ? "ashby" : "slack");
+
   const slackQueue = useMemo(() => {
     const ord = (k: AgentCard["kind"]) =>
-      k === "batch_followup" ? 0 : k === "intro_stall" ? 1 : 2;
+      k === "batch_followup" ? 0 : k === "intro_stall" ? 1 : k === "post_interview_followup" ? 2 : 3;
     return open
-      .filter((c) => !c.payload.ashby_tracked)
+      .filter((c) => sectionOf(c) === "slack")
       .filter((c) => !skippedIds.has(c.id))
       .sort((a, b) => {
         const k = ord(a.kind) - ord(b.kind);
@@ -48,7 +54,7 @@ export function AgentTab() {
   const ashbyQueue = useMemo(() => {
     // Stale first (these are the ones the user needs to action), then by age.
     return open
-      .filter((c) => c.payload.ashby_tracked)
+      .filter((c) => sectionOf(c) === "ashby")
       .filter((c) => !skippedIds.has(c.id))
       .sort((a, b) => {
         const staleDiff = Number(!!b.payload.ashby_stale) - Number(!!a.payload.ashby_stale);
@@ -139,18 +145,9 @@ export function AgentTab() {
     if (!c.payload.channel_id || !c.payload.message_ts) return;
     setClosingId(c.id);
     try {
-      const { data, error } = await supabase.functions.invoke("slack-thread", {
-        body: {
-          action: "close",
-          channel_id: c.payload.channel_id,
-          message_ts: c.payload.message_ts,
-        },
-      });
-      if (error || (data as any)?.error) {
-        throw new Error(error?.message || (data as any)?.error || "Failed to close");
-      }
+      // Review-then-act: the ⛔ and the card's resolution happen in one request.
+      await actOnCard(c.id, "close");
       markCompletedAndAdvance(c.id);
-      await updateStatus(c.id, "resolved");
       toast.success("Candidate closed out · ⛔ added in Slack");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Couldn't close out candidate");
@@ -356,7 +353,13 @@ export function AgentTab() {
                     ? "Intro stall"
                     : current.kind === "post_interview_followup"
                       ? "Post-interview follow-up"
-                      : "Batch follow-up"}
+                      : current.kind === "unscheduled_followup"
+                        ? `Unscheduled follow-up${current.payload.unscheduled_group ? ` · ${current.payload.unscheduled_group.count} quiet at ${current.payload.unscheduled_group.client}` : ""}`
+                        : current.kind === "ashby_needs_scheduling"
+                          ? "Ashby: needs scheduling"
+                          : current.kind === "ashby_missing_feedback"
+                            ? "Ashby: missing feedback"
+                            : "Batch follow-up"}
                   {" · "}
                   Task {Math.min(completedCount + 1, totalForProgress)} of {totalForProgress}
                 </span>
@@ -452,6 +455,15 @@ export function AgentTab() {
         candidateName={slackFor?.payload.candidate_name ?? ""}
         companyName={slackFor?.payload.company_name ?? ""}
         initialReply={slackFor?.payload.suggested_slack_message ?? ""}
+        onSend={
+          slackFor
+            ? async (text) => {
+                const id = slackFor.id;
+                await actOnCard(id, "slack_reply", { text });
+                markCompletedAndAdvance(id);
+              }
+            : undefined
+        }
       />
 
       <EmailComposer
@@ -462,6 +474,15 @@ export function AgentTab() {
         initialTo={emailFor?.payload.candidate_email ?? ""}
         initialSubject={emailFor?.payload.suggested_email_subject}
         initialBody={emailFor?.payload.suggested_email_body}
+        onSend={
+          emailFor
+            ? async (args) => {
+                const id = emailFor.id;
+                await actOnCard(id, "email", args);
+                markCompletedAndAdvance(id);
+              }
+            : undefined
+        }
       />
     </div>
   );

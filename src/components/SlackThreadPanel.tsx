@@ -37,6 +37,8 @@ interface SlackThreadPanelProps {
   candidateName: string;
   companyName: string;
   initialReply?: string;
+  /** When set, sending goes through this (e.g. agent-act) instead of slack-thread. Receives mention-encoded text. */
+  onSend?: (text: string) => Promise<void>;
 }
 
 interface SlackThreadInlineProps {
@@ -57,6 +59,7 @@ export function SlackThreadPanel({
   candidateName,
   companyName,
   initialReply,
+  onSend,
 }: SlackThreadPanelProps) {
   const [messages, setMessages] = useState<SlackMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -174,16 +177,20 @@ export function SlackThreadPanel({
     if (!text || !channelId || !messageTs) return;
     setSending(true);
     try {
-      const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
-        body: {
-          action: "reply",
-          channel_id: channelId,
-          message_ts: messageTs,
-          text: encodeMentions(text),
-        },
-      });
-      if (invErr) throw invErr;
-      if (data?.error) throw new Error(data.error);
+      if (onSend) {
+        await onSend(encodeMentions(text));
+      } else {
+        const { data, error: invErr } = await supabase.functions.invoke("slack-thread", {
+          body: {
+            action: "reply",
+            channel_id: channelId,
+            message_ts: messageTs,
+            text: encodeMentions(text),
+          },
+        });
+        if (invErr) throw invErr;
+        if (data?.error) throw new Error(data.error);
+      }
       setReply("");
       setMentionOpen(false);
       await load();

@@ -26,6 +26,8 @@ interface EmailComposerProps {
   initialSubject?: string;
   initialBody?: string;
   initialTo?: string;
+  /** When set, sending goes through this (e.g. agent-act) instead of gmail-helper. */
+  onSend?: (args: { to: string; subject: string; body: string }) => Promise<void>;
 }
 
 export interface EmailLookupResult {
@@ -160,6 +162,7 @@ export function EmailComposer({
   initialSubject,
   initialBody,
   initialTo,
+  onSend,
 }: EmailComposerProps) {
   const { user } = useAuth();
   // Sign-off name: Google OAuth full name when available, else the email
@@ -282,6 +285,12 @@ export function EmailComposer({
     }
     setSending(true);
     try {
+      if (onSend) {
+        await onSend({ to: to.trim(), subject, body });
+        toast.success("Email sent");
+        onOpenChange(false);
+        return;
+      }
       const { data, error } = await supabase.functions.invoke("gmail-helper", {
         body: { action: "send", to: to.trim(), subject, body },
       });

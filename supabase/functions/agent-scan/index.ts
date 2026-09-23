@@ -5,6 +5,17 @@ import { normalizeLinkedin } from "../_shared/pure/slackText.ts";
 import { ashbyIsScheduled, runLiveArchiveCheck, selectApplications, type Row as SnapRow } from "../_shared/pure/liveCheck.ts";
 import type { ArchiveVerdict } from "../_shared/pure/ashbyMerge.ts";
 import { callExtractor } from "../_shared/extractor.ts";
+import { normalizeFollowupToFriday as fridayOfWeek } from "../_shared/pure/friday.ts";
+import { localDateOf, zonedTimeToUtc, isValidTimeZone } from "../_shared/pure/calendarReminder.ts";
+import { canonicalCompany } from "../_shared/pure/companyMatch.ts";
+import {
+  ambiguousCalendarCandidates,
+  emailSignalForClient,
+  mayLearnDomain,
+  pickShownEvents,
+  queueSectionFor,
+  unscheduledFollowupGroups,
+} from "../_shared/pure/agentRules.ts";
 
 // Agent scan v2: detects intro_stall, post_interview_followup, and batch_followup cards.
 // Adds: email-based scheduling detection (intro_stall + post-interview suppression),
@@ -101,27 +112,19 @@ function companiesMatch(a: string, b: string): boolean {
  * roll to the next Friday. Deterministic — LLM drift can't break the rule.
  * Port of the desktop app's _normalize_followup_to_friday.
  */
-function normalizeFollowupToFriday(anchorIso: string | null): string {
-  const anchorMs = anchorIso ? new Date(anchorIso).getTime() : NaN;
-  const anchor = isNaN(anchorMs) ? new Date() : new Date(anchorMs);
-  const day = anchor.getUTCDay(); // 0=Sun..5=Fri,6=Sat
-  let daysToFriday: number;
-  if (day >= 1 && day <= 4) {
-    daysToFriday = 5 - day; // Mon-Thu → this week's Friday
-  } else if (day === 5) {
-    daysToFriday = 7; // Friday → next Friday
-  } else {
-    daysToFriday = day === 6 ? 6 : 5; // Sat → +6, Sun → +5
-  }
-  const friday = new Date(Date.UTC(
-    anchor.getUTCFullYear(), anchor.getUTCMonth(), anchor.getUTCDate() + daysToFriday,
-    17, 0, 0,
-  ));
-  // A Friday already in the past means the follow-up is due — re-check tomorrow.
-  if (friday.getTime() <= Date.now()) {
-    return new Date(Date.now() + 86400000).toISOString();
-  }
-  return friday.toISOString();
+/**
+ * Friday-EOW rule in the recruiter's timezone (shared pure rule): the
+ * follow-up is the Friday of the anchor email's week (Fri–Sun roll to the
+ * next Friday), due at 9am local. A Friday already past means the follow-up
+ * is due — re-check tomorrow.
+ */
+function normalizeFollowupToFriday(anchorIso: string | null, tz: string): string {
+  const now = new Date();
+  const anchorDate = anchorIso ? localDateOf(anchorIso, tz) : null;
+  const friday = fridayOfWeek(null, anchorDate || null, now, tz);
+  const due = zonedTimeToUtc(friday, "09:00", tz);
+  if (due.getTime() <= now.getTime()) return new Date(now.getTime() + 86400000).toISOString();
+  return due.toISOString();
 }
 
 function firstName(full: string): string {
@@ -320,10 +323,14 @@ async function learnClientDomain(args: {
     if (!args) return null;
     const parsed = JSON.parse(args);
     if (parsed.domain) {
-      await admin.from("client_domain_cache").upsert({
-        user_id: userId, client_name: clientName, domain: parsed.domain,
-        source: "llm", confidence: parsed.confidence ?? 0.6, learned_at: new Date().toISOString(),
-      });
+      // A guessed domain is used for THIS scan; it is only remembered when
+      // the model is confident, so a wrong guess can't poison future scans.
+      if ((parsed.confidence ?? 0) >= 0.8) {
+        await admin.from("client_domain_cache").upsert({
+          user_id: userId, client_name: clientName, domain: parsed.domain,
+          source: "llm", confidence: parsed.confidence ?? 0.8, learned_at: new Date().toISOString(),
+        });
+      }
       return parsed.domain;
     }
   } catch (e) {
@@ -411,6 +418,10 @@ interface SchedulingSignal {
   suggested_followup_at: string | null;
   candidate_email: string | null;
   evidence: string;
+  about_this_client?: "true" | "false" | "unclear";
+  mentioned_company?: string;
+  client_email_domain?: string | null;
+  confidence?: "high" | "medium" | "low";
 }
 
 async function llmDetectScheduling(args: {
@@ -473,7 +484,11 @@ Output:
 - scheduled_time: ISO 8601 if a specific time is known (resolve relative phrasing like "next Thursday" against the email Date header). Else null.
 - suggested_followup_at: ISO 8601 date when we SHOULD re-check this candidate. Required for "scheduling_in_progress" — pick a date 5–10 business days after the most recent scheduling email (give the candidate time to book). Else null.
 - candidate_email: best guess of the candidate's email from headers (not the recruiter), else null.
-- evidence: one short sentence quoting the snippet that drove your decision.`;
+- evidence: one short sentence quoting the snippet that drove your decision.
+- about_this_client: "true" | "false" | "unclear" — are the emails you based the outcome on about ${args.company} SPECIFICALLY? A candidate often interviews at several companies at once; if the emails concern a different company, set "false", name it in mentioned_company, and answer "not_scheduled" for this company. Never attribute another company's interview or offer to ${args.company}.
+- mentioned_company: the company those emails are actually about, if identifiable (empty string if unclear).
+- client_email_domain: the email domain of the people at ${args.company} in these emails (e.g. "acme.com"), or null.
+- confidence: "high" | "medium" | "low" in the outcome.`;
 
   const makeBody = (model: string) => ({
     model,
@@ -490,8 +505,12 @@ Output:
             suggested_followup_at: { type: ["string", "null"] },
             candidate_email: { type: ["string", "null"] },
             evidence: { type: "string" },
+            about_this_client: { type: "string", enum: ["true", "false", "unclear"] },
+            mentioned_company: { type: "string" },
+            client_email_domain: { type: ["string", "null"] },
+            confidence: { type: "string", enum: ["high", "medium", "low"] },
           },
-          required: ["outcome", "scheduled_time", "suggested_followup_at", "candidate_email", "evidence"],
+          required: ["outcome", "scheduled_time", "suggested_followup_at", "candidate_email", "evidence", "about_this_client", "mentioned_company", "client_email_domain", "confidence"],
           additionalProperties: false,
         },
       },
@@ -617,11 +636,6 @@ async function fetchSlackThread(token: string, channelId: string, ts: string) {
   return { messages: j.messages ?? [] };
 }
 
-function batchSlackMessage(candidates: string[]): string {
-  const lines = candidates.map((n) => `– ${n}`).join("\n");
-  return `Quick status check on:\n${lines}\nAny updates?`;
-}
-
 // --- Main handler -------------------------------------------------------------
 
 Deno.serve(async (req) => {
@@ -665,7 +679,7 @@ Deno.serve(async (req) => {
     userId = userData.user.id;
 
     const body = await req.json().catch(() => ({}));
-    const tz: string = body.tz ?? "America/Los_Angeles";
+    let tz: string = body.tz ?? "America/Los_Angeles";
     const cursor: string | null = body.cursor ?? null;
     const reuseRunId: string | undefined = body.run_id;
 
@@ -673,6 +687,7 @@ Deno.serve(async (req) => {
     const { data: settings } = await admin
       .from("agent_settings").select("*").eq("user_id", userId).maybeSingle();
     const introStallMinDays: number = settings?.intro_stall_min_days ?? 3;
+    if (settings?.timezone && isValidTimeZone(settings.timezone)) tz = settings.timezone;
     // The signed-in recruiter's email is the strongest ownership signal:
     // snapshot rows now carry credited_to_email straight from Ashby, so a
     // row is "mine" when the emails match, with recruiter_aliases as the
@@ -684,7 +699,9 @@ Deno.serve(async (req) => {
     } catch (e) {
       console.warn("agent-scan: could not resolve user email", e);
     }
-    const batchThreshold: number = settings?.batch_followup_threshold ?? 3;
+    // 2+ stale unscheduled candidates at one client is the pattern that means
+    // the client has gone quiet (never below 2).
+    const batchThreshold: number = Math.max(2, settings?.batch_followup_threshold ?? 2);
 
     if (reuseRunId) {
       runId = reuseRunId;
@@ -736,6 +753,11 @@ Deno.serve(async (req) => {
     }
 
     const eligibilityCutoff = new Date(Date.now() - introStallMinDays * 86400000).toISOString();
+    // 60-day ACTIVITY window: a loop stays in scope while its last thread
+    // activity is inside the window, however old the intro.
+    const LOOKBACK_DAYS = 60;
+    const windowIso = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString();
+    const inWindow = `last_activity_at.gte.${windowIso},submitted_at.gte.${windowIso}`;
 
     // Total count once on first invocation
     if (!cursor) {
@@ -744,16 +766,18 @@ Deno.serve(async (req) => {
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
         .eq("status", "accepted")
-        .lte("submitted_at", eligibilityCutoff);
+        .lte("submitted_at", eligibilityCutoff)
+        .or(inWindow);
       totalEligible = count ?? null;
     }
 
     let q = admin
       .from("slack_submissions")
-      .select("id, channel_id, message_ts, client_name, candidate_name, status, submitted_at, permalink, linkedin_url")
+      .select("id, channel_id, message_ts, client_name, candidate_name, status, submitted_at, permalink, linkedin_url, last_activity_at")
       .eq("user_id", userId)
       .eq("status", "accepted")
       .lte("submitted_at", eligibilityCutoff)
+      .or(inWindow)
       .order("submitted_at", { ascending: true })
       .limit(BATCH_LIMIT + 1);
     if (cursor) q = q.gt("submitted_at", cursor);
@@ -814,10 +838,6 @@ Deno.serve(async (req) => {
       return null;
     };
     const stillRelevant = new Set<string>();
-    // Track sub-level outcomes for batch grouping at the end
-    const stallsByClient = new Map<string, Array<{
-      sub: typeof batch[number]; cardPayload: Record<string, unknown>;
-    }>>();
 
     // Clients (company_name) tracked in Ashby — we still produce cards for them,
     // but tag them so the UI can show a separate "Ashby pipeline" view and flag
@@ -1119,7 +1139,17 @@ Deno.serve(async (req) => {
       const r = findSnapshotRow(liveSnapshotRows, company, name, linkedin);
       return r && ashbyIsScheduled(r as unknown as SnapRow) ? r : null;
     };
-    const lookupAshbyClient = (rawCompany: string): number | null | undefined => {
+    // Renamed Ashby clients (Forge -> Poetic): a Slack channel keeps the old
+    // name, so canonicalize through the alias table before any Ashby lookup.
+    const orgAliases: Record<string, string> = {};
+    try {
+      const { data: aliasRows } = await admin.from("ashby_org_aliases").select("stale_name,current_name,source");
+      for (const a of [...((aliasRows ?? []) as Array<{ stale_name: string; current_name: string; source: string }>)].sort((x, y) => (x.source === "manual" ? 1 : 0) - (y.source === "manual" ? 1 : 0))) {
+        orgAliases[a.stale_name.trim().toLowerCase()] = a.current_name;
+      }
+    } catch { /* migration pending */ }
+    const lookupAshbyClient = (rawCompanyIn: string): number | null | undefined => {
+      const rawCompany = canonicalCompany(rawCompanyIn, orgAliases);
       const key = normalizeCompany(rawCompany);
       if (!key) return undefined;
       // 1. Exact normalized-key hit
@@ -1144,6 +1174,9 @@ Deno.serve(async (req) => {
       };
     };
     const NOT_TRACKED = { ashby_tracked: false, ashby_last_activity_at: null, ashby_stale: false, ashby_days_since_activity: null } as const;
+    // queue_section is authoritative for routing and computed once here.
+    const sectionFor = (companyName: string, candidateName?: string) =>
+      queueSectionFor(ashbyFlagsFor(companyName, candidateName).ashby_tracked);
     const ashbyFlagsFor = (companyName: string, candidateName?: string): {
       ashby_tracked: boolean;
       ashby_last_activity_at: string | null;
@@ -1232,13 +1265,15 @@ Deno.serve(async (req) => {
           candidateName, company, calendar,
         });
         if (tier === "none" && calendar.length) {
-          // LLM tiebreak — only when no exact/fuzzy match
-          const sample = calendar.slice(-15);
-          const idxs = await llmPickCalendarEvents({
-            candidateName, company, events: sample,
-          });
-          calMatches = idxs.map((i) => sample[i]).filter(Boolean);
-          if (calMatches.length) tier = "fuzzy";
+          // LLM tiebreak — only when no exact/fuzzy match, and only over the
+          // events that carry SOME signal (company token, initial/prefix);
+          // it may only pick from the list it was shown.
+          const sample = ambiguousCalendarCandidates(calendar, candidateName, company);
+          if (sample.length) {
+            const idxs = await llmPickCalendarEvents({ candidateName, company, events: sample });
+            calMatches = pickShownEvents(sample, idxs);
+            if (calMatches.length) tier = "fuzzy";
+          }
         }
 
         // Domain learning + candidate-email-aware Gmail retrieval
@@ -1361,6 +1396,34 @@ Deno.serve(async (req) => {
           clientDomain,
         });
 
+        // Email signals must be about THIS client (the Akshaya Dinesh case):
+        // a verdict explicitly about another company is no signal here, and
+        // a scheduled verdict needs a current-or-future date.
+        {
+          const verdict = emailSignalForClient(signal, { clientName: company, scoped: !!clientDomain });
+          if (verdict.suppressed) {
+            signal.outcome = "not_scheduled";
+            signal.scheduled_time = null;
+            signal.suggested_followup_at = null;
+            signal.candidate_email = null;
+            signal.evidence = `Ignored: ${verdict.reason}`;
+          } else if (verdict.outcome !== signal.outcome) {
+            signal.outcome = verdict.outcome as SchedulingSignal["outcome"];
+            signal.evidence = `${signal.evidence} (${verdict.reason})`;
+          }
+          // Learn the client's domain only when the model is explicit these
+          // emails are about this client, at high confidence — this is how
+          // the desktop's domain map accumulated cross-wired entries.
+          if (!clientDomain && !verdict.suppressed && mayLearnDomain(signal, signal.client_email_domain)) {
+            try {
+              await admin.from("client_domain_cache").upsert({
+                user_id: userId, client_name: company, domain: String(signal.client_email_domain).toLowerCase(),
+                source: "email_high", confidence: 0.9, learned_at: new Date().toISOString(),
+              });
+            } catch (e) { console.error("learn domain", e); }
+          }
+        }
+
         // Persist any new candidate email the LLM inferred
         if (signal.candidate_email) {
           const inferred = extractEmail(signal.candidate_email);
@@ -1459,7 +1522,7 @@ Deno.serve(async (req) => {
               .map((g) => g.date)
               .filter(Boolean)
               .sort((a, b) => new Date(b!).getTime() - new Date(a!).getTime())[0] ?? null;
-            snoozeUntil = normalizeFollowupToFriday(anchor);
+            snoozeUntil = normalizeFollowupToFriday(anchor, tz);
           } else if (signal.outcome === "ambiguous") {
             suppressedReason = "ambiguous_signal";
           } else if (threadActiveRecently) {
@@ -1497,7 +1560,7 @@ Deno.serve(async (req) => {
               .map((g) => g.date)
               .filter(Boolean)
               .sort((a, b) => new Date(b!).getTime() - new Date(a!).getTime())[0] ?? null;
-            snoozeUntil = normalizeFollowupToFriday(anchor);
+            snoozeUntil = normalizeFollowupToFriday(anchor, tz);
           }
           if (!suppressedReason) {
             const meetingMs = new Date(pastCalMatch.start).getTime();
@@ -1568,13 +1631,13 @@ Deno.serve(async (req) => {
           stillRelevant.add(snoozeKey);
           if (existing) {
             await admin.from("agent_action_cards").update({
-              payload: snoozePayload, status: "snoozed", snooze_until: snoozeUntil,
+              payload: snoozePayload, status: "snoozed", snooze_until: snoozeUntil, queue_section: sectionFor(company, candidateName),
               updated_at: new Date().toISOString(),
             }).eq("id", existing.id);
           } else {
             await admin.from("agent_action_cards").insert({
               user_id: userId, slack_submission_id: sub.id, kind: snoozeKind,
-              status: "snoozed", snooze_until: snoozeUntil, payload: snoozePayload,
+              status: "snoozed", snooze_until: snoozeUntil, payload: snoozePayload, queue_section: sectionFor(company, candidateName),
             });
           }
           await admin.from("agent_scan_items").insert({
@@ -1616,27 +1679,18 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Hold intro_stall for batching — partition by ashby vs slack so each batch is single-bucket.
-        if (kind === "intro_stall" && company) {
-          const trackedHere = (payload as { ashby_tracked?: boolean }).ashby_tracked === true;
-          const k = `${companyKey(company)}::${trackedHere ? "ashby" : "slack"}`;
-          if (!stallsByClient.has(k)) stallsByClient.set(k, []);
-          stallsByClient.get(k)!.push({ sub, cardPayload: payload });
-          // We'll write the card below tentatively; batch sweep may roll it up.
-        }
-
         stillRelevant.add(cardKey);
         let outcome: string;
         if (existing) {
           await admin.from("agent_action_cards").update({
-            payload, status: "open", snooze_until: null,
+            payload, status: "open", snooze_until: null, queue_section: sectionFor(company, candidateName),
             updated_at: new Date().toISOString(),
           }).eq("id", existing.id);
           outcome = "card_updated";
         } else {
           await admin.from("agent_action_cards").insert({
             user_id: userId, slack_submission_id: sub.id,
-            kind, status: "open", payload,
+            kind, status: "open", payload, queue_section: sectionFor(company, candidateName),
           });
           cardsCreated++;
           outcome = "card_created";
@@ -1658,95 +1712,76 @@ Deno.serve(async (req) => {
       }
     }
 
-    // --- Batch follow-ups: roll up clients with ≥ batchThreshold stalls ---
-    for (const [cKey, items] of stallsByClient) {
-      if (items.length < batchThreshold) continue;
-      // Most recent submission's channel
-      const sorted = [...items].sort((a, b) =>
-        new Date(b.sub.submitted_at).getTime() - new Date(a.sub.submitted_at).getTime());
-      const channel_id = sorted[0].sub.channel_id;
-      const message_ts = sorted[0].sub.message_ts;
-      const clientName = sorted[0].sub.client_name;
-      const candNames = sorted.map((s) => s.sub.candidate_name);
-      const slackMsg = batchSlackMessage(candNames);
-
-      // Synthetic submission key for the batch card
-      const batchKey = sorted[0].sub.id; // anchor on most recent
-      const payload = {
-        candidate_name: `${candNames.length} candidates`,
-        company_name: clientName,
-        channel_id, message_ts,
-        client_name: clientName,
-        candidates: sorted.map((s) => ({
-          submission_id: s.sub.id,
-          name: s.sub.candidate_name,
-          submitted_at: s.sub.submitted_at,
-          message_ts: s.sub.message_ts,
-        })),
-        suggested_slack_message: slackMsg,
-        signal_summary: `${candNames.length} candidates at ${clientName} have no scheduling signal.`,
-        // Reuse per-card ashby flags so the batch lands in the same pipeline as its members.
-        ashby_tracked: (sorted[0].cardPayload as { ashby_tracked?: boolean }).ashby_tracked === true,
-        ashby_last_activity_at: (sorted[0].cardPayload as { ashby_last_activity_at?: string | null }).ashby_last_activity_at ?? null,
-        ashby_stale: (sorted[0].cardPayload as { ashby_stale?: boolean }).ashby_stale === true,
-        ashby_days_since_activity: (sorted[0].cardPayload as { ashby_days_since_activity?: number | null }).ashby_days_since_activity ?? null,
-      };
-
-      // Resolve the individual intro_stall cards we just wrote
-      for (const it of sorted) {
-        const k = `${it.sub.id}::intro_stall`;
-        const existing = existingByKey.get(k);
-        if (existing) {
-          await admin.from("agent_action_cards").update({
-            status: "resolved", updated_at: new Date().toISOString(),
-          }).eq("id", existing.id);
-        } else {
-          // Just-inserted card: delete it in favor of batch
-          await admin.from("agent_action_cards")
-            .delete()
-            .eq("user_id", userId)
-            .eq("slack_submission_id", it.sub.id)
-            .eq("kind", "intro_stall");
+    // --- Unscheduled follow-ups: one card PER CANDIDATE (desktop Step 5) ---
+    //
+    // Unresponded (not-yet-✅) intros are lower priority and only surface
+    // when a client has 2+ stale, quiet, unscheduled candidates — that
+    // pattern usually means the CLIENT has gone quiet. Replaces the single
+    // "N candidates" batch card: each candidate gets their own card so the
+    // reply lands in their own thread. No Slack call here — thread activity
+    // comes from the sync's last_activity_at.
+    if (isFirstInvocation) {
+      try {
+        const { data: submittedRows } = await admin
+          .from("slack_submissions")
+          .select("id, channel_id, message_ts, client_name, candidate_name, status, submitted_at, permalink, linkedin_url, last_activity_at")
+          .eq("user_id", userId)
+          .eq("status", "submitted")
+          .lte("submitted_at", eligibilityCutoff)
+          .or(inWindow)
+          .limit(2000);
+        type SubRow = { id: string; channel_id: string; message_ts: string; client_name: string; candidate_name: string; status: string; submitted_at: string; permalink: string | null; linkedin_url: string | null; last_activity_at: string | null };
+        const pool = ((submittedRows ?? []) as SubRow[]).filter((r) => !isInternalPipeline(r.client_name || ""));
+        const groups = unscheduledFollowupGroups(pool, {
+          threshold: batchThreshold, stallDays: introStallMinDays, quietDays: 3,
+          isSuppressed: (r) => isArchivedInAshby(r.client_name, r.candidate_name, (r as SubRow).linkedin_url) || !!scheduledSnapshotRow(r.client_name, r.candidate_name, (r as SubRow).linkedin_url),
+        });
+        for (const [client, members] of groups) {
+          for (const m of members as SubRow[]) {
+            const key = `${m.id}::unscheduled_followup`;
+            const existing = existingByKey.get(key);
+            const closedReason = existing ? null : userSuppression(key);
+            if (closedReason) {
+              await admin.from("agent_scan_items").insert({
+                user_id: userId, scan_run_id: runId, slack_submission_id: m.id,
+                candidate_name: m.candidate_name, client_name: m.client_name,
+                outcome: "suppressed", reason: closedReason, signal: { card_kind: "unscheduled_followup" },
+              });
+              continue;
+            }
+            const fnNm = firstName(m.candidate_name);
+            const payload = {
+              candidate_name: m.candidate_name,
+              company_name: m.client_name,
+              channel_id: m.channel_id,
+              message_ts: m.message_ts,
+              slack_permalink: m.permalink,
+              signal_summary: `${members.length} candidates at ${client} have no scheduling signal and the client hasn't responded to ${fnNm}'s intro.`,
+              suggested_slack_message: `Hey — wanted to check in on ${fnNm} — any update on next steps? Let me know if I need to bump.`,
+              unscheduled_group: { client, count: members.length },
+              ...ashbyFlagsFor(m.client_name, m.candidate_name),
+            };
+            stillRelevant.add(key);
+            if (existing) {
+              await admin.from("agent_action_cards").update({
+                payload, status: "open", snooze_until: null, queue_section: sectionFor(m.client_name, m.candidate_name), updated_at: new Date().toISOString(),
+              }).eq("id", existing.id);
+            } else {
+              await admin.from("agent_action_cards").insert({
+                user_id: userId, slack_submission_id: m.id, kind: "unscheduled_followup", status: "open", payload, queue_section: sectionFor(m.client_name, m.candidate_name),
+              });
+              cardsCreated++;
+            }
+            await admin.from("agent_scan_items").insert({
+              user_id: userId, scan_run_id: runId, slack_submission_id: m.id,
+              candidate_name: m.candidate_name, client_name: m.client_name,
+              outcome: existing ? "card_updated" : "card_created", reason: "unscheduled_followup", signal: { card_kind: "unscheduled_followup", group: client, count: members.length },
+            });
+          }
         }
-        stillRelevant.delete(k);
-        await admin.from("agent_scan_items").insert({
-          user_id: userId, scan_run_id: runId, slack_submission_id: it.sub.id,
-          candidate_name: it.sub.candidate_name, client_name: clientName,
-          outcome: "rolled_into_batch", reason: cKey,
-        });
+      } catch (e) {
+        console.error("unscheduled follow-up pass failed", e);
       }
-
-      const batchCardKey = `${batchKey}::batch_followup`;
-      const existingBatch = existingByKey.get(batchCardKey);
-      const batchClosedReason = existingBatch ? null : userSuppression(batchCardKey);
-      let batchOutcome: string;
-      if (existingBatch) {
-        await admin.from("agent_action_cards").update({
-          payload, status: "open", snooze_until: null,
-          updated_at: new Date().toISOString(),
-        }).eq("id", existingBatch.id);
-        stillRelevant.add(batchCardKey);
-        batchOutcome = "card_updated";
-      } else if (!batchClosedReason) {
-        await admin.from("agent_action_cards").insert({
-          user_id: userId, slack_submission_id: batchKey,
-          kind: "batch_followup", status: "open", payload,
-        });
-        cardsCreated++;
-        stillRelevant.add(batchCardKey);
-        batchOutcome = "card_created";
-      } else {
-        // User dismissed/resolved this batch card — keep it closed (the
-        // member cards were rolled up above, so nothing re-nags).
-        batchOutcome = "suppressed";
-      }
-      await admin.from("agent_scan_items").insert({
-        user_id: userId, scan_run_id: runId, slack_submission_id: batchKey,
-        candidate_name: `${candNames.length} candidates`, client_name: clientName,
-        outcome: batchOutcome,
-        reason: batchOutcome === "suppressed" ? batchClosedReason : "batch_followup",
-        signal: { card_kind: "batch_followup" },
-      });
     }
 
     // --- Ashby-derived follow-ups (desktop app Step 5b) -----------------------
@@ -1914,7 +1949,7 @@ Deno.serve(async (req) => {
           if (existing) {
             // Enrichment back-fill: keep the ATS context fresh every scan.
             await admin.from("agent_action_cards").update({
-              payload, updated_at: new Date().toISOString(),
+              payload, queue_section: "ashby", updated_at: new Date().toISOString(),
             }).eq("id", existing.id);
             continue;
           }
@@ -1929,7 +1964,7 @@ Deno.serve(async (req) => {
           }
           await admin.from("agent_action_cards").insert({
             user_id: userId, slack_submission_id: slack?.id ?? null,
-            kind, status: "open", payload, ashby_pair_key: pk,
+            kind, status: "open", payload, ashby_pair_key: pk, queue_section: "ashby",
           });
           cardsCreated++;
           await admin.from("agent_scan_items").insert({
