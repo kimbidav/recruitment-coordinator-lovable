@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "test": "deno test --allow-env _shared/pure/"
+    "check": "deno check _shared/*.ts slack-interactions/index.ts slack-upload-callback/index.ts"
   },
   "imports": {
     "@shared/": "./_shared/"

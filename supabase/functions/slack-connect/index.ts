@@ -17,7 +17,16 @@ const USER_SCOPES = [
   "search:read",
   "users:read",
   "users:read.email",
+  // Resume PDFs in submission threads (Add to Ashby). Connections made
+  // before this scope was added must reconnect to attach resumes.
+  "files:read",
 ].join(",");
+
+// The app's own (bot) scopes, installed for the workspace on first connect:
+// `commands` delivers the "Add to Ashby" message shortcut, `chat:write` lets
+// it open/update modals and DM the clicker. Deliberately NO channel scopes —
+// the app never joins a client channel; all reads use the recruiter's user token.
+const BOT_SCOPES = ["commands", "chat:write"].join(",");
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -60,6 +69,7 @@ Deno.serve(async (req) => {
     const url = new URL("https://slack.com/oauth/v2/authorize");
     url.searchParams.set("client_id", clientId);
     url.searchParams.set("user_scope", USER_SCOPES);
+    url.searchParams.set("scope", BOT_SCOPES);
     url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("state", state);
 

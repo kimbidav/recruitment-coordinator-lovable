@@ -99,6 +99,21 @@ Deno.serve(async (req) => {
 
     if (upsertErr) throw new Error(`DB upsert failed: ${upsertErr.message}`);
 
+    // Bot install for the workspace (the shortcut answers as the app). Slack
+    // returns it on every user connect once the app has bot scopes.
+    const botToken: string | undefined = tokenData.access_token;
+    if (botToken && botToken.startsWith("xoxb-")) {
+      const { error: wsErr } = await admin.from("slack_workspaces").upsert({
+        team_id: teamId,
+        team_name: teamName ?? null,
+        bot_token: botToken,
+        bot_user_id: tokenData.bot_user_id ?? null,
+        installed_by: userData.user.id,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "team_id" });
+      if (wsErr) console.error("slack_workspaces upsert failed", wsErr.message);
+    }
+
     return new Response(
       JSON.stringify({ ok: true, team_name: teamName ?? null, slack_user_id: slackUserId }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
