@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
@@ -21,13 +21,13 @@ export type Database = {
           act_result: Json | null
           act_status: string | null
           acted_at: string | null
-          queue_section: string | null
           ashby_pair_key: string | null
           candidate_row_id: string | null
           created_at: string
           id: string
           kind: string
           payload: Json
+          queue_section: string | null
           slack_submission_id: string | null
           snooze_until: string | null
           status: string
@@ -40,13 +40,13 @@ export type Database = {
           act_result?: Json | null
           act_status?: string | null
           acted_at?: string | null
-          queue_section?: string | null
           ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string
           id?: string
           kind: string
           payload?: Json
+          queue_section?: string | null
           slack_submission_id?: string | null
           snooze_until?: string | null
           status?: string
@@ -59,13 +59,13 @@ export type Database = {
           act_result?: Json | null
           act_status?: string | null
           acted_at?: string | null
-          queue_section?: string | null
           ashby_pair_key?: string | null
           candidate_row_id?: string | null
           created_at?: string
           id?: string
           kind?: string
           payload?: Json
+          queue_section?: string | null
           slack_submission_id?: string | null
           snooze_until?: string | null
           status?: string
@@ -176,6 +176,30 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_channel_org_map: {
+        Row: {
+          channel_id: string
+          channel_name: string | null
+          learned_by: string | null
+          org_name: string
+          updated_at: string
+        }
+        Insert: {
+          channel_id: string
+          channel_name?: string | null
+          learned_by?: string | null
+          org_name: string
+          updated_at?: string
+        }
+        Update: {
+          channel_id?: string
+          channel_name?: string | null
+          learned_by?: string | null
+          org_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ashby_connection: {
         Row: {
           id: number
@@ -206,141 +230,6 @@ export type Database = {
         }
         Relationships: []
       }
-      ashby_user_sessions: {
-        Row: {
-          user_id: string
-          email: string
-          status: string
-          identity_verified: boolean
-          org_count: number
-          last_seeded_at: string | null
-          last_ok_at: string | null
-          last_error: string | null
-          expires_estimate_at: string | null
-          updated_at: string
-        }
-        Insert: {
-          user_id: string
-          email: string
-          status?: string
-          identity_verified?: boolean
-          org_count?: number
-          last_seeded_at?: string | null
-          last_ok_at?: string | null
-          last_error?: string | null
-          expires_estimate_at?: string | null
-          updated_at?: string
-        }
-        Update: {
-          user_id: string
-          email: string
-          status?: string
-          identity_verified?: boolean
-          org_count?: number
-          last_seeded_at?: string | null
-          last_ok_at?: string | null
-          last_error?: string | null
-          expires_estimate_at?: string | null
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      ashby_uploads: {
-        Row: {
-          id: string
-          session_id: string | null
-          user_id: string
-          extractor_job_id: string | null
-          candidate_name: string | null
-          org_name: string | null
-          status: string
-          http_status: number | null
-          result: Json | null
-          started_at: string
-          finished_at: string | null
-        }
-        Insert: {
-          id?: string
-          session_id?: string | null
-          user_id: string
-          extractor_job_id?: string | null
-          candidate_name?: string | null
-          org_name?: string | null
-          status?: string
-          http_status?: number | null
-          result?: Json | null
-          started_at?: string
-          finished_at?: string | null
-        }
-        Update: {
-          id?: string
-          session_id?: string | null
-          user_id: string
-          extractor_job_id?: string | null
-          candidate_name?: string | null
-          org_name?: string | null
-          status?: string
-          http_status?: number | null
-          result?: Json | null
-          started_at?: string
-          finished_at?: string | null
-        }
-        Relationships: []
-      }
-      ashby_open_jobs_cache: {
-        Row: {
-          org_key: string
-          org_name: string
-          org_id: string | null
-          jobs: Json
-          source_id: string | null
-          source_title: string | null
-          fetched_at: string
-        }
-        Insert: {
-          org_key: string
-          org_name: string
-          org_id?: string | null
-          jobs?: Json
-          source_id?: string | null
-          source_title?: string | null
-          fetched_at?: string
-        }
-        Update: {
-          org_key: string
-          org_name: string
-          org_id?: string | null
-          jobs?: Json
-          source_id?: string | null
-          source_title?: string | null
-          fetched_at?: string
-        }
-        Relationships: []
-      }
-      ashby_channel_org_map: {
-        Row: {
-          channel_id: string
-          org_name: string
-          channel_name: string | null
-          learned_by: string | null
-          updated_at: string
-        }
-        Insert: {
-          channel_id: string
-          org_name: string
-          channel_name?: string | null
-          learned_by?: string | null
-          updated_at?: string
-        }
-        Update: {
-          channel_id: string
-          org_name: string
-          channel_name?: string | null
-          learned_by?: string | null
-          updated_at?: string
-        }
-        Relationships: []
-      }
       ashby_known_clients: {
         Row: {
           client_name: string
@@ -365,27 +254,33 @@ export type Database = {
         }
         Relationships: []
       }
-      ashby_orgs: {
+      ashby_open_jobs_cache: {
         Row: {
-          first_seen_at: string
-          last_sweep_ok: boolean | null
-          last_swept_at: string | null
+          fetched_at: string
+          jobs: Json
           org_id: string | null
+          org_key: string
           org_name: string
+          source_id: string | null
+          source_title: string | null
         }
         Insert: {
-          first_seen_at?: string
-          last_sweep_ok?: boolean | null
-          last_swept_at?: string | null
+          fetched_at?: string
+          jobs?: Json
           org_id?: string | null
+          org_key: string
           org_name: string
+          source_id?: string | null
+          source_title?: string | null
         }
         Update: {
-          first_seen_at?: string
-          last_sweep_ok?: boolean | null
-          last_swept_at?: string | null
+          fetched_at?: string
+          jobs?: Json
           org_id?: string | null
+          org_key?: string
           org_name?: string
+          source_id?: string | null
+          source_title?: string | null
         }
         Relationships: []
       }
@@ -434,6 +329,30 @@ export type Database = {
         }
         Relationships: []
       }
+      ashby_orgs: {
+        Row: {
+          first_seen_at: string
+          last_sweep_ok: boolean | null
+          last_swept_at: string | null
+          org_id: string | null
+          org_name: string
+        }
+        Insert: {
+          first_seen_at?: string
+          last_sweep_ok?: boolean | null
+          last_swept_at?: string | null
+          org_id?: string | null
+          org_name: string
+        }
+        Update: {
+          first_seen_at?: string
+          last_sweep_ok?: boolean | null
+          last_swept_at?: string | null
+          org_id?: string | null
+          org_name?: string
+        }
+        Relationships: []
+      }
       ashby_retired_orgs: {
         Row: {
           note: string | null
@@ -459,26 +378,20 @@ export type Database = {
         Row: {
           access_restricted: boolean
           added_via: string | null
-          archived_reason_type: string | null
-          archived_verified_live_at: string | null
-          credited_to_email: string | null
-          credited_to_user_id: string | null
-          linkedin_url: string | null
-          org_retired_at: string | null
-          org_status: string | null
-          previous_company_names: string[]
-          status_verified_live: string | null
-          status_verified_live_at: string | null
           application_id: string | null
           archived_detected_at: string | null
           archived_inferred: boolean | null
           archived_reason: string | null
+          archived_reason_type: string | null
+          archived_verified_live_at: string | null
           ashby_candidate_id: string
           ashby_job_id: string
           candidate_name: string
           company_name: string
           created_at: string
           credited_to: string | null
+          credited_to_email: string | null
+          credited_to_user_id: string | null
           current_stage_avg_score: number | null
           current_stage_date: string | null
           current_stage_index: number
@@ -496,38 +409,38 @@ export type Database = {
           latest_feedback_author: string | null
           latest_feedback_date: string | null
           latest_recommendation: string | null
+          linkedin_url: string | null
           needs_scheduling: boolean
           org_id: string | null
+          org_retired_at: string | null
+          org_status: string | null
           pipeline_stage: string | null
+          previous_company_names: string[]
           source: string | null
           stage_progress: string | null
           stage_type: string
+          status_verified_live: string | null
+          status_verified_live_at: string | null
           total_stages: number
           updated_at: string
         }
         Insert: {
           access_restricted?: boolean
           added_via?: string | null
-          archived_reason_type?: string | null
-          archived_verified_live_at?: string | null
-          credited_to_email?: string | null
-          credited_to_user_id?: string | null
-          linkedin_url?: string | null
-          org_retired_at?: string | null
-          org_status?: string | null
-          previous_company_names?: string[]
-          status_verified_live?: string | null
-          status_verified_live_at?: string | null
           application_id?: string | null
           archived_detected_at?: string | null
           archived_inferred?: boolean | null
           archived_reason?: string | null
+          archived_reason_type?: string | null
+          archived_verified_live_at?: string | null
           ashby_candidate_id: string
           ashby_job_id?: string
           candidate_name: string
           company_name: string
           created_at?: string
           credited_to?: string | null
+          credited_to_email?: string | null
+          credited_to_user_id?: string | null
           current_stage_avg_score?: number | null
           current_stage_date?: string | null
           current_stage_index?: number
@@ -545,38 +458,38 @@ export type Database = {
           latest_feedback_author?: string | null
           latest_feedback_date?: string | null
           latest_recommendation?: string | null
+          linkedin_url?: string | null
           needs_scheduling?: boolean
           org_id?: string | null
+          org_retired_at?: string | null
+          org_status?: string | null
           pipeline_stage?: string | null
+          previous_company_names?: string[]
           source?: string | null
           stage_progress?: string | null
           stage_type?: string
+          status_verified_live?: string | null
+          status_verified_live_at?: string | null
           total_stages?: number
           updated_at?: string
         }
         Update: {
           access_restricted?: boolean
           added_via?: string | null
-          archived_reason_type?: string | null
-          archived_verified_live_at?: string | null
-          credited_to_email?: string | null
-          credited_to_user_id?: string | null
-          linkedin_url?: string | null
-          org_retired_at?: string | null
-          org_status?: string | null
-          previous_company_names?: string[]
-          status_verified_live?: string | null
-          status_verified_live_at?: string | null
           application_id?: string | null
           archived_detected_at?: string | null
           archived_inferred?: boolean | null
           archived_reason?: string | null
+          archived_reason_type?: string | null
+          archived_verified_live_at?: string | null
           ashby_candidate_id?: string
           ashby_job_id?: string
           candidate_name?: string
           company_name?: string
           created_at?: string
           credited_to?: string | null
+          credited_to_email?: string | null
+          credited_to_user_id?: string | null
           current_stage_avg_score?: number | null
           current_stage_date?: string | null
           current_stage_index?: number
@@ -594,14 +507,109 @@ export type Database = {
           latest_feedback_author?: string | null
           latest_feedback_date?: string | null
           latest_recommendation?: string | null
+          linkedin_url?: string | null
           needs_scheduling?: boolean
           org_id?: string | null
+          org_retired_at?: string | null
+          org_status?: string | null
           pipeline_stage?: string | null
+          previous_company_names?: string[]
           source?: string | null
           stage_progress?: string | null
           stage_type?: string
+          status_verified_live?: string | null
+          status_verified_live_at?: string | null
           total_stages?: number
           updated_at?: string
+        }
+        Relationships: []
+      }
+      ashby_uploads: {
+        Row: {
+          candidate_name: string | null
+          extractor_job_id: string | null
+          finished_at: string | null
+          http_status: number | null
+          id: string
+          org_name: string | null
+          result: Json | null
+          session_id: string | null
+          started_at: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          candidate_name?: string | null
+          extractor_job_id?: string | null
+          finished_at?: string | null
+          http_status?: number | null
+          id?: string
+          org_name?: string | null
+          result?: Json | null
+          session_id?: string | null
+          started_at?: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          candidate_name?: string | null
+          extractor_job_id?: string | null
+          finished_at?: string | null
+          http_status?: number | null
+          id?: string
+          org_name?: string | null
+          result?: Json | null
+          session_id?: string | null
+          started_at?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ashby_uploads_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "slack_shortcut_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ashby_user_sessions: {
+        Row: {
+          email: string
+          expires_estimate_at: string | null
+          identity_verified: boolean
+          last_error: string | null
+          last_ok_at: string | null
+          last_seeded_at: string | null
+          org_count: number
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          email: string
+          expires_estimate_at?: string | null
+          identity_verified?: boolean
+          last_error?: string | null
+          last_ok_at?: string | null
+          last_seeded_at?: string | null
+          org_count?: number
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          email?: string
+          expires_estimate_at?: string | null
+          identity_verified?: boolean
+          last_error?: string | null
+          last_ok_at?: string | null
+          last_seeded_at?: string | null
+          org_count?: number
+          status?: string
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -915,6 +923,27 @@ export type Database = {
           },
         ]
       }
+      oauth_states: {
+        Row: {
+          created_at: string
+          provider: string
+          state: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          provider: string
+          state?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          provider?: string
+          state?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       pipeline_save_reports: {
         Row: {
           created_at: string
@@ -1002,76 +1031,151 @@ export type Database = {
         }
         Relationships: []
       }
+      slack_shortcut_sessions: {
+        Row: {
+          channel_id: string
+          created_at: string
+          email_block_version: number
+          email_value: string
+          enriched_at: string | null
+          expires_at: string
+          id: string
+          joiners: Json
+          last_payload: Json | null
+          last_result: Json | null
+          message_ts: string
+          note_locked: boolean
+          org_override: string | null
+          prefill: Json | null
+          resume_meta: Json | null
+          resume_path: string | null
+          slack_team_id: string
+          slack_user_id: string
+          thread_ts: string | null
+          uploading: boolean
+          user_id: string
+          view_id: string | null
+        }
+        Insert: {
+          channel_id: string
+          created_at?: string
+          email_block_version?: number
+          email_value?: string
+          enriched_at?: string | null
+          expires_at?: string
+          id?: string
+          joiners?: Json
+          last_payload?: Json | null
+          last_result?: Json | null
+          message_ts: string
+          note_locked?: boolean
+          org_override?: string | null
+          prefill?: Json | null
+          resume_meta?: Json | null
+          resume_path?: string | null
+          slack_team_id: string
+          slack_user_id: string
+          thread_ts?: string | null
+          uploading?: boolean
+          user_id: string
+          view_id?: string | null
+        }
+        Update: {
+          channel_id?: string
+          created_at?: string
+          email_block_version?: number
+          email_value?: string
+          enriched_at?: string | null
+          expires_at?: string
+          id?: string
+          joiners?: Json
+          last_payload?: Json | null
+          last_result?: Json | null
+          message_ts?: string
+          note_locked?: boolean
+          org_override?: string | null
+          prefill?: Json | null
+          resume_meta?: Json | null
+          resume_path?: string | null
+          slack_team_id?: string
+          slack_user_id?: string
+          thread_ts?: string | null
+          uploading?: boolean
+          user_id?: string
+          view_id?: string | null
+        }
+        Relationships: []
+      }
       slack_submissions: {
         Row: {
-          channel_name: string | null
-          last_activity_at: string | null
-          last_refreshed_at: string | null
-          last_reply_at: string | null
-          migrated_from_channel_id: string | null
-          previous_client_names: string[]
-          reply_count: number
-          thread_ts: string | null
           candidate_name: string
           channel_id: string
+          channel_name: string | null
           client_name: string
           created_at: string
           id: string
+          last_activity_at: string | null
+          last_refreshed_at: string | null
+          last_reply_at: string | null
           linkedin_url: string | null
           message_ts: string
+          migrated_from_channel_id: string | null
           needs_review: boolean
           permalink: string | null
+          previous_client_names: string[]
           raw_text: string | null
+          reply_count: number
           status: string
           submitted_at: string
+          thread_ts: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
-          channel_name?: string | null
-          last_activity_at?: string | null
-          last_refreshed_at?: string | null
-          last_reply_at?: string | null
-          migrated_from_channel_id?: string | null
-          previous_client_names?: string[]
-          reply_count?: number
-          thread_ts?: string | null
           candidate_name?: string
           channel_id: string
+          channel_name?: string | null
           client_name: string
           created_at?: string
           id?: string
+          last_activity_at?: string | null
+          last_refreshed_at?: string | null
+          last_reply_at?: string | null
           linkedin_url?: string | null
           message_ts: string
+          migrated_from_channel_id?: string | null
           needs_review?: boolean
           permalink?: string | null
+          previous_client_names?: string[]
           raw_text?: string | null
+          reply_count?: number
           status?: string
           submitted_at: string
+          thread_ts?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
-          channel_name?: string | null
-          last_activity_at?: string | null
-          last_refreshed_at?: string | null
-          last_reply_at?: string | null
-          migrated_from_channel_id?: string | null
-          previous_client_names?: string[]
-          reply_count?: number
-          thread_ts?: string | null
           candidate_name?: string
           channel_id?: string
+          channel_name?: string | null
           client_name?: string
           created_at?: string
           id?: string
+          last_activity_at?: string | null
+          last_refreshed_at?: string | null
+          last_reply_at?: string | null
           linkedin_url?: string | null
           message_ts?: string
+          migrated_from_channel_id?: string | null
           needs_review?: boolean
           permalink?: string | null
+          previous_client_names?: string[]
           raw_text?: string | null
+          reply_count?: number
           status?: string
           submitted_at?: string
+          thread_ts?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -1149,6 +1253,36 @@ export type Database = {
         }
         Relationships: []
       }
+      slack_workspaces: {
+        Row: {
+          bot_token: string
+          bot_user_id: string | null
+          installed_at: string
+          installed_by: string | null
+          team_id: string
+          team_name: string | null
+          updated_at: string
+        }
+        Insert: {
+          bot_token: string
+          bot_user_id?: string | null
+          installed_at?: string
+          installed_by?: string | null
+          team_id: string
+          team_name?: string | null
+          updated_at?: string
+        }
+        Update: {
+          bot_token?: string
+          bot_user_id?: string | null
+          installed_at?: string
+          installed_by?: string | null
+          team_id?: string
+          team_name?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -1173,12 +1307,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1202,11 +1336,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1227,11 +1361,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1252,11 +1386,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1269,11 +1403,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
