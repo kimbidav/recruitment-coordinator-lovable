@@ -46,3 +46,24 @@ export function suggestAliasesFromEmail(email: string, creditedToValues: string[
   }
   return out;
 }
+
+/**
+ * Is this row the signed-in recruiter's? The Ashby credited-to EMAIL is the
+ * strongest signal (the snapshot carries it for every row fetched since
+ * v2), so no setup is needed. Rows without an email fall back to saved
+ * aliases, then to names derived from the login email (dkimball → "David
+ * Kimball"). Empty/unknown credit passes, as before.
+ */
+export function isMine(
+  row: { credited_to?: string | null; credited_to_email?: string | null },
+  userEmail: string | null | undefined,
+  aliases: string[],
+): boolean {
+  const email = (row.credited_to_email ?? "").trim().toLowerCase();
+  const me = (userEmail ?? "").trim().toLowerCase();
+  if (email && me) return email === me;
+  if (aliases.length > 0) return creditedToMatchesAliases(row.credited_to, aliases);
+  const credited = row.credited_to ?? "";
+  if (!normalizePersonName(credited) || normalizePersonName(credited) === "unknown") return true;
+  return me ? suggestAliasesFromEmail(me, [credited]).length > 0 : true;
+}

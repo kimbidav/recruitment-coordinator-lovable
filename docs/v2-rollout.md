@@ -62,12 +62,15 @@ suppress; the internal Ashby API stays feature-frozen.
      Slack once in Compass; until they do, the shortcut reports the resume
      as `scope_missing` and the sync falls back to per-channel history.
    - Workspace admin approves the updated app.
-7. **Per recruiter** (Compass → Onboarding): Google sign-in → Connect Slack
-   (re-connect if already connected) → **Connect Ashby (yours)** — the
-   Chrome extension (`extension/`, load unpacked or Workspace policy) or the
-   DevTools paste → optional Google Calendar/Gmail → optional team sync
-   session and aliases. Ashby logins expire about weekly; the banner and the
-   shortcut's "Reconnect" view route them back.
+7. **Per recruiter** (Compass → Onboarding, a three-step guided page): Connect
+   Google (Gmail + Calendar) → Connect Slack (opens a tab; the step ticks
+   itself off once the token carries the current permissions) → Connect Ashby
+   (six numbered steps to copy `ashby_session_token` from the browser's
+   developer tools and paste it). Each step is checked for the permissions it
+   actually needs, not just "a token exists". "My candidates" matches on the
+   Ashby credited-to email, so there is no name step. Ashby logins expire
+   about weekly; the banner and the shortcut's "Reconnect" view send people to
+   `/onboarding?step=ashby`.
 8. **Pilot**: DK first, then one more recruiter (proves per-identity credit
    and org visibility). One supervised real upload per recruiter on a genuine
    submission of theirs — never a dummy candidate in a client org — checking
@@ -81,7 +84,7 @@ suppress; the internal Ashby API stays feature-frozen.
 | 0 | migrations 1–2, `_shared/pure/*`, Auth | Domain lock, token column grants, OAuth `state` nonces, shared pure modules (Slack text, company/name matching, chunking, Friday rule, shortcut views/rules) tested by vitest + deno |
 | 1 | Ashby-automation PR #8 | Per-user sessions keyed by email (identity verified from `available_identities`), identity-keyed locks, async upload job + signed callback, `credited_to_not_self` guard |
 | 2 | `slack-interactions`, `slack-upload-callback`, `_shared/addToAshby.ts` | The shortcut: signed HTTP interactivity, ack ≤1s + `waitUntil`, review modal, duplicate resolution, result modal + DM, channel→org memory learned only on success |
-| 3 | `ashby-user-session`, Onboarding, `extension/` | Each recruiter connects their own Ashby login (extension or paste), expiry banner, `?step=ashby` deep link |
+| 3 | `ashby-user-session`, Onboarding | Each recruiter connects their own Ashby login (paste the session token, guided steps), expiry banner, `?step=ashby` deep link |
 | 4 | `_shared/pure/{ashbyMerge,orgHealth,liveCheck}.ts`, `ashby-sync`, `agent-scan`, dashboard | Confirm-or-skip archival with the >50% guard, org blind spots / human-confirmed retirement / learned renames, live archive check at scan start, LinkedIn + nickname-tolerant identity join, derived coverage |
 | 7 | `_shared/pure/{emailResolver,calendarReminder}.ts`, `gmail-helper`, `google-calendar-sync` | Surname-anchored, confidence-gated email resolver; 5pm reminders in the recruiter's timezone with identity dedup and deterministic ids |
 | 5 | `_shared/pure/slackSync.ts`, `slack-sync`, `slack-events` | Incremental sync, activity-based window, rename hygiene with the Ashby veto, channel-migration dedupe |

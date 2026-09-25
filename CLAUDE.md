@@ -69,7 +69,6 @@ Rules that encode business judgment — keep them when you touch anything:
   `slack-events`, `agent-scan`, `agent-act`, `agent-draft`, `gmail-helper`,
   `google-calendar-sync`, OAuth connect/callback pairs.
 - `src/` — dashboard (Pipeline + Agent tabs, onboarding, banners).
-- `extension/` — Chrome MV3 extension for one-click Connect Ashby.
 - `docs/v2-rollout.md` — the release runbook (migrations, secrets, Slack
   manifest, pilot); `docs/ashby-architecture.md`, `docs/slack-integration.md`.
 

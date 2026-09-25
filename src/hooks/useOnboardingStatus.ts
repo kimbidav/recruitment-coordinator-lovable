@@ -4,8 +4,13 @@ import { useAuth } from "@/contexts/AuthContext";
 
 export interface OnboardingStatus {
   googleConnected: boolean;
+  /** Connected AND granted Calendar + Gmail read/send. */
+  googleReady: boolean;
   googleEmail: string | null;
   slackConnected: boolean;
+  /** Connected with the current permissions (resume files + search); the
+   *  same flow installs the bot that runs Add to Ashby. */
+  slackReady: boolean;
   slackTeamName: string | null;
   /** The signed-in recruiter's OWN Ashby login (drives Slack uploads). */
   ashbyConnected: boolean;
@@ -25,6 +30,8 @@ export function useOnboardingStatus(): OnboardingStatus {
   const [googleConnected, setGoogleConnected] = useState(false);
   const [googleEmail, setGoogleEmail] = useState<string | null>(null);
   const [slackConnected, setSlackConnected] = useState(false);
+  const [googleReady, setGoogleReady] = useState(false);
+  const [slackReady, setSlackReady] = useState(false);
   const [slackTeamName, setSlackTeamName] = useState<string | null>(null);
   const [ashbyConnected, setAshbyConnected] = useState(false);
   const [teamAshbyConnected, setTeamAshbyConnected] = useState(false);
@@ -41,11 +48,11 @@ export function useOnboardingStatus(): OnboardingStatus {
       const [googleRes, slackRes, candidatesRes, ashbyRes, userAshbyRes] = await Promise.all([
         supabase
           .from("google_calendar_tokens")
-          .select("google_email")
+          .select("google_email, scope")
           .maybeSingle(),
         supabase
           .from("slack_tokens")
-          .select("slack_team_name")
+          .select("slack_team_name, scope")
           .maybeSingle(),
         supabase
           .from("candidates")
@@ -66,6 +73,10 @@ export function useOnboardingStatus(): OnboardingStatus {
       ]);
 
       setGoogleConnected(!!googleRes.data);
+      const gScope = (googleRes.data?.scope ?? "") as string;
+      setGoogleReady(!!googleRes.data && ["calendar.events", "gmail.readonly", "gmail.send"].every((x) => gScope.includes(x)));
+      const sScope = (slackRes.data?.scope ?? "") as string;
+      setSlackReady(!!slackRes.data && ["files:read", "search:read"].every((x) => sScope.includes(x)));
       setGoogleEmail(googleRes.data?.google_email ?? null);
       setSlackConnected(!!slackRes.data);
       setSlackTeamName(slackRes.data?.slack_team_name ?? null);
@@ -86,8 +97,10 @@ export function useOnboardingStatus(): OnboardingStatus {
 
   return {
     googleConnected,
+    googleReady,
     googleEmail,
     slackConnected,
+    slackReady,
     slackTeamName,
     ashbyConnected,
     teamAshbyConnected,

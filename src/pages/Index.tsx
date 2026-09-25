@@ -28,7 +28,7 @@ import { toast } from "sonner";
 import { usePipelineSession } from "@/hooks/usePipelineSession";
 import { useAshbySnapshot } from "@/hooks/useAshbySnapshot";
 import { useRecruiterAliases } from "@/hooks/useRecruiterAliases";
-import { creditedToMatchesAliases } from "@/lib/recruiterIdentity";
+import { isMine } from "@/lib/recruiterIdentity";
 import { useSlackSubmissions } from "@/hooks/useSlackSubmissions";
 import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
 import { useAuth } from "@/contexts/AuthContext";
@@ -62,12 +62,12 @@ const Index = () => {
     const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
     const pending = sessionStorage.getItem(PENDING_ONBOARDING_KEY) === "1";
     const allConnected =
-      onboarding.googleConnected && onboarding.slackConnected && onboarding.ashbyConnected;
+      onboarding.googleReady && onboarding.slackReady && onboarding.ashbyConnected;
     const isFirstRun =
       pending ||
       (!dismissed && !allConnected && !onboarding.hasCandidates);
     if (isFirstRun) navigate("/onboarding", { replace: true });
-  }, [onboarding.loading, onboarding.googleConnected, onboarding.slackConnected, onboarding.ashbyConnected, onboarding.hasCandidates, navigate]);
+  }, [onboarding.loading, onboarding.googleReady, onboarding.slackReady, onboarding.ashbyConnected, onboarding.hasCandidates, navigate]);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
@@ -331,13 +331,11 @@ const Index = () => {
   // the toggle and never count toward stats.
   const visibleCandidates = useMemo(() => {
     const mineFilter = (list: Candidate[]) =>
-      mineOnly && aliases.length > 0
-        ? list.filter((c) => creditedToMatchesAliases(c.credited_to, aliases))
-        : list;
+      mineOnly ? list.filter((c) => isMine(c, user?.email, aliases)) : list;
     const active = mineFilter(mergedCandidates);
     const archived = showArchive && snapshotIsTruth ? mineFilter(archivedSnapshot) : [];
     return { active, archived, all: [...active, ...archived] };
-  }, [mergedCandidates, archivedSnapshot, mineOnly, aliases, showArchive, snapshotIsTruth]);
+  }, [mergedCandidates, archivedSnapshot, mineOnly, aliases, showArchive, snapshotIsTruth, user?.email]);
 
   const companies = useMemo(
     () => [...new Set(visibleCandidates.all.map((c) => c.company_name))].sort(),

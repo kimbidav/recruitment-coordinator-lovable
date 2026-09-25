@@ -17,9 +17,18 @@ const GoogleCalendarCallback = () => {
     const state = params.get("state");
     const error = params.get("error");
 
+    // Onboarding sets this before sending the user to Google, so they land
+    // back on the next step instead of the dashboard.
+    let returnTo = "/";
+    try {
+      const saved = sessionStorage.getItem("googleReturnTo");
+      if (saved && saved.startsWith("/")) returnTo = saved;
+      sessionStorage.removeItem("googleReturnTo");
+    } catch { /* storage unavailable */ }
     const finish = (msg: string, ok: boolean) => {
-      ok ? toast.success(msg) : toast.error(msg);
-      navigate("/", { replace: true });
+      if (ok) toast.success(msg);
+      else toast.error(msg);
+      navigate(returnTo, { replace: true });
     };
 
     if (error) return finish(`Google auth error: ${error}`, false);
