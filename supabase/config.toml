@@ -15,6 +15,11 @@ verify_jwt = false
 [functions.slack-upload-callback]
 verify_jwt = false
 
+# The extractor calls this when a team sweep finishes; authenticated by
+# X-Extractor-Callback-Secret, not a user JWT. Saves the result server-side.
+[functions.ashby-sync-callback]
+verify_jwt = false
+
 # Local only: keep the worker alive after the response so EdgeRuntime.waitUntil
 # background work (Slack interactivity) runs under `supabase functions serve`.
 [edge_runtime]

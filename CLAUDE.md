@@ -73,6 +73,20 @@ Rules that encode business judgment — keep them when you touch anything:
 - `docs/v2-rollout.md` — the release runbook (migrations, secrets, Slack
   manifest, pilot); `docs/ashby-architecture.md`, `docs/slack-integration.md`.
 
+## Team Ashby sweep (how the snapshot gets written)
+
+`ashby-sync` starts a sweep on the Railway extractor with a `callback_url`
+(`ashby-sync-callback`) and the `fetch_jobs` id as `callback_ref`. When the
+sweep finishes the extractor calls back (signed with
+`EXTRACTOR_CALLBACK_SECRET`) and `ashby-sync-callback` runs `advanceJob` →
+`persistSnapshot` server-side. The dashboard's poll is only for live progress.
+Do not make saving depend on an open tab again: until 2026-09-25 it did, and a
+sweep that outran the tab's watch (or the extractor's old 30-minutes-from-start
+job eviction) was silently never saved, so the dashboard showed stale
+candidates. `GET /api/health` on the extractor shows the running sweep's
+minutes and org progress and the last finished sweep. Shared logic lives in
+`_shared/ashbySyncCore.ts`.
+
 ## Working here
 
 - `npm run test`, `npx tsc --noEmit -p tsconfig.app.json`, `npm run lint`,

@@ -164,16 +164,17 @@ export function AshbyFetchButton({ onSyncComplete }: AshbyFetchButtonProps) {
   };
 
   // On mount: warn if a previous fetch is still marked running (likely stalled).
-  // Full sweeps can legitimately take 15-20 min, so only flag truly old jobs.
+  // Full sweeps can run well past 30 min on a slow day and now save
+  // themselves when done, so only flag jobs that are hours old.
   useEffect(() => {
     if (!user || staleJobNotified) return;
     void (async () => {
       const job = await getLatestRunningJob(user.id);
       if (!job) return;
       const ageMin = (Date.now() - new Date(job.started_at).getTime()) / 60_000;
-      if (ageMin > 30) {
+      if (ageMin > 120) {
         toast.warning(
-          `A previous Ashby fetch from ${ageMin.toFixed(0)} min ago is still marked running. It may have stalled — re-run when ready.`,
+          `An Ashby sync started ${ageMin.toFixed(0)} min ago never finished. It may have stalled — run Sync from Ashby again.`,
           { duration: 12000 },
         );
         setStaleJobNotified(true);
@@ -190,12 +191,13 @@ export function AshbyFetchButton({ onSyncComplete }: AshbyFetchButtonProps) {
     toast.error(failureMessage);
   };
 
-  // A full org sweep takes up to ~20 min on slow days; the extractor keeps its
-  // job for 30 min, so watch for 25. Each poll goes through the edge function,
+  // Watch for up to 60 min for live progress. Saving does NOT depend on this
+  // loop any more: the extractor calls ashby-sync-callback when the sweep
+  // finishes. Each poll goes through the edge function,
   // which is what actually advances the job (it checks the extractor's status).
   const pollJobUntilComplete = async (jobId: string) => {
     const pollStartedAt = Date.now();
-    while (Date.now() - pollStartedAt < 1_500_000) {
+    while (Date.now() - pollStartedAt < 3_600_000) {
       await new Promise((r) => setTimeout(r, 5000));
       const job = await pollFetchJob(jobId);
       if (!job) continue;
@@ -241,10 +243,12 @@ export function AshbyFetchButton({ onSyncComplete }: AshbyFetchButtonProps) {
       return;
     }
 
-    setFetchError("Ashby sync is still running in the background. Click Sync from Ashby again in a minute to resume watching it.");
-    setOpen(true);
-    toast.message("Ashby sync is still running in the background.", {
-      description: "Click Sync from Ashby again to resume watching progress.",
+    // The sweep saves itself when it finishes (the extractor calls Compass
+    // back), so nobody has to keep this tab open.
+    setOpen(false);
+    toast.message("Ashby sync is still running — it will save automatically.", {
+      description: "You can close this tab. Reload the page later to see the updated pipeline.",
+      duration: 12000,
     });
   };
 
@@ -305,7 +309,7 @@ export function AshbyFetchButton({ onSyncComplete }: AshbyFetchButtonProps) {
       const runningJob = user ? await getLatestRunningJob(user.id) : null;
       const isFresh =
         runningJob &&
-        Date.now() - new Date(runningJob.started_at).getTime() < 30 * 60_000;
+        Date.now() - new Date(runningJob.started_at).getTime() < 120 * 60_000;
       if (runningJob && isFresh) {
         setLoading(true);
         try {
