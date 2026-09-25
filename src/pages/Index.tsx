@@ -528,11 +528,15 @@ const Index = () => {
                 <h1 className="text-xl font-semibold text-foreground">Candidate Pipeline</h1>
                 <div className="flex items-center gap-3 text-sm text-muted-foreground">
                   <span>Track and manage your hiring pipeline</span>
-                  {lastUpdated && (
-                    <span className="flex items-center gap-1 text-xs">
+                  {(orgHealth?.checked_at || lastUpdated) && (
+                    <span
+                      className="flex items-center gap-1 text-xs"
+                      title={orgHealth?.checked_at ? "When the team's Ashby snapshot was last saved" : "Last CSV import"}
+                    >
                       <Clock className="h-3 w-3" />
-                      Last imported: {new Date(lastUpdated).toLocaleDateString()}{" "}
-                      {new Date(lastUpdated).toLocaleTimeString()}
+                      {orgHealth?.checked_at ? "Ashby synced" : "Last imported"}:{" "}
+                      {new Date(orgHealth?.checked_at ?? lastUpdated!).toLocaleDateString()}{" "}
+                      {new Date(orgHealth?.checked_at ?? lastUpdated!).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
                     </span>
                   )}
                 </div>

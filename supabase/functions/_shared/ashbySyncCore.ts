@@ -556,6 +556,14 @@ export async function advanceJob(admin: Admin, job: Record<string, unknown>): Pr
   if (wonClaim && candidates.length > 0) {
     try {
       await persistSnapshot(admin, candidates, companies);
+      // Close out older runs that never got saved (browser stopped watching,
+      // extractor restarted). Left "running", they trigger a stale-fetch
+      // warning on every dashboard load for everyone.
+      await admin
+        .from("fetch_jobs")
+        .update({ status: "failed", finished_at: new Date().toISOString(), error_message: "Superseded by a later sync that completed." })
+        .eq("status", "running")
+        .lt("started_at", String(job.started_at ?? new Date().toISOString()));
       // The snapshot is the durable copy now — drop the multi-hundred-KB
       // payload from the job row (the dashboard reads candidate_count /
       // orgs_* columns, not the payload).
