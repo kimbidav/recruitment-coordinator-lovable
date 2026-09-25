@@ -11,8 +11,8 @@ import { AshbyFetchButton } from "@/components/AshbyFetchButton";
 import { PostSignInCalendarPrompt } from "@/components/PostSignInCalendarPrompt";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { ONBOARDING_VERSION } from "@/lib/onboarding";
 
-const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
 const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 type StepKey = "google" | "slack" | "ashby" | "sync" | "done";
@@ -20,7 +20,7 @@ const STEPS: { key: Exclude<StepKey, "done">; label: string }[] = [
   { key: "google", label: "Google" },
   { key: "slack", label: "Slack" },
   { key: "ashby", label: "Your Ashby" },
-  { key: "sync", label: "Sync" },
+  { key: "sync", label: "Sync (optional)" },
 ];
 const SYNC_FRESH_MS = 24 * 3600 * 1000;
 
@@ -181,14 +181,30 @@ const Onboarding = () => {
     }
   };
 
-  const finish = () => {
+  // Google, Slack and the recruiter's own Ashby are required; the team
+  // sync is optional (it saves itself in the background).
+  const requiredDone = status.requiredDone;
+  const finish = async () => {
+    if (!requiredDone) return;
+    setBusy("done");
     try {
-      sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
-      localStorage.setItem(ONBOARDING_DISMISSED_KEY, "1");
-    } catch {
-      /* ignore */
+      const { error } = await supabase
+        .from("agent_settings")
+        .upsert({ user_id: user.id, onboarding_version: ONBOARDING_VERSION, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+      if (error) {
+        toast.error(`Couldn't save your setup: ${error.message}. Try again.`);
+        return;
+      }
+      try {
+        sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
+      } catch {
+        /* ignore */
+      }
+      await status.refresh();
+      navigate("/", { replace: true });
+    } finally {
+      setBusy(null);
     }
-    navigate("/", { replace: true });
   };
 
   // ── Footer: Back · Continue ──────────────────────────────────────────────
@@ -202,11 +218,6 @@ const Onboarding = () => {
         <span />
       )}
       <div className="flex items-center gap-2">
-        {!canContinue && (
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => go(nextOf(step))}>
-            Skip for now
-          </Button>
-        )}
         <Button onClick={() => go(nextOf(step))} disabled={!canContinue} className="gap-1.5">
           {continueLabel ?? "Continue"} <ArrowRight className="h-4 w-4" />
         </Button>
@@ -478,7 +489,7 @@ const Onboarding = () => {
                   {STEPS.filter((s) => !done[s.key])
                     .map((s) => s.label)
                     .join(", ")}
-                  . Add to Ashby needs Slack and your Ashby connected.
+                  . Finish them to open the dashboard.
                 </Notice>
               )}
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5">
@@ -494,21 +505,17 @@ const Onboarding = () => {
                   >
                     Open Slack <ExternalLink className="h-3.5 w-3.5" />
                   </a>
-                  <Button onClick={finish}>Go to the dashboard</Button>
+                  <Button onClick={() => void finish()} disabled={!requiredDone || busy === "done"} className="gap-2">
+                    {busy === "done" && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Go to the dashboard
+                  </Button>
                 </div>
               </div>
             </>
           )}
         </section>
 
-        <p className="text-center text-xs text-muted-foreground">
-          Signed in as {user.email}.{" "}
-          {step !== "done" && (
-            <button type="button" onClick={finish} className="underline underline-offset-2 hover:text-foreground">
-              Finish later
-            </button>
-          )}
-        </p>
+        <p className="text-center text-xs text-muted-foreground">Signed in as {user.email}.</p>
       </main>
     </div>
   );

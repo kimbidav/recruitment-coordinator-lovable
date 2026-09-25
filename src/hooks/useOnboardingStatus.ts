@@ -16,6 +16,13 @@ export interface OnboardingStatus {
   ashbyConnected: boolean;
   /** The shared team session used for pipeline reads. */
   teamAshbyConnected: boolean;
+  /** Has connected their own Ashby at least once (an expired login still
+   *  counts: the weekly expiry is handled by a banner, not a lockout). */
+  ashbyEverConnected: boolean;
+  /** The onboarding version this user last finished (0 = never). */
+  onboardingVersion: number;
+  /** Google, Slack and their own Ashby — what Add to Ashby needs. */
+  requiredDone: boolean;
   hasCandidates: boolean;
   loading: boolean;
   refresh: () => Promise<void>;
@@ -35,6 +42,8 @@ export function useOnboardingStatus(): OnboardingStatus {
   const [slackTeamName, setSlackTeamName] = useState<string | null>(null);
   const [ashbyConnected, setAshbyConnected] = useState(false);
   const [teamAshbyConnected, setTeamAshbyConnected] = useState(false);
+  const [ashbyEverConnected, setAshbyEverConnected] = useState(false);
+  const [onboardingVersion, setOnboardingVersion] = useState(0);
   const [hasCandidates, setHasCandidates] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -45,7 +54,7 @@ export function useOnboardingStatus(): OnboardingStatus {
     }
     setLoading(true);
     try {
-      const [googleRes, slackRes, candidatesRes, ashbyRes, userAshbyRes] = await Promise.all([
+      const [googleRes, slackRes, candidatesRes, ashbyRes, userAshbyRes, settingsRes] = await Promise.all([
         supabase
           .from("google_calendar_tokens")
           .select("google_email, scope")
@@ -70,6 +79,11 @@ export function useOnboardingStatus(): OnboardingStatus {
           .select("status")
           .eq("user_id", user.id)
           .maybeSingle(),
+        supabase
+          .from("agent_settings")
+          .select("onboarding_version")
+          .eq("user_id", user.id)
+          .maybeSingle(),
       ]);
 
       setGoogleConnected(!!googleRes.data);
@@ -83,6 +97,8 @@ export function useOnboardingStatus(): OnboardingStatus {
       setHasCandidates((candidatesRes.count ?? 0) > 0);
       setTeamAshbyConnected(ashbyRes.data?.status === "healthy");
       setAshbyConnected(userAshbyRes.data?.status === "healthy");
+      setAshbyEverConnected(["healthy", "expired", "unknown"].includes(String(userAshbyRes.data?.status ?? "")));
+      setOnboardingVersion(Number((settingsRes.data as { onboarding_version?: number } | null)?.onboarding_version ?? 0));
     } catch {
       // Non-fatal — leave defaults.
     } finally {
@@ -104,6 +120,9 @@ export function useOnboardingStatus(): OnboardingStatus {
     slackTeamName,
     ashbyConnected,
     teamAshbyConnected,
+    ashbyEverConnected,
+    onboardingVersion,
+    requiredDone: googleReady && slackReady && ashbyEverConnected,
     hasCandidates,
     loading: loading || authLoading,
     refresh,

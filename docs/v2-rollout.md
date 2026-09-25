@@ -128,3 +128,19 @@ suppress; the internal Ashby API stays feature-frozen.
 - The public Ashby API migration (the write path sits behind
   `_shared/extractor.ts` and the `steps{}` contract so it can be swapped
   underneath).
+
+## Forcing everyone through onboarding again
+
+Onboarding is required: the dashboard redirects anyone whose
+`agent_settings.onboarding_version` is below `ONBOARDING_VERSION`
+(`src/lib/onboarding.ts`) or who lacks Google, Slack or their own Ashby. To
+send everyone through it again, bump that constant. To also sign everyone
+out, move `FORCE_SIGN_IN_AFTER` in `src/contexts/AuthContext.tsx` forward
+(signs out any login older than it on next page load) and, for a
+server-side guarantee, run in the SQL panel:
+
+```sql
+delete from auth.refresh_tokens;
+delete from auth.sessions;
+```
+

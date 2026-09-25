@@ -151,6 +151,7 @@ export type Database = {
           batch_followup_threshold: number
           created_at: string
           intro_stall_min_days: number
+          onboarding_version: number
           recruiter_aliases: string[]
           timezone: string | null
           updated_at: string
@@ -160,6 +161,7 @@ export type Database = {
           batch_followup_threshold?: number
           created_at?: string
           intro_stall_min_days?: number
+          onboarding_version?: number
           recruiter_aliases?: string[]
           timezone?: string | null
           updated_at?: string
@@ -169,6 +171,7 @@ export type Database = {
           batch_followup_threshold?: number
           created_at?: string
           intro_stall_min_days?: number
+          onboarding_version?: number
           recruiter_aliases?: string[]
           timezone?: string | null
           updated_at?: string

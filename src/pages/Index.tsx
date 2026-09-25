@@ -31,6 +31,7 @@ import { useRecruiterAliases } from "@/hooks/useRecruiterAliases";
 import { isMine } from "@/lib/recruiterIdentity";
 import { useSlackSubmissions } from "@/hooks/useSlackSubmissions";
 import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
+import { ONBOARDING_VERSION } from "@/lib/onboarding";
 import { useAuth } from "@/contexts/AuthContext";
 import { Users, Loader2, Clock, LogOut, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,8 +41,6 @@ import {
 } from "@/lib/slackParse";
 import { companiesMatch, isAshbyCompany } from "@/lib/companyMatch";
 
-const ONBOARDING_DISMISSED_KEY = "onboardingDismissed";
-const PENDING_ONBOARDING_KEY = "pendingOnboarding";
 
 const Index = () => {
   const { candidates, lastUpdated, isLoading, saveSession, markCandidateClosed } = usePipelineSession();
@@ -55,19 +54,16 @@ const Index = () => {
   const agentOpenCount = useMemo(() => visibleCards(agentCards).length, [agentCards]);
   const [activeTab, setActiveTab] = useState<string>("pipeline");
 
-  // First-run redirect: brand-new users land on /onboarding instead of an
-  // empty dashboard. Honors a "skip for now" dismissal.
+  // Onboarding is required: until someone has finished the current version
+  // of the setup (and still has Google, Slack and their own Ashby connected),
+  // the dashboard sends them to /onboarding. An expired Ashby login doesn't
+  // count against them — the expiry banner handles that.
   useEffect(() => {
     if (onboarding.loading) return;
-    const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
-    const pending = sessionStorage.getItem(PENDING_ONBOARDING_KEY) === "1";
-    const allConnected =
-      onboarding.googleReady && onboarding.slackReady && onboarding.ashbyConnected;
-    const isFirstRun =
-      pending ||
-      (!dismissed && !allConnected && !onboarding.hasCandidates);
-    if (isFirstRun) navigate("/onboarding", { replace: true });
-  }, [onboarding.loading, onboarding.googleReady, onboarding.slackReady, onboarding.ashbyConnected, onboarding.hasCandidates, navigate]);
+    if (onboarding.onboardingVersion < ONBOARDING_VERSION || !onboarding.requiredDone) {
+      navigate("/onboarding", { replace: true });
+    }
+  }, [onboarding.loading, onboarding.onboardingVersion, onboarding.requiredDone, navigate]);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string[]>([]);
