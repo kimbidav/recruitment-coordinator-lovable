@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { isUnauthorizedError, notifyUnauthorized } from "@/lib/sessionGuard";
 
 export interface AgentCardPayload {
   candidate_name?: string;
@@ -134,6 +135,7 @@ export function useAgentCards() {
       setLastScanAt(run?.finished_at ?? null);
       if (run?.id) setLastRunId(run.id);
     } catch (e) {
+      if (isUnauthorizedError(e)) notifyUnauthorized();
       console.error("loadAgentCards", e);
     } finally {
       setLoading(false);
