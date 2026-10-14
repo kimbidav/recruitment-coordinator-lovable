@@ -405,6 +405,8 @@ export function AshbyFetchButton({ onSyncComplete }: AshbyFetchButtonProps) {
           <DialogHeader>
             <DialogTitle>Reconnect Ashby</DialogTitle>
             <DialogDescription>
+              This is the team's shared connection for reading pipelines. If "Add to Ashby" in Slack says your
+              login expired, that's your own login: fix it under Set up → step 3 instead.
               The whole team shares one Ashby connection, and it needs a re-login about
               once a week. Anyone can do it — your own Ashby session works for everyone.
               Follow the steps below; it takes about a minute.

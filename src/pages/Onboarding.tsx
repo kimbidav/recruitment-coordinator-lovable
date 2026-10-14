@@ -87,6 +87,10 @@ const Onboarding = () => {
   useEffect(() => {
     document.title = "Set up · Candidate Compass";
     void loadSyncState();
+    // Ask the extractor, not just the mirror: a login that expired days ago
+    // must show as expired here, with the reconnect form open.
+    void ashby.refresh(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadSyncState]);
 
   // Slack connects in another tab: re-check when this tab regains focus, and
@@ -110,10 +114,10 @@ const Onboarding = () => {
     () => ({
       google: status.googleReady,
       slack: status.slackReady,
-      ashby: ashby.session.status === "healthy",
+      ashby: ashby.session.status === "healthy" && !ashby.overdue,
       sync: !!lastSyncAt && Date.now() - Date.parse(lastSyncAt) < SYNC_FRESH_MS,
     }),
-    [status.googleReady, status.slackReady, ashby.session.status, lastSyncAt],
+    [status.googleReady, status.slackReady, ashby.session.status, ashby.overdue, lastSyncAt],
   );
   const firstOpen: StepKey = STEPS.find((s) => !done[s.key])?.key ?? "done";
   const requested = params.get("step") as StepKey | null;
@@ -377,7 +381,7 @@ const Onboarding = () => {
               <div className="space-y-1">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Step 3 of 4</p>
                 <h1 className="text-xl font-semibold text-foreground">
-                  {ashby.session.status === "expired" ? "Reconnect your Ashby" : "Connect your Ashby"}
+                  {ashby.session.status === "expired" || ashby.overdue ? "Reconnect your Ashby" : "Connect your Ashby"}
                 </h1>
                 <p className="text-sm text-muted-foreground">
                   Uploads from Slack run under <b>your own</b> Ashby login, so candidates are credited to you and only
@@ -394,6 +398,12 @@ const Onboarding = () => {
                       : ""}
                     .
                   </Notice>
+                  <p className="text-xs text-muted-foreground">
+                    Checked with Ashby {ashby.liveChecked ? "just now" : "on your last visit"}.{" "}
+                    <button type="button" className="underline underline-offset-2" onClick={() => void ashby.refresh(true)}>
+                      Check again
+                    </button>
+                  </p>
                   <details className="text-sm">
                     <summary className="cursor-pointer text-muted-foreground">Connect again with a new login</summary>
                     <div className="pt-4">
@@ -403,10 +413,11 @@ const Onboarding = () => {
                 </>
               ) : (
                 <>
-                  {ashby.session.status === "expired" && (
+                  {(ashby.session.status === "expired" || ashby.overdue) && (
                     <Notice tone="warn">
-                      Your Ashby login expired, which happens about once a week. Uploads from Slack are paused until you
-                      reconnect.
+                      Your Ashby login for Compass has expired, which happens about once a week. "Add to Ashby" in Slack
+                      says <i>Your Ashby login for Candidate Compass has expired</i> until you reconnect here. This is your
+                      own login, separate from the team sync in step 4.
                     </Notice>
                   )}
                   <AshbyUserConnect onConnected={() => void refreshAll()} />

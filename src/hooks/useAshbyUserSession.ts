@@ -27,6 +27,7 @@ export function useAshbyUserSession() {
   const { user } = useAuth();
   const [session, setSession] = useState<AshbyUserSession>(EMPTY);
   const [loading, setLoading] = useState(true);
+  const [liveChecked, setLiveChecked] = useState(false);
 
   const refresh = useCallback(async (live = false) => {
     if (!user) { setLoading(false); return; }
@@ -34,7 +35,11 @@ export function useAshbyUserSession() {
     try {
       if (live) {
         const { data } = await supabase.functions.invoke("ashby-user-session", { body: { action: "status", live: true } });
-        if (data?.session) { setSession({ ...EMPTY, ...data.session }); return; }
+        if (data?.session) {
+          setSession({ ...EMPTY, ...data.session });
+          if (data?.probe?.reason !== "probe_error") setLiveChecked(true);
+          return;
+        }
       }
       const { data } = await supabase.from("ashby_user_sessions").select("*").eq("user_id", user.id).maybeSingle();
       setSession(data ? { ...EMPTY, ...(data as Partial<AshbyUserSession>) } : EMPTY);
@@ -64,5 +69,7 @@ export function useAshbyUserSession() {
     await refresh();
   }, [refresh]);
 
-  return { session, loading, refresh, seed, disconnect };
+  /** Past the ~7-day estimate: treat as needing a reconnect even if no probe has run. */
+  const overdue = session.status === "healthy" && !!session.expires_estimate_at && Date.parse(session.expires_estimate_at) < Date.now();
+  return { session, loading, liveChecked, overdue, refresh, seed, disconnect };
 }

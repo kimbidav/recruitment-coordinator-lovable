@@ -70,6 +70,11 @@ Deno.serve(async (req) => {
       "/api/session/status", null, { userEmail: email, method: "GET", timeoutMs: 30_000 },
     );
     if (!res.error) {
+      // Confirm-or-skip: "probe_error" means the extractor couldn't reach
+      // Ashby, which says nothing about the login. Keep what we had.
+      if (!res.data.authenticated && res.data.reason === "probe_error") {
+        return json({ session: row ?? { user_id: userId, email, status: "unknown" }, probe: res.data });
+      }
       const status = res.data.authenticated ? "healthy" : res.data.reason === "no_session" ? "disconnected" : "expired";
       if (row || status !== "disconnected") {
         await write({ status, ...(res.data.authenticated ? { last_ok_at: new Date().toISOString(), last_error: null } : {}) });

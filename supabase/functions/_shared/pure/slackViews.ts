@@ -132,7 +132,7 @@ export function errorView(sid: string, err: ErrorBody, opts: { clientName?: stri
       break;
     case "user_session_expired":
     case "ashby_session_dead":
-      text = ":lock: Your Ashby login for Candidate Compass has expired. Reconnect Ashby, then retry. Nothing was written.";
+      text = ":lock: Your Ashby login for Candidate Compass has expired (they last about a week). Reconnect it in Candidate Compass → Set up → step 3 *Connect your Ashby* — that's your own login, not the dashboard's team sync — then retry. Nothing was written.";
       break;
     case "identity_mismatch":
       text = ":no_entry: That Ashby login belongs to a different account than yours, so it wasn't used. Reconnect Ashby with your own login. Nothing was written.";
