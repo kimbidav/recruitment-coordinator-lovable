@@ -94,5 +94,9 @@ minutes and org progress and the last finished sweep. Shared logic lives in
   apply DDL. `src/integrations/supabase/types.ts` is hand-edited for new
   columns until Lovable regenerates it.
 - `verify_jwt = false` functions must be declared in `supabase/config.toml`.
+- A sign-in the backend refuses (rotated signing keys, signed out elsewhere) is
+  dropped, not retried: `src/lib/sessionGuard.ts` owns that call, and new code
+  that reaches a function or the database reports rejections through it instead
+  of deciding locally what a 401 means.
 - Never print tokens, cookies or secrets; they live only in Railway/Supabase
   secrets.

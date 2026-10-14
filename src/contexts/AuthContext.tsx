@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { installSessionGuard, isUnauthorizedError } from "@/lib/sessionGuard";
 
 interface AuthContextValue {
   user: User | null;
@@ -30,6 +31,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    installSessionGuard();
     // IMPORTANT: subscribe before getSession so we don't miss the initial event.
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
@@ -43,6 +45,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser(null);
         setLoading(false);
         return;
+      }
+      // A stored session can outlive the token behind it: signing keys rotated,
+      // signed out (or in) somewhere else. Ask the server before trusting it —
+      // otherwise the protected screens render and 401 on every call.
+      if (s) {
+        const { error } = await supabase.auth.getUser();
+        if (isUnauthorizedError(error)) {
+          await supabase.auth.signOut();
+          setSession(null);
+          setUser(null);
+          setLoading(false);
+          return;
+        }
       }
       setSession(s);
       setUser(s?.user ?? null);

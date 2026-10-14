@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { isUnauthorizedError, notifyUnauthorized } from "@/lib/sessionGuard";
 
 export interface AshbyUserSession {
   status: "healthy" | "expired" | "unknown" | "disconnected";
@@ -34,14 +35,18 @@ export function useAshbyUserSession() {
     setLoading(true);
     try {
       if (live) {
-        const { data } = await supabase.functions.invoke("ashby-user-session", { body: { action: "status", live: true } });
+        const { data, error } = await supabase.functions.invoke("ashby-user-session", { body: { action: "status", live: true } });
+        // A dead token answers 401; re-reading it from the database just 401s
+        // again. Say so once and let the app return to the sign-in screen.
+        if (isUnauthorizedError(error)) { notifyUnauthorized(); return; }
         if (data?.session) {
           setSession({ ...EMPTY, ...data.session });
           if (data?.probe?.reason !== "probe_error") setLiveChecked(true);
           return;
         }
       }
-      const { data } = await supabase.from("ashby_user_sessions").select("*").eq("user_id", user.id).maybeSingle();
+      const { data, error: dbError } = await supabase.from("ashby_user_sessions").select("*").eq("user_id", user.id).maybeSingle();
+      if (isUnauthorizedError(dbError)) { notifyUnauthorized(); return; }
       setSession(data ? { ...EMPTY, ...(data as Partial<AshbyUserSession>) } : EMPTY);
     } catch {
       // leave the last known state
@@ -54,6 +59,7 @@ export function useAshbyUserSession() {
 
   const seed = useCallback(async (cookie: string): Promise<{ ok: true; org_count: number } | { ok: false; error: string; detail: string | null }> => {
     const { data, error } = await supabase.functions.invoke("ashby-user-session", { body: { action: "seed", cookie } });
+    if (isUnauthorizedError(error)) notifyUnauthorized();
     if (error || data?.error) {
       // supabase-js hides non-2xx bodies behind `error`; the function also returns the body on 200-ish paths.
       const body = data ?? (await error?.context?.json?.().catch(() => null));
